@@ -664,6 +664,7 @@ dependencies = [
  "common-datavalues",
  "common-exception",
  "common-functions",
+ "common-streams",
  "pretty_assertions",
  "serde",
 ]

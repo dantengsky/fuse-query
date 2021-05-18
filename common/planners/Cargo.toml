@@ -11,6 +11,7 @@ edition = "2018"
 common-datavalues = {path = "../datavalues"}
 common-functions = {path = "../functions"}
 common-exception = {path = "../exception"}
+common-streams = {path = "../streams"}
 
 # Github dependencies
 

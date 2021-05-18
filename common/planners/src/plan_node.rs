@@ -16,6 +16,7 @@ use crate::ExplainPlan;
 use crate::ExpressionPlan;
 use crate::FilterPlan;
 use crate::HavingPlan;
+use crate::InsertIntoPlan;
 use crate::LimitPlan;
 use crate::ProjectionPlan;
 use crate::ReadDataSourcePlan;
@@ -25,7 +26,6 @@ use crate::SettingPlan;
 use crate::SortPlan;
 use crate::StagePlan;
 use crate::UseDatabasePlan;
-
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub enum PlanNode {
     Empty(EmptyPlan),
@@ -45,7 +45,8 @@ pub enum PlanNode {
     CreateTable(CreateTablePlan),
     CreateDatabase(CreateDatabasePlan),
     UseDatabase(UseDatabasePlan),
-    SetVariable(SettingPlan)
+    SetVariable(SettingPlan),
+    InsertInto(InsertIntoPlan)
 }
 
 impl PlanNode {
@@ -69,7 +70,8 @@ impl PlanNode {
             PlanNode::CreateTable(v) => v.schema(),
             PlanNode::SetVariable(v) => v.schema(),
             PlanNode::Sort(v) => v.schema(),
-            PlanNode::UseDatabase(v) => v.schema()
+            PlanNode::UseDatabase(v) => v.schema(),
+            PlanNode::InsertInto(v) => v.schema()
         }
     }
 
@@ -92,7 +94,8 @@ impl PlanNode {
             PlanNode::CreateDatabase(_) => "CreateDatabasePlan",
             PlanNode::SetVariable(_) => "SetVariablePlan",
             PlanNode::Sort(_) => "SortPlan",
-            PlanNode::UseDatabase(_) => "UseDatabasePlan"
+            PlanNode::UseDatabase(_) => "UseDatabasePlan",
+            PlanNode::InsertInto(_) => "InsertIntoPlan"
         }
     }
 

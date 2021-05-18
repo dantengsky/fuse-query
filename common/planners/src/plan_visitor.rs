@@ -11,6 +11,7 @@ use crate::ExplainPlan;
 use crate::ExpressionPlan;
 use crate::FilterPlan;
 use crate::HavingPlan;
+use crate::InsertIntoPlan;
 use crate::LimitPlan;
 use crate::PlanNode;
 use crate::ProjectionPlan;
@@ -83,7 +84,8 @@ pub trait PlanVisitor<'plan> {
             PlanNode::SetVariable(plan) => self.visit_set_variable(plan),
             PlanNode::Stage(plan) => self.visit_stage(plan),
             PlanNode::Having(plan) => self.visit_having(plan),
-            PlanNode::Expression(plan) => self.visit_expression(plan)
+            PlanNode::Expression(plan) => self.visit_expression(plan),
+            PlanNode::InsertInto(plan) => self.visit_insert_into(plan)
         }
     }
 
@@ -144,4 +146,5 @@ pub trait PlanVisitor<'plan> {
     fn visit_use_database(&mut self, _: &'plan UseDatabasePlan) {}
 
     fn visit_set_variable(&mut self, _: &'plan SettingPlan) {}
+    fn visit_insert_into(&mut self, _: &'plan InsertIntoPlan) {}
 }

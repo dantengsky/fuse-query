@@ -3,9 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0.
 
 use std::collections::HashMap;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use common_arrow::arrow::datatypes::Field;
+use common_datablocks::DataBlock;
 use common_datavalues::DataField;
 use common_datavalues::DataSchema;
 use common_datavalues::DataValue;
@@ -15,6 +17,7 @@ use common_planners::CreateDatabasePlan;
 use common_planners::CreateTablePlan;
 use common_planners::ExplainPlan;
 use common_planners::ExpressionAction;
+use common_planners::InsertIntoPlan;
 use common_planners::PlanBuilder;
 use common_planners::PlanNode;
 use common_planners::SelectPlan;
@@ -22,9 +25,16 @@ use common_planners::SettingPlan;
 use common_planners::StageState;
 use common_planners::UseDatabasePlan;
 use common_planners::VarValue;
+use common_streams::SendableDataBlockStream;
+use sqlparser::ast::Expr;
 use sqlparser::ast::FunctionArg;
+use sqlparser::ast::Ident;
+use sqlparser::ast::ObjectName;
 use sqlparser::ast::OrderByExpr;
+use sqlparser::ast::Query;
+use sqlparser::ast::SetExpr;
 use sqlparser::ast::Statement;
+use sqlparser::ast::Values;
 
 use crate::datasources::ITable;
 use crate::functions::ContextFunction;
@@ -87,6 +97,14 @@ impl PlanParser {
             Statement::SetVariable {
                 variable, value, ..
             } => self.set_variable_to_plan(variable, value),
+
+            Statement::Insert {
+                table_name,
+                columns,
+                source,
+                ..
+            } => self.insert_to_plan(table_name, columns, source),
+
             _ => Result::Err(ErrorCodes::SyntexException(format!(
                 "Unsupported statement {:?}",
                 statement
@@ -170,6 +188,53 @@ impl PlanParser {
         }))
     }
 
+    fn insert_to_plan(
+        &self,
+        table_name: &ObjectName,
+        columns: &Vec<Ident>,
+        source: &Box<Query>
+    ) -> Result<PlanNode> {
+        if let sqlparser::ast::SetExpr::Values(ref vs) = source.body {
+            let col_num = columns.len();
+            let db_name = self.ctx.get_current_database();
+            let tbl_name = table_name
+                .0
+                .get(0)
+                .ok_or_else(|| ErrorCodes::SyntexException("empty table name now allowed"))?
+                .value
+                .clone();
+
+            let values = &vs.0;
+            if values.is_empty() {
+                return Err(ErrorCodes::EmptyData(
+                    "empty values for insertion is not allowed"
+                ));
+            }
+            let chunks = values.chunks(100);
+            let blocks: Vec<Result<DataBlock>> = chunks.fold(Vec::new(), |bs, chunk| {
+                // for each trunk, we tranpose it into a DataBlock.
+                todo!()
+            });
+            let input_stream = futures::stream::iter(blocks);
+            let plan_node = InsertIntoPlan {
+                db_name,
+                tbl_name,
+                input_stream: Arc::new(Box::pin(input_stream))
+            };
+            Ok(PlanNode::InsertInto(plan_node))
+        } else {
+            return Err(ErrorCodes::UnImplement("only supports ..."));
+        }
+    }
+
+    //        futures::pin_mut!(value_stream);
+    //std::pin::Pin<Box<dyn futures::stream::Stream<Item = Result<DataBlock>> + Sync + Send>>;
+    //Ok(PlanNode::InsertInto(InsertIntoPlan {
+    //    db_name,
+    //    tbl_name: "".to_string(),
+    //    input_stream: Arc::new(Box::pin(value_stream))
+    //}))
+    //}
     /// Generate a logic plan from an SQL query
     pub fn query_to_plan(&self, query: &sqlparser::ast::Query) -> Result<PlanNode> {
         match &query.body {

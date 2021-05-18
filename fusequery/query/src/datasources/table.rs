@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0.
 
 use std::any::Any;
+use std::sync::Arc;
 
 use common_datavalues::DataSchemaRef;
 use common_exception::Result;
@@ -24,4 +25,12 @@ pub trait ITable: Sync + Send {
     fn read_plan(&self, ctx: FuseQueryContextRef, scan: &ScanPlan) -> Result<ReadDataSourcePlan>;
     // Read block data from the underling.
     async fn read(&self, ctx: FuseQueryContextRef) -> Result<SendableDataBlockStream>;
+
+    async fn insert_into(
+        &self,
+        ctx: FuseQueryContextRef,
+        stream: Arc<SendableDataBlockStream>
+    ) -> Result<()> {
+        todo!()
+    }
 }

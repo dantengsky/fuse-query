@@ -12,6 +12,7 @@ use crate::interpreters::CreateDatabaseInterpreter;
 use crate::interpreters::CreateTableInterpreter;
 use crate::interpreters::ExplainInterpreter;
 use crate::interpreters::IInterpreter;
+use crate::interpreters::InsertIntoInterpreter;
 use crate::interpreters::SelectInterpreter;
 use crate::interpreters::SettingInterpreter;
 use crate::interpreters::UseDatabaseInterpreter;
@@ -28,6 +29,7 @@ impl InterpreterFactory {
             PlanNode::CreateDatabase(v) => CreateDatabaseInterpreter::try_create(ctx, v),
             PlanNode::UseDatabase(v) => UseDatabaseInterpreter::try_create(ctx, v),
             PlanNode::SetVariable(v) => SettingInterpreter::try_create(ctx, v),
+            PlanNode::InsertInto(v) => InsertIntoInterpreter::try_create(ctx, v),
             _ => Result::Err(ErrorCodes::UnknownTypeOfQuery(format!(
                 "Can't get the interpreter by plan:{}",
                 plan.name()
