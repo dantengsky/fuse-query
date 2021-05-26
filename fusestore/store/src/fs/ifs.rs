@@ -19,7 +19,10 @@ where Self: Sync + Send
     async fn read_all<'a>(&'a self, path: String) -> anyhow::Result<Vec<u8>>;
 
     /// List dir and returns directories and files.
-    async fn list<'a>(&'a self, path: String) -> anyhow::Result<ListResult>;
+    async fn list(&self, path: String) -> anyhow::Result<ListResult>;
+
+    /// Delete a path
+    async fn delete(&self, path: String) -> anyhow::Result<()>;
 
     // async fn read(
     //     path: &str,

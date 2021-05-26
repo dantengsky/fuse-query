@@ -5,8 +5,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use common_flights::AppendResult;
+use common_planners::Partition;
+use common_planners::Statistics;
 use tonic::Status;
 
+use crate::data_part::part_info::DataPartInfo;
 use crate::protobuf::CmdCreateDatabase;
 use crate::protobuf::CmdCreateTable;
 use crate::protobuf::Db;
@@ -15,6 +19,7 @@ use crate::protobuf::Table;
 // MemEngine is a prototype storage that is primarily used for testing purposes.
 pub struct MemEngine {
     pub dbs: HashMap<String, Db>,
+    pub tbl_parts: HashMap<String, Vec<DataPartInfo>>,
     pub next_id: i64,
     pub next_ver: i64,
 }
@@ -24,6 +29,7 @@ impl MemEngine {
     pub fn create() -> Arc<Mutex<MemEngine>> {
         let e = MemEngine {
             dbs: HashMap::new(),
+            tbl_parts: HashMap::new(),
             next_id: 0,
             next_ver: 0,
         };
@@ -156,6 +162,44 @@ impl MemEngine {
 
         let table = db.tables.get(&table_id).unwrap();
         Ok(table.clone())
+    }
+
+    pub fn get_data_parts(&self, db_name: &str, table_name: &str) -> Option<Vec<DataPartInfo>> {
+        let key = format!("{}/{}", db_name, table_name);
+        let parts = self.tbl_parts.get(&key);
+        parts.map(Clone::clone)
+    }
+
+    pub fn append_data_parts(
+        &mut self,
+        db_name: &str,
+        table_name: &str,
+        append_res: &AppendResult
+    ) -> anyhow::Result<()> {
+        let key = format!("{}/{}", db_name, table_name);
+        let mut part_info = append_res
+            .parts
+            .iter()
+            .map(|p| {
+                let loc = &p.location;
+                let info = DataPartInfo {
+                    partition: Partition {
+                        name: loc.clone(),
+                        version: 0
+                    },
+                    stats: Statistics {
+                        read_bytes: p.disk_bytes,
+                        read_rows: p.rows
+                    }
+                };
+                info
+            })
+            .collect::<Vec<_>>();
+        self.tbl_parts
+            .entry(key)
+            .and_modify(|e| e.append(&mut part_info))
+            .or_insert(part_info);
+        Ok(())
     }
 
     pub fn create_id(&mut self) -> i64 {

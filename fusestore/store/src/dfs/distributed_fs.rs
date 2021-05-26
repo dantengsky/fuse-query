@@ -83,4 +83,8 @@ impl IFileSystem for Dfs {
 
         todo!("dirs and files")
     }
+
+    async fn delete(&self, _path: String) -> anyhow::Result<()> {
+        todo!()
+    }
 }

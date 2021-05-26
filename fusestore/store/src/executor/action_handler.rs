@@ -10,6 +10,7 @@ use std::sync::Mutex;
 use common_arrow::arrow::datatypes::Schema;
 use common_arrow::arrow_flight;
 use common_arrow::arrow_flight::FlightData;
+use common_flights::AppendResult;
 use common_flights::CreateDatabaseAction;
 use common_flights::CreateDatabaseActionResult;
 use common_flights::CreateTableAction;
@@ -22,9 +23,6 @@ use common_flights::GetTableAction;
 use common_flights::GetTableActionResult;
 use common_flights::StoreDoAction;
 use common_flights::StoreDoActionResult;
-#[allow(unused_imports)]
-use log::error;
-#[allow(unused_imports)]
 use log::info;
 use tokio::sync::mpsc::Sender;
 use tokio_stream::StreamExt;
@@ -187,14 +185,12 @@ impl ActionHandler {
     }
 }
 
-impl ActionHandler {
     pub(crate) async fn do_put(
         &self,
         db_name: String,
         table_name: String,
         parts: Streaming<FlightData>,
     ) -> anyhow::Result<common_flights::AppendResult> {
-        log::info!("calling do_put");
         {
             let mut meta = self.meta.lock().unwrap();
             let _tbl_meta = meta.get_table(db_name.clone(), table_name.clone())?;
@@ -209,12 +205,37 @@ impl ActionHandler {
             .take_while(|item| item.is_ok())
             .map(|item| item.unwrap());
 
-        info!("calling appender");
         let res = appender
-            .append_data(db_name + "/" + &table_name, Box::pin(parts))
-            .await;
+            .append_data(format!("{}/{}", &db_name, &table_name), Box::pin(parts))
+            .await?;
 
-        info!("leaving with {:?}", res);
-        res
+        let update_meta_res = {
+            let mut meta = self.meta.lock().unwrap();
+            meta.append_data_parts(&db_name, &table_name, &res)
+        };
+
+        match update_meta_res {
+            Ok(_) => {
+                log::debug!(
+                    "append data to {}.{}, result {:?}",
+                    db_name,
+                    table_name,
+                    res
+                );
+                Ok(res)
+            }
+            Err(e) => {
+                // try one's best to rollback
+                // TODO or spawn a new task?
+                self.try_undo(&res).await;
+                Err(e)
+            }
+        }
+    }
+
+    async fn try_undo(&self, append_result: &AppendResult) {
+        for item in append_result.parts.iter() {
+            let _ = self.fs.delete(item.location.clone()).await;
+        }
     }
 }

@@ -4,6 +4,7 @@
 //
 
 pub(crate) mod appender;
+pub(crate) mod part_info;
 
 #[cfg(test)]
 mod appender_test;
