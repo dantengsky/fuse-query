@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0.
 
-use std::alloc::handle_alloc_error;
+
 use std::any::Any;
 
 use common_datavalues::DataSchemaRef;
@@ -16,7 +16,7 @@ use common_planners::ScanPlan;
 use common_planners::Statistics;
 use common_planners::TableOptions;
 use common_streams::SendableDataBlockStream;
-use tokio::task::JoinHandle;
+
 
 use crate::datasources::remote::store_client_provider::StoreClientProvider;
 use crate::datasources::ITable;
