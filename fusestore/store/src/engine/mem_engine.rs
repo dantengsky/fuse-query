@@ -182,7 +182,7 @@ impl MemEngine {
             .iter()
             .map(|p| {
                 let loc = &p.location;
-                let info = DataPartInfo {
+                DataPartInfo {
                     partition: Partition {
                         name: loc.clone(),
                         version: 0
@@ -191,8 +191,7 @@ impl MemEngine {
                         read_bytes: p.disk_bytes,
                         read_rows: p.rows
                     }
-                };
-                info
+                }
             })
             .collect::<Vec<_>>();
         self.tbl_parts

@@ -324,6 +324,7 @@ async fn test_scan_partition() -> anyhow::Result<()> {
     let res = client
         .scan_partition(db_name.to_string(), tbl_name.to_string(), &plan)
         .await;
+    // TODO d assertions, de-duplicated codes
     println!("scan res is {:?}", res);
 
     Ok(())
