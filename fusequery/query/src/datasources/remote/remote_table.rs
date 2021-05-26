@@ -2,16 +2,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0.
 
+use std::alloc::handle_alloc_error;
 use std::any::Any;
 
 use common_datavalues::DataSchemaRef;
 use common_exception::ErrorCodes;
 use common_exception::Result;
+use common_flights::ScanPartitionResult;
 use common_planners::InsertIntoPlan;
+use common_planners::Partition;
 use common_planners::ReadDataSourcePlan;
 use common_planners::ScanPlan;
+use common_planners::Statistics;
 use common_planners::TableOptions;
 use common_streams::SendableDataBlockStream;
+use tokio::task::JoinHandle;
 
 use crate::datasources::remote::store_client_provider::StoreClientProvider;
 use crate::datasources::ITable;
@@ -66,15 +71,14 @@ impl ITable for RemoteTable {
         false
     }
 
-    fn read_plan(
-        &self,
-        _ctx: FuseQueryContextRef,
-        _scan: &ScanPlan,
-        _partitions: usize,
-    ) -> Result<ReadDataSourcePlan> {
-        Result::Err(ErrorCodes::UnImplement(
-            "RemoteTable read_plan not yet implemented",
-        ))
+    fn read_plan(&self, ctx: FuseQueryContextRef, scan: &ScanPlan) -> Result<ReadDataSourcePlan> {
+        ctx.block_on(async {
+            let mut client = self.store_client_provider.try_get_client().await?;
+            let res = client
+                .scan_partition(self.db.clone(), self.name.clone(), scan)
+                .await?;
+            Ok(self.partitions_to_pan(res))
+        })
     }
 
     async fn read(&self, _ctx: FuseQueryContextRef) -> Result<SendableDataBlockStream> {
@@ -103,5 +107,35 @@ impl ITable for RemoteTable {
         }
 
         Ok(())
+    }
+}
+
+impl RemoteTable {
+    fn partitions_to_pan(&self, res: ScanPartitionResult) -> ReadDataSourcePlan {
+        let mut partitions = vec![];
+        let mut statistics = Statistics {
+            read_rows: 0,
+            read_bytes: 0
+        };
+
+        if let Some(parts) = res {
+            for part in parts {
+                partitions.push(Partition {
+                    name: part.partition.name,
+                    version: 0
+                });
+                statistics.read_rows += part.stats.read_rows;
+                statistics.read_bytes += part.stats.read_bytes;
+            }
+        }
+
+        ReadDataSourcePlan {
+            db: self.db.clone(),
+            table: self.name.clone(),
+            schema: self.schema.clone(),
+            partitions,
+            statistics,
+            description: "".to_string()
+        }
     }
 }

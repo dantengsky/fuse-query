@@ -77,6 +77,10 @@ impl Runtime {
     {
         self.handle.spawn(task)
     }
+
+    pub fn block_on<F: Future>(&self, future: F) -> F::Output {
+        self.handle.block_on(future)
+    }
 }
 
 /// Dropping the dropper will cause runtime to shutdown.

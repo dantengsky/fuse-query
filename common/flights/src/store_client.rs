@@ -20,6 +20,7 @@ use common_planners::CreateDatabasePlan;
 use common_planners::CreateTablePlan;
 use common_planners::DropDatabasePlan;
 use common_planners::DropTablePlan;
+use common_planners::ScanPlan;
 use futures::stream;
 use futures::SinkExt;
 use futures::StreamExt;
@@ -46,6 +47,8 @@ use crate::DropTableAction;
 use crate::DropTableActionResult;
 use crate::GetTableAction;
 use crate::GetTableActionResult;
+use crate::ScanPartitionAction;
+use crate::ScanPartitionResult;
 
 pub type BlockStream =
     std::pin::Pin<Box<dyn futures::stream::Stream<Item = DataBlock> + Sync + Send + 'static>>;
@@ -154,6 +157,24 @@ impl StoreClient {
         let rst = self.do_action(&action).await?;
 
         if let StoreDoActionResult::GetTable(rst) = rst {
+            return Ok(rst);
+        }
+        anyhow::bail!("invalid response")
+    }
+
+    /// Get table.
+    pub async fn scan_partition(
+        &mut self,
+        db_name: String,
+        tbl_name: String,
+        scan_plan: &ScanPlan
+    ) -> anyhow::Result<ScanPartitionResult> {
+        let mut plan = scan_plan.clone();
+        plan.schema_name = format!("{}/{}", db_name, tbl_name);
+        let action = StoreDoAction::ScanPartition(ScanPartitionAction { scan_plan: plan });
+        let rst = self.do_action(&action).await?;
+
+        if let StoreDoActionResult::ScanPartition(rst) = rst {
             return Ok(rst);
         }
         anyhow::bail!("invalid response")

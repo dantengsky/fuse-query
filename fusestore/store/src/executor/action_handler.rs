@@ -246,6 +246,11 @@ impl ActionHandler {
     fn do_scan_partitions(&self, cmd: &ScanPartitionAction) -> ScanPartitionResult {
         let schema = &cmd.scan_plan.schema_name;
         let meta = self.meta.lock().unwrap();
-        meta.get_data_parts(schema, schema)
+        let splits: Vec<&str> = schema.split("/").collect();
+        println!("schema {}, splits {:?}", schema, splits);
+        let db_name = splits[0].clone();
+        let tbl_name = splits[1].clone();
+
+        meta.get_data_parts(db_name, tbl_name)
     }
 }
