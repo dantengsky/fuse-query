@@ -15,14 +15,11 @@ use common_flights::CreateDatabaseAction;
 use common_flights::CreateDatabaseActionResult;
 use common_flights::CreateTableAction;
 use common_flights::CreateTableActionResult;
-<<<<<<< HEAD
 use common_flights::DropDatabaseAction;
 use common_flights::DropDatabaseActionResult;
 use common_flights::DropTableAction;
 use common_flights::DropTableActionResult;
-=======
 use common_flights::DataPartInfo;
->>>>>>> flight service done
 use common_flights::GetTableAction;
 use common_flights::GetTableActionResult;
 use common_flights::ScanPartitionAction;

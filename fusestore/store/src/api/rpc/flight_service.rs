@@ -22,7 +22,7 @@ use common_arrow::arrow_flight::PutResult;
 use common_arrow::arrow_flight::SchemaResult;
 use common_arrow::arrow_flight::Ticket;
 use common_flights::flight_result_to_str;
-use common_flights::DataPartInfo;
+
 use common_flights::FlightClaim;
 use common_flights::FlightToken;
 use common_flights::StoreDoAction;
