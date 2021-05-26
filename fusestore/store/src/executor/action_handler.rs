@@ -15,12 +15,18 @@ use common_flights::CreateDatabaseAction;
 use common_flights::CreateDatabaseActionResult;
 use common_flights::CreateTableAction;
 use common_flights::CreateTableActionResult;
+<<<<<<< HEAD
 use common_flights::DropDatabaseAction;
 use common_flights::DropDatabaseActionResult;
 use common_flights::DropTableAction;
 use common_flights::DropTableActionResult;
+=======
+use common_flights::DataPartInfo;
+>>>>>>> flight service done
 use common_flights::GetTableAction;
 use common_flights::GetTableActionResult;
+use common_flights::ScanPartitionAction;
+use common_flights::ScanPartitionResult;
 use common_flights::StoreDoAction;
 use common_flights::StoreDoActionResult;
 use log::info;
@@ -210,6 +216,7 @@ impl ActionHandler {
             .await?;
 
         let update_meta_res = {
+            // note, table and db may be delete here ...
             let mut meta = self.meta.lock().unwrap();
             meta.append_data_parts(&db_name, &table_name, &res)
         };
@@ -225,7 +232,7 @@ impl ActionHandler {
                 Ok(res)
             }
             Err(e) => {
-                // try one's best to rollback
+                // Try our best to rollback, a background gc task is supposed to do all the dirty works left.
                 // TODO or spawn a new task?
                 self.try_undo(&res).await;
                 Err(e)
@@ -237,5 +244,11 @@ impl ActionHandler {
         for item in append_result.parts.iter() {
             let _ = self.fs.delete(item.location.clone()).await;
         }
+    }
+
+    fn do_scan_partitions(&self, cmd: &ScanPartitionAction) -> ScanPartitionResult {
+        let schema = &cmd.scan_plan.schema_name;
+        let meta = self.meta.lock().unwrap();
+        meta.get_data_parts(schema, schema)
     }
 }

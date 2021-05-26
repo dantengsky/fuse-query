@@ -8,11 +8,17 @@ use std::convert::TryInto;
 use common_arrow::arrow_flight::Ticket;
 use common_planners::Partitions;
 use common_planners::PlanNode;
+use common_planners::ScanPlan;
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct ReadAction {
     pub partition: Partitions,
     pub push_down: PlanNode,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct ScanPartitionsAction {
+    pub can_plan: ScanPlan
 }
 
 /// Pull a file. This is used to replicate data between store servers, which is only used internally.

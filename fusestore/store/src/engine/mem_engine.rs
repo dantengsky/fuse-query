@@ -6,11 +6,11 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use common_flights::AppendResult;
+use common_flights::DataPartInfo;
 use common_planners::Partition;
 use common_planners::Statistics;
 use tonic::Status;
 
-use crate::data_part::part_info::DataPartInfo;
 use crate::protobuf::CmdCreateDatabase;
 use crate::protobuf::CmdCreateTable;
 use crate::protobuf::Db;

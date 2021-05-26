@@ -78,9 +78,7 @@ impl ITable for RemoteTable {
     }
 
     async fn read(&self, _ctx: FuseQueryContextRef) -> Result<SendableDataBlockStream> {
-        Result::Err(ErrorCodes::UnImplement(
-            "RemoteTable read not yet implemented",
-        ))
+        todo!()
     }
 
     async fn append_data(&self, _ctx: FuseQueryContextRef, plan: InsertIntoPlan) -> Result<()> {

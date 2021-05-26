@@ -22,6 +22,7 @@ use common_arrow::arrow_flight::PutResult;
 use common_arrow::arrow_flight::SchemaResult;
 use common_arrow::arrow_flight::Ticket;
 use common_flights::flight_result_to_str;
+use common_flights::DataPartInfo;
 use common_flights::FlightClaim;
 use common_flights::FlightToken;
 use common_flights::StoreDoAction;
@@ -178,29 +179,23 @@ impl FlightService for StoreFlightImpl {
         &self,
         request: Request<Streaming<FlightData>>,
     ) -> Result<Response<Self::DoPutStream>, Status> {
-        info!("calling me!");
-
         let _claim = self.check_token(&request.metadata())?;
         let meta = request.metadata();
 
-        info!("reading meta data");
         let (db_name, tbl_name) =
             common_flights::get_do_put_meta(meta).map_err(|e| Status::internal(e.to_string()))?;
-        info!("meta data {}-{}", db_name, tbl_name);
 
-        info!("calling handler");
         let append_res = self
             .action_handler
             .do_put(db_name, tbl_name, request.into_inner())
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
-        info!("handler called");
 
         let bytes = serde_json::to_vec(&append_res).unwrap();
         let put_res = PutResult {
             app_metadata: bytes,
         };
-        info!("got result {:?}", append_res);
+
         Ok(Response::new(Box::pin(futures::stream::once(async {
             Ok(put_res)
         }))))
@@ -237,6 +232,7 @@ impl FlightService for StoreFlightImpl {
         unimplemented!()
     }
 }
+
 impl StoreFlightImpl {
     fn once_stream_resp(
         &self,
