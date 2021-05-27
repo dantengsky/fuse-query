@@ -75,7 +75,7 @@ impl ITable for RemoteTable {
             let res = client
                 .scan_partition(self.db.clone(), self.name.clone(), scan)
                 .await?;
-            Ok(self.partitions_to_pan(res))
+            Ok(self.partitions_to_plan(res))
         })
     }
 
@@ -109,7 +109,7 @@ impl ITable for RemoteTable {
 }
 
 impl RemoteTable {
-    fn partitions_to_pan(&self, res: ScanPartitionResult) -> ReadDataSourcePlan {
+    fn partitions_to_plan(&self, res: ScanPartitionResult) -> ReadDataSourcePlan {
         let mut partitions = vec![];
         let mut statistics = Statistics {
             read_rows: 0,

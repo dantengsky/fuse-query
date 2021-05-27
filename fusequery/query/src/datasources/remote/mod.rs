@@ -4,6 +4,7 @@
 mod remote_database;
 mod remote_factory;
 mod remote_table;
+mod remte_table_stream;
 mod store_client_provider;
 
 pub use remote_database::RemoteDatabase;
