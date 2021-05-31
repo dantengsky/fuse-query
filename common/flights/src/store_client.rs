@@ -19,7 +19,6 @@ use common_arrow::arrow_flight::HandshakeRequest;
 use common_arrow::arrow_flight::Ticket;
 use common_datablocks::DataBlock;
 use common_datavalues::DataSchemaRefExt;
-
 use common_planners::CreateDatabasePlan;
 use common_planners::CreateTablePlan;
 use common_planners::DropDatabasePlan;
@@ -174,7 +173,7 @@ impl StoreClient {
         &mut self,
         db_name: String,
         tbl_name: String,
-        scan_plan: &ScanPlan
+        scan_plan: &ScanPlan,
     ) -> anyhow::Result<ScanPartitionResult> {
         let mut plan = scan_plan.clone();
         plan.schema_name = format!("{}/{}", db_name, tbl_name);
@@ -189,13 +188,12 @@ impl StoreClient {
 
     /// Get partition.
     pub async fn get_partition(
-        &self,
-        read_action: &ReadAction
+        &mut self,
+        read_action: &ReadAction,
     ) -> anyhow::Result<SendableDataBlockStream> {
         let cmd = StoreDoGet::Read(read_action.clone());
         let ticket = tonic::Request::<Ticket>::from(&cmd);
-        let mut client = self.client.clone();
-        let res = client.do_get(ticket).await?.into_inner();
+        let res = self.client.do_get(ticket).await?.into_inner();
         let schema: SchemaRef = DataSchemaRefExt::create(vec![]); // TODO
         let res_stream = res.map(move |item| {
             let item = item.unwrap(); // TODO
@@ -280,17 +278,23 @@ impl StoreClient {
         tokio::spawn(async move {
             while let Some(block) = block_stream.next().await {
                 info!("next data block");
-                if let Ok(batch) = RecordBatch::try_from(block) {
-                    if let Err(_e) = tx
-                        .send(flight_data_from_arrow_batch(&batch, &ipc_write_opt).1)
-                        .await
-                    {
-                        log::info!("failed to send flight-data to downstream, breaking out");
+                match RecordBatch::try_from(block) {
+                    Ok(batch) => {
+                        if let Err(_e) = tx
+                            .send(flight_data_from_arrow_batch(&batch, &ipc_write_opt).1)
+                            .await
+                        {
+                            log::info!("failed to send flight-data to downstream, breaking out");
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        log::info!(
+                            "failed to convert DataBlock to RecordBatch , breaking out, {:?}",
+                            e
+                        );
                         break;
                     }
-                } else {
-                    log::info!("failed to convert DataBlock to RecordBatch , breaking out");
-                    break;
                 }
             }
         });

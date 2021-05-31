@@ -4,6 +4,7 @@
 mod remote_database;
 mod remote_factory;
 mod remote_table;
+mod remote_table_do_read;
 mod remote_table_stream;
 mod store_client_provider;
 

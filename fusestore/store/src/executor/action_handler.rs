@@ -21,11 +21,11 @@ use common_arrow::parquet::arrow::ArrowReader;
 use common_arrow::parquet::arrow::ParquetFileArrowReader;
 use common_arrow::parquet::file::reader::SerializedFileReader;
 use common_arrow::parquet::file::serialized_reader::SliceableCursor;
-use common_flights::AppendResult;
 use common_flights::CreateDatabaseAction;
 use common_flights::CreateDatabaseActionResult;
 use common_flights::CreateTableAction;
 use common_flights::CreateTableActionResult;
+use common_flights::{AppendResult, ReadAction};
 
 use common_flights::DropDatabaseAction;
 use common_flights::DropDatabaseActionResult;
@@ -38,7 +38,7 @@ use common_flights::ScanPartitionAction;
 use common_flights::ScanPartitionResult;
 use common_flights::StoreDoAction;
 use common_flights::StoreDoActionResult;
-use futures::Stream;
+use futures::{Stream, TryStreamExt};
 //use futures::StreamExt;
 use log::info;
 use tokio::sync::mpsc::Sender;
@@ -54,14 +54,18 @@ use crate::protobuf::CmdCreateDatabase;
 use crate::protobuf::CmdCreateTable;
 use crate::protobuf::Db;
 use crate::protobuf::Table;
+use common_arrow::arrow::error::ArrowError;
+use common_arrow::arrow::record_batch::RecordBatch;
+use common_arrow::parquet::arrow::arrow_reader::ParquetRecordBatchReader;
 
 pub struct ActionHandler {
     meta: Arc<Mutex<MemEngine>>,
     fs: Arc<dyn IFileSystem>,
 }
 
+//type DoGetStream = Pin<Box<dyn Stream<Item = Result<FlightData, tonic::Status>> + 'static>>;
 type DoGetStream =
-    Pin<Box<dyn Stream<Item = Result<FlightData, tonic::Status>> + Sync + Send + 'static>>;
+    Pin<Box<dyn Stream<Item = Result<FlightData, tonic::Status>> + Send + Sync + 'static>>;
 
 impl ActionHandler {
     pub fn create(fs: Arc<dyn IFileSystem>) -> Self {
@@ -102,8 +106,8 @@ impl ActionHandler {
             StoreDoAction::DropTable(act) => self.drop_table(act).await,
             StoreDoAction::GetTable(a) => self.get_table(a).await,
             StoreDoAction::ScanPartition(act) => Ok(StoreDoActionResult::ScanPartition(
-                self.do_scan_partitions(&act)
-            ))
+                self.do_scan_partitions(&act),
+            )),
         }
     }
 
@@ -276,8 +280,10 @@ impl ActionHandler {
         meta.get_data_parts(db_name, tbl_name)
     }
 
-    pub async fn read(&self, action: ReadPlanAction) -> anyhow::Result<DoGetStream> {
-        let part_file = "todo";
+    pub async fn read(&self, action: ReadAction) -> anyhow::Result<DoGetStream> {
+        log::info!("entering read");
+        let part_file = action.partition[0].name.clone();
+        log::info!("reading part: {}", part_file);
         let content = self.fs.read_all(part_file.to_string()).await?;
         let cursor = SliceableCursor::new(content);
 
@@ -285,10 +291,7 @@ impl ActionHandler {
         let mut arrow_reader = ParquetFileArrowReader::new(Arc::new(file_reader));
 
         // TODO Correct?
-        let projection = action
-            .scan
-            .projection
-            .ok_or_else(|| anyhow::Error::msg("empty proj"))?;
+        let projection = vec![];
 
         // TODO config
         let batch_size = 2048;
@@ -296,18 +299,21 @@ impl ActionHandler {
         let mut batch_reader =
             arrow_reader.get_record_reader_by_columns(projection.clone(), batch_size)?;
 
-        // TODO config
-        let (tx, rx) = tokio::sync::mpsc::channel(2);
+        // For simplicity, we do the conversion in-memory, to be optimized later
+        // TODO consider using `parquet_table` and `stream_parquet` if spawn_blocking is not a big deal
         let write_opt = IpcWriteOptions::default();
-        while let Some(item) = batch_reader.next() {
-            match item {
-                Ok(batch) => {
-                    tx.send(Ok(flight_data_from_arrow_batch(&batch, &write_opt).1))
-                        .await?
-                }
-                Err(_) => anyhow::bail!("conversion failure (flight data from arrow batch")
-            }
-        }
-        Ok(Box::pin(wrappers::ReceiverStream::new(rx)))
+        let flights = batch_reader
+            .into_iter()
+            .map(|batch| flight_data_from_arrow_batch(&batch.unwrap(), &write_opt).1)
+            .collect::<Vec<_>>();
+        let stream = futures::stream::iter(flights).map(|v| Ok(v));
+
+        // This is not gonna work, cause ....
+        // # let stream = futures::stream::iter(wrapper.into_iter());
+        // # let stream =
+        // #     stream.map(move |batch| flight_data_from_arrow_batch(&batch.unwrap(), &write_opt).1);
+        // # let stream = stream.map(|v| Ok(v));
+
+        Ok(Box::pin(stream))
     }
 }

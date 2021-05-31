@@ -6,10 +6,8 @@
 use std::future::Future;
 use std::sync::Arc;
 
-
 use common_exception::Result;
 use common_flights::StoreClient;
-
 
 #[async_trait::async_trait]
 pub trait IStoreClientProvider {

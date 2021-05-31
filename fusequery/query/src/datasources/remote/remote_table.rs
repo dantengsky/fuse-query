@@ -22,19 +22,17 @@ use common_planners::TableOptions;
 use common_streams::SendableDataBlockStream;
 use futures::StreamExt;
 
-
-//use tokio_stream::StreamExt;
 use crate::datasources::remote::store_client_provider::StoreClientProvider;
-
+use crate::datasources::remote::test_fun;
 use crate::datasources::ITable;
 use crate::sessions::FuseQueryContextRef;
 
 #[allow(dead_code)]
 pub struct RemoteTable {
     pub(crate) db: String,
-    name: String,
-    schema: DataSchemaRef,
-    store_client_provider: StoreClientProvider,
+    pub(super) name: String,
+    pub(super) schema: DataSchemaRef,
+    pub(super) store_client_provider: StoreClientProvider,
 }
 
 impl RemoteTable {
@@ -82,7 +80,7 @@ impl ITable for RemoteTable {
         &self,
         ctx: FuseQueryContextRef,
         scan: &ScanPlan,
-        _partitions: usize
+        _partitions: usize,
     ) -> Result<ReadDataSourcePlan> {
         ctx.block_on(async {
             let mut client = self.store_client_provider.try_get_client().await?;
@@ -94,36 +92,10 @@ impl ITable for RemoteTable {
     }
 
     async fn read(&self, ctx: FuseQueryContextRef) -> Result<SendableDataBlockStream> {
-        use std::sync::Arc;
-        let client = Arc::new(self.store_client_provider.try_get_client().await?);
-        let num = 2;
-        let iter = std::iter::from_fn(move || {
-            let partitions = ctx.clone().try_get_partitions(num).unwrap();
-            if partitions.is_empty() {
-                None
-            } else {
-                Some(ReadAction {
-                    partition: partitions,
-                    push_down: PlanNode::Empty(EmptyPlan {
-                        schema: DataSchemaRefExt::create(vec![])
-                    })
-                })
-            }
-        });
-        let parts = futures::stream::iter(iter);
-        let streams = parts.then(move |parts| {
-            //let mut client = test_fun().await.unwrap();
-            let client = client.clone();
-            async move { client.clone().get_partition(&parts).await.unwrap() }
-        });
-
-        let flatten = streams.flatten();
-        Ok(Box::pin(flatten))
-        //todo!()
+        self.do_read(ctx).await
     }
 
     async fn append_data(&self, _ctx: FuseQueryContextRef, plan: InsertIntoPlan) -> Result<()> {
-        // goes like this
         let opt_stream = {
             let mut inner = plan.input_stream.lock().unwrap();
             (*inner).take()
@@ -151,19 +123,19 @@ impl RemoteTable {
     fn partitions_to_plan(
         &self,
         res: ScanPartitionResult,
-        scan_plan: ScanPlan
+        scan_plan: ScanPlan,
     ) -> ReadDataSourcePlan {
         let mut partitions = vec![];
         let mut statistics = Statistics {
             read_rows: 0,
-            read_bytes: 0
+            read_bytes: 0,
         };
 
         if let Some(parts) = res {
             for part in parts {
                 partitions.push(Partition {
                     name: part.partition.name,
-                    version: 0
+                    version: 0,
                 });
                 statistics.read_rows += part.stats.read_rows;
                 statistics.read_bytes += part.stats.read_bytes;
@@ -177,7 +149,7 @@ impl RemoteTable {
             partitions,
             statistics,
             description: "".to_string(),
-            scan_plan: Arc::new(scan_plan)
+            scan_plan: Arc::new(scan_plan),
         }
     }
 }
