@@ -4,18 +4,21 @@
 
 use std::collections::HashMap;
 use std::convert::TryFrom;
-
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use futures::Stream;
+use log::info;
+use tokio::sync::mpsc::Sender;
+use tokio_stream::StreamExt;
+use tonic::Status;
+use tonic::Streaming;
+
 use common_arrow::arrow::datatypes::Schema;
-
 use common_arrow::arrow::ipc::writer::IpcWriteOptions;
-
 use common_arrow::arrow_flight;
 use common_arrow::arrow_flight::utils::flight_data_from_arrow_batch;
-
 use common_arrow::arrow_flight::FlightData;
 use common_arrow::parquet::arrow::ArrowReader;
 use common_arrow::parquet::arrow::ParquetFileArrowReader;
@@ -25,27 +28,17 @@ use common_flights::CreateDatabaseAction;
 use common_flights::CreateDatabaseActionResult;
 use common_flights::CreateTableAction;
 use common_flights::CreateTableActionResult;
-use common_flights::{AppendResult, ReadAction};
-
 use common_flights::DropDatabaseAction;
 use common_flights::DropDatabaseActionResult;
 use common_flights::DropTableAction;
 use common_flights::DropTableActionResult;
 use common_flights::GetTableAction;
 use common_flights::GetTableActionResult;
-use common_flights::ReadPlanAction;
 use common_flights::ScanPartitionAction;
 use common_flights::ScanPartitionResult;
 use common_flights::StoreDoAction;
 use common_flights::StoreDoActionResult;
-use futures::{Stream, TryStreamExt};
-//use futures::StreamExt;
-use log::info;
-use tokio::sync::mpsc::Sender;
-use tokio_stream::wrappers;
-use tokio_stream::StreamExt;
-use tonic::Status;
-use tonic::Streaming;
+use common_flights::{AppendResult, ReadAction};
 
 use crate::data_part::appender::Appender;
 use crate::engine::MemEngine;
@@ -54,9 +47,6 @@ use crate::protobuf::CmdCreateDatabase;
 use crate::protobuf::CmdCreateTable;
 use crate::protobuf::Db;
 use crate::protobuf::Table;
-use common_arrow::arrow::error::ArrowError;
-use common_arrow::arrow::record_batch::RecordBatch;
-use common_arrow::parquet::arrow::arrow_reader::ParquetRecordBatchReader;
 
 pub struct ActionHandler {
     meta: Arc<Mutex<MemEngine>>,
@@ -296,8 +286,7 @@ impl ActionHandler {
         // TODO config
         let batch_size = 2048;
 
-        let mut batch_reader =
-            arrow_reader.get_record_reader_by_columns(projection.clone(), batch_size)?;
+        let batch_reader = arrow_reader.get_record_reader_by_columns(projection, batch_size)?;
 
         // For simplicity, we do the conversion in-memory, to be optimized later
         // TODO consider using `parquet_table` and `stream_parquet` if spawn_blocking is not a big deal
@@ -306,7 +295,7 @@ impl ActionHandler {
             .into_iter()
             .map(|batch| flight_data_from_arrow_batch(&batch.unwrap(), &write_opt).1)
             .collect::<Vec<_>>();
-        let stream = futures::stream::iter(flights).map(|v| Ok(v));
+        let stream = futures::stream::iter(flights).map(Ok);
 
         // This is not gonna work, cause ....
         // # let stream = futures::stream::iter(wrapper.into_iter());

@@ -6,24 +6,18 @@ use std::any::Any;
 use std::sync::Arc;
 
 use common_datavalues::DataSchemaRef;
-use common_datavalues::DataSchemaRefExt;
 use common_exception::ErrorCodes;
 use common_exception::Result;
-use common_flights::ReadAction;
 use common_flights::ScanPartitionResult;
-use common_planners::EmptyPlan;
 use common_planners::InsertIntoPlan;
 use common_planners::Partition;
-use common_planners::PlanNode;
 use common_planners::ReadDataSourcePlan;
 use common_planners::ScanPlan;
 use common_planners::Statistics;
 use common_planners::TableOptions;
 use common_streams::SendableDataBlockStream;
-use futures::StreamExt;
 
 use crate::datasources::remote::store_client_provider::StoreClientProvider;
-use crate::datasources::remote::test_fun;
 use crate::datasources::ITable;
 use crate::sessions::FuseQueryContextRef;
 
