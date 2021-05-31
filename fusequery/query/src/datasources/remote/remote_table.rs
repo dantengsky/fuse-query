@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0.
 
 use std::any::Any;
+use std::sync::Arc;
 
 use common_datavalues::DataSchemaRef;
 use common_datavalues::DataSchemaRefExt;
@@ -77,13 +78,18 @@ impl ITable for RemoteTable {
         false
     }
 
-    fn read_plan(&self, ctx: FuseQueryContextRef, scan: &ScanPlan) -> Result<ReadDataSourcePlan> {
+    fn read_plan(
+        &self,
+        ctx: FuseQueryContextRef,
+        scan: &ScanPlan,
+        _partitions: usize
+    ) -> Result<ReadDataSourcePlan> {
         ctx.block_on(async {
             let mut client = self.store_client_provider.try_get_client().await?;
             let res = client
                 .scan_partition(self.db.clone(), self.name.clone(), scan)
                 .await?;
-            Ok(self.partitions_to_plan(res))
+            Ok(self.partitions_to_plan(res, scan.clone()))
         })
     }
 
@@ -105,7 +111,6 @@ impl ITable for RemoteTable {
             }
         });
         let parts = futures::stream::iter(iter);
-        let clone = client.clone();
         let streams = parts.then(move |parts| {
             //let mut client = test_fun().await.unwrap();
             let client = client.clone();
@@ -143,7 +148,11 @@ impl ITable for RemoteTable {
 }
 
 impl RemoteTable {
-    fn partitions_to_plan(&self, res: ScanPartitionResult) -> ReadDataSourcePlan {
+    fn partitions_to_plan(
+        &self,
+        res: ScanPartitionResult,
+        scan_plan: ScanPlan
+    ) -> ReadDataSourcePlan {
         let mut partitions = vec![];
         let mut statistics = Statistics {
             read_rows: 0,
@@ -167,7 +176,8 @@ impl RemoteTable {
             schema: self.schema.clone(),
             partitions,
             statistics,
-            description: "".to_string()
+            description: "".to_string(),
+            scan_plan: Arc::new(scan_plan)
         }
     }
 }

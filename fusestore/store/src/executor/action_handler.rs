@@ -26,11 +26,11 @@ use common_flights::CreateDatabaseAction;
 use common_flights::CreateDatabaseActionResult;
 use common_flights::CreateTableAction;
 use common_flights::CreateTableActionResult;
+use common_flights::DataPartInfo;
 use common_flights::DropDatabaseAction;
 use common_flights::DropDatabaseActionResult;
 use common_flights::DropTableAction;
 use common_flights::DropTableActionResult;
-use common_flights::DataPartInfo;
 use common_flights::GetTableAction;
 use common_flights::GetTableActionResult;
 use common_flights::ReadPlanAction;
@@ -101,6 +101,9 @@ impl ActionHandler {
             StoreDoAction::CreateTable(a) => self.create_table(a).await,
             StoreDoAction::DropTable(act) => self.drop_table(act).await,
             StoreDoAction::GetTable(a) => self.get_table(a).await,
+            StoreDoAction::ScanPartition(act) => Ok(StoreDoActionResult::ScanPartition(
+                self.do_scan_partitions(&act)
+            ))
         }
     }
 
@@ -204,7 +207,6 @@ impl ActionHandler {
         let _ = meta.drop_table(&act.plan.db, &act.plan.table, act.plan.if_exists)?;
         Ok(StoreDoActionResult::DropTable(DropTableActionResult {}))
     }
-}
 
     pub(crate) async fn do_put(
         &self,
