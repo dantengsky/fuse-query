@@ -136,9 +136,10 @@ impl MemEngine {
                 Err(Status::not_found(format!("table {} not found", tbl_name)))
             }
             (Some((Some(_), Some(_))), false) => Ok(()),
-            _ => Err(Status::internal(format!(
+            _ => Err(Status::internal(
                 "inconsistent meta state, mappings between names and ids are out-of-sync"
-            )))
+                    .to_string()
+            ))
         }
     }
 
