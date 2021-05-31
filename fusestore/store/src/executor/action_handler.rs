@@ -47,6 +47,7 @@ use crate::protobuf::CmdCreateDatabase;
 use crate::protobuf::CmdCreateTable;
 use crate::protobuf::Db;
 use crate::protobuf::Table;
+use common_planners::PlanNode;
 
 pub struct ActionHandler {
     meta: Arc<Mutex<MemEngine>>,
@@ -272,16 +273,26 @@ impl ActionHandler {
 
     pub async fn read(&self, action: ReadAction) -> anyhow::Result<DoGetStream> {
         log::info!("entering read");
+
+        // TODO doc this, action is supposed to have only one partition,
+        // we'd prefer parallel read to serial multipart read, since part are usually large(tens of MB)
         let part_file = action.partition[0].name.clone();
-        log::info!("reading part: {}", part_file);
+
+        let plan = if let PlanNode::ReadSource(read_source_plan) = action.push_down {
+            read_source_plan
+        } else {
+            anyhow::bail!("invalid PlanNode passed in")
+        };
+
         let content = self.fs.read_all(part_file.to_string()).await?;
         let cursor = SliceableCursor::new(content);
 
         let file_reader = SerializedFileReader::new(cursor)?;
         let mut arrow_reader = ParquetFileArrowReader::new(Arc::new(file_reader));
 
-        // TODO Correct?
-        let projection = vec![];
+        // before push_down is passed in, we returns all the columns
+        let schema = plan.schema;
+        let projection = (0..schema.fields().len()).collect::<Vec<_>>();
 
         // TODO config
         let batch_size = 2048;

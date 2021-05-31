@@ -5,11 +5,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use tonic::Status;
+
 use common_flights::AppendResult;
 use common_flights::DataPartInfo;
 use common_planners::Partition;
 use common_planners::Statistics;
-use tonic::Status;
 
 use crate::protobuf::CmdCreateDatabase;
 use crate::protobuf::CmdCreateTable;
@@ -19,7 +20,7 @@ use crate::protobuf::Table;
 // MemEngine is a prototype storage that is primarily used for testing purposes.
 pub struct MemEngine {
     pub dbs: HashMap<String, Db>,
-    pub tbl_parts: HashMap<String, Vec<DataPartInfo>>,
+    pub tbl_parts: HashMap<String, HashMap<String, Vec<DataPartInfo>>>,
     pub next_id: i64,
     pub next_ver: i64,
 }
@@ -65,6 +66,7 @@ impl MemEngine {
     }
 
     pub fn drop_database(&mut self, db_name: &str, if_exists: bool) -> Result<(), Status> {
+        self.remove_db_data_parts(db_name);
         let entry = self.dbs.remove_entry(db_name);
         match (entry, if_exists) {
             (_, true) => Ok(()),
@@ -128,6 +130,7 @@ impl MemEngine {
         tbl_name: &str,
         if_exists: bool,
     ) -> Result<(), Status> {
+        self.remove_table_data_parts(db_name, tbl_name);
         let r = self.dbs.get_mut(db_name).map(|db| {
             let name2id_removed = db.table_name_to_id.remove_entry(tbl_name);
             let id_removed = name2id_removed
@@ -165,42 +168,61 @@ impl MemEngine {
     }
 
     pub fn get_data_parts(&self, db_name: &str, table_name: &str) -> Option<Vec<DataPartInfo>> {
-        let key = format!("{}/{}", db_name, table_name);
-        let parts = self.tbl_parts.get(&key);
-        parts.map(Clone::clone)
+        let parts = self.tbl_parts.get(db_name);
+        parts.and_then(|m| m.get(table_name)).map(Clone::clone)
     }
 
     pub fn append_data_parts(
         &mut self,
         db_name: &str,
         table_name: &str,
-        append_res: &AppendResult
+        append_res: &AppendResult,
     ) -> anyhow::Result<()> {
-        let key = format!("{}/{}", db_name, table_name);
-        let mut part_info = append_res
-            .parts
-            .iter()
-            .map(|p| {
-                let loc = &p.location;
-                DataPartInfo {
-                    partition: Partition {
-                        name: loc.clone(),
-                        version: 0
-                    },
-                    stats: Statistics {
-                        read_bytes: p.disk_bytes,
-                        read_rows: p.rows
+        println!("append res is {:?}", append_res);
+        let part_info = || {
+            append_res
+                .parts
+                .iter()
+                .map(|p| {
+                    let loc = &p.location;
+                    DataPartInfo {
+                        partition: Partition {
+                            name: loc.clone(),
+                            version: 0,
+                        },
+                        stats: Statistics {
+                            read_bytes: p.disk_bytes,
+                            read_rows: p.rows,
+                        },
                     }
-                }
-            })
-            .collect::<Vec<_>>();
+                })
+                .collect::<Vec<_>>()
+        };
         self.tbl_parts
-            .entry(key)
-            .and_modify(|e| e.append(&mut part_info))
-            .or_insert(part_info);
+            .entry(db_name.to_string())
+            .and_modify(move |e| {
+                e.entry(table_name.to_string())
+                    .and_modify(|v| v.append(&mut part_info()))
+                    .or_insert_with(part_info);
+            })
+            .or_insert_with(|| {
+                [(table_name.to_string(), part_info())]
+                    .iter()
+                    .cloned()
+                    .collect()
+            });
         Ok(())
     }
 
+    pub fn remove_table_data_parts(&mut self, db_name: &str, table_name: &str) {
+        self.tbl_parts
+            .remove(db_name)
+            .and_then(|mut t| t.remove(table_name));
+    }
+
+    pub fn remove_db_data_parts(&mut self, db_name: &str) {
+        self.tbl_parts.remove(db_name);
+    }
     pub fn create_id(&mut self) -> i64 {
         let id = self.next_id;
         self.next_id += 1;

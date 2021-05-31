@@ -38,11 +38,14 @@ impl RemoteTable {
                 }),
             }),
         });
+
+        let schema = self.schema.clone();
         let parts = futures::stream::iter(iter);
         let streams = parts.then(move |parts| {
             let mut client = client.clone();
+            let schema = schema.clone();
             async move {
-                let r = client.get_partition(&parts).await;
+                let r = client.get_partition(schema, &parts).await;
                 r.unwrap_or_else(|e| {
                     Box::pin(futures::stream::once(async move {
                         Err(ErrorCodes::CannotReadFile(format!(

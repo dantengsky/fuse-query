@@ -6,6 +6,16 @@ use std::convert::TryFrom;
 use std::convert::TryInto;
 use std::time::Duration;
 
+use futures::stream;
+use futures::SinkExt;
+use futures::StreamExt;
+use log::info;
+use prost::Message;
+use tonic::metadata::MetadataValue;
+use tonic::transport::Channel;
+use tonic::transport::Endpoint;
+use tonic::Request;
+
 use common_arrow::arrow::datatypes::SchemaRef;
 use common_arrow::arrow::ipc::writer::IpcWriteOptions;
 use common_arrow::arrow::record_batch::RecordBatch;
@@ -18,7 +28,6 @@ use common_arrow::arrow_flight::BasicAuth;
 use common_arrow::arrow_flight::HandshakeRequest;
 use common_arrow::arrow_flight::Ticket;
 use common_datablocks::DataBlock;
-use common_datavalues::DataSchemaRefExt;
 use common_planners::CreateDatabasePlan;
 use common_planners::CreateTablePlan;
 use common_planners::DropDatabasePlan;
@@ -55,6 +64,7 @@ use crate::GetTableActionResult;
 use crate::ScanPartitionAction;
 use crate::ScanPartitionResult;
 use crate::StoreDoGet;
+use common_exception::ErrorCodes;
 
 pub type BlockStream =
     std::pin::Pin<Box<dyn futures::stream::Stream<Item = DataBlock> + Sync + Send + 'static>>;
@@ -189,17 +199,19 @@ impl StoreClient {
     /// Get partition.
     pub async fn get_partition(
         &mut self,
+        schema: SchemaRef,
         read_action: &ReadAction,
     ) -> anyhow::Result<SendableDataBlockStream> {
         let cmd = StoreDoGet::Read(read_action.clone());
-        let ticket = tonic::Request::<Ticket>::from(&cmd);
-        let res = self.client.do_get(ticket).await?.into_inner();
-        let schema: SchemaRef = DataSchemaRefExt::create(vec![]); // TODO
+        let mut req = tonic::Request::<Ticket>::from(&cmd);
+        req.set_timeout(self.timeout);
+        let res = self.client.do_get(req).await?.into_inner();
         let res_stream = res.map(move |item| {
-            let item = item.unwrap(); // TODO
-            let batch = flight_data_to_arrow_batch(&item, schema.clone(), &[]).unwrap();
-            let batch = DataBlock::try_from(batch).unwrap();
-            Ok(batch)
+            item.map_err(|status| ErrorCodes::TokioError(status.to_string()))
+                .and_then(|item| {
+                    flight_data_to_arrow_batch(&item, schema.clone(), &[]).map_err(ErrorCodes::from)
+                })
+                .and_then(DataBlock::try_from)
         });
         Ok(Box::pin(res_stream))
     }
