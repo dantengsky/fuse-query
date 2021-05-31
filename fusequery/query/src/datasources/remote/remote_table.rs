@@ -21,11 +21,11 @@ use common_planners::Statistics;
 use common_planners::TableOptions;
 use common_streams::SendableDataBlockStream;
 use futures::StreamExt;
-use futures::TryFutureExt;
+
 
 //use tokio_stream::StreamExt;
 use crate::datasources::remote::store_client_provider::StoreClientProvider;
-use crate::datasources::remote::test_fun;
+
 use crate::datasources::ITable;
 use crate::sessions::FuseQueryContextRef;
 

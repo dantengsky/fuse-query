@@ -4,18 +4,18 @@
 
 use std::collections::HashMap;
 use std::convert::TryFrom;
-use std::io::Cursor;
+
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
 
 use common_arrow::arrow::datatypes::Schema;
-use common_arrow::arrow::error::ArrowError;
+
 use common_arrow::arrow::ipc::writer::IpcWriteOptions;
-use common_arrow::arrow::record_batch::RecordBatch;
+
 use common_arrow::arrow_flight;
 use common_arrow::arrow_flight::utils::flight_data_from_arrow_batch;
-use common_arrow::arrow_flight::utils::flight_data_to_arrow_batch;
+
 use common_arrow::arrow_flight::FlightData;
 use common_arrow::parquet::arrow::ArrowReader;
 use common_arrow::parquet::arrow::ParquetFileArrowReader;
@@ -26,7 +26,7 @@ use common_flights::CreateDatabaseAction;
 use common_flights::CreateDatabaseActionResult;
 use common_flights::CreateTableAction;
 use common_flights::CreateTableActionResult;
-use common_flights::DataPartInfo;
+
 use common_flights::DropDatabaseAction;
 use common_flights::DropDatabaseActionResult;
 use common_flights::DropTableAction;

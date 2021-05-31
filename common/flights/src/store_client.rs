@@ -19,7 +19,7 @@ use common_arrow::arrow_flight::HandshakeRequest;
 use common_arrow::arrow_flight::Ticket;
 use common_datablocks::DataBlock;
 use common_datavalues::DataSchemaRefExt;
-use common_exception::ErrorCodes;
+
 use common_planners::CreateDatabasePlan;
 use common_planners::CreateTablePlan;
 use common_planners::DropDatabasePlan;
