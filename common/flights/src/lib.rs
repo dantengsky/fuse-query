@@ -25,6 +25,7 @@ pub use store_do_action::ScanPartitionAction;
 pub use store_do_action::ScanPartitionResult;
 pub use store_do_action::StoreDoAction;
 pub use store_do_action::StoreDoActionResult;
+pub use store_do_get::ReadAction;
 pub use store_do_get::StoreDoGet;
 pub use store_do_put::get_do_put_meta;
 pub use store_do_put::set_do_put_meta;

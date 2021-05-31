@@ -5,18 +5,26 @@
 use std::any::Any;
 
 use common_datavalues::DataSchemaRef;
+use common_datavalues::DataSchemaRefExt;
 use common_exception::ErrorCodes;
 use common_exception::Result;
+use common_flights::ReadAction;
 use common_flights::ScanPartitionResult;
+use common_planners::EmptyPlan;
 use common_planners::InsertIntoPlan;
 use common_planners::Partition;
+use common_planners::PlanNode;
 use common_planners::ReadDataSourcePlan;
 use common_planners::ScanPlan;
 use common_planners::Statistics;
 use common_planners::TableOptions;
 use common_streams::SendableDataBlockStream;
+use futures::StreamExt;
+use futures::TryFutureExt;
 
+//use tokio_stream::StreamExt;
 use crate::datasources::remote::store_client_provider::StoreClientProvider;
+use crate::datasources::remote::test_fun;
 use crate::datasources::ITable;
 use crate::sessions::FuseQueryContextRef;
 
@@ -79,8 +87,34 @@ impl ITable for RemoteTable {
         })
     }
 
-    async fn read(&self, _ctx: FuseQueryContextRef) -> Result<SendableDataBlockStream> {
-        todo!()
+    async fn read(&self, ctx: FuseQueryContextRef) -> Result<SendableDataBlockStream> {
+        use std::sync::Arc;
+        let client = Arc::new(self.store_client_provider.try_get_client().await?);
+        let num = 2;
+        let iter = std::iter::from_fn(move || {
+            let partitions = ctx.clone().try_get_partitions(num).unwrap();
+            if partitions.is_empty() {
+                None
+            } else {
+                Some(ReadAction {
+                    partition: partitions,
+                    push_down: PlanNode::Empty(EmptyPlan {
+                        schema: DataSchemaRefExt::create(vec![])
+                    })
+                })
+            }
+        });
+        let parts = futures::stream::iter(iter);
+        let clone = client.clone();
+        let streams = parts.then(move |parts| {
+            //let mut client = test_fun().await.unwrap();
+            let client = client.clone();
+            async move { client.clone().get_partition(&parts).await.unwrap() }
+        });
+
+        let flatten = streams.flatten();
+        Ok(Box::pin(flatten))
+        //todo!()
     }
 
     async fn append_data(&self, _ctx: FuseQueryContextRef, plan: InsertIntoPlan) -> Result<()> {
@@ -94,7 +128,7 @@ impl ITable for RemoteTable {
             let block_stream =
                 opt_stream.ok_or_else(|| ErrorCodes::EmptyData("input stream consumed"))?;
             let mut client = self.store_client_provider.try_get_client().await?;
-            (client)
+            client
                 .append_data(
                     plan.db_name.clone(),
                     plan.tbl_name.clone(),

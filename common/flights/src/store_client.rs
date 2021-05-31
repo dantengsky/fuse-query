@@ -12,15 +12,20 @@ use common_arrow::arrow::record_batch::RecordBatch;
 use common_arrow::arrow_flight::flight_service_client::FlightServiceClient;
 use common_arrow::arrow_flight::utils::flight_data_from_arrow_batch;
 use common_arrow::arrow_flight::utils::flight_data_from_arrow_schema;
+use common_arrow::arrow_flight::utils::flight_data_to_arrow_batch;
 use common_arrow::arrow_flight::Action;
 use common_arrow::arrow_flight::BasicAuth;
 use common_arrow::arrow_flight::HandshakeRequest;
+use common_arrow::arrow_flight::Ticket;
 use common_datablocks::DataBlock;
+use common_datavalues::DataSchemaRefExt;
+use common_exception::ErrorCodes;
 use common_planners::CreateDatabasePlan;
 use common_planners::CreateTablePlan;
 use common_planners::DropDatabasePlan;
 use common_planners::DropTablePlan;
 use common_planners::ScanPlan;
+use common_streams::SendableDataBlockStream;
 use futures::stream;
 use futures::SinkExt;
 use futures::StreamExt;
@@ -38,6 +43,7 @@ use crate::store_do_action::DropDatabaseAction;
 use crate::store_do_action::DropDatabaseActionResult;
 use crate::store_do_action::StoreDoAction;
 use crate::store_do_action::StoreDoActionResult;
+use crate::store_do_get::ReadAction;
 use crate::store_do_put;
 use crate::store_do_put::AppendResult;
 use crate::ConnectionFactory;
@@ -49,6 +55,7 @@ use crate::GetTableAction;
 use crate::GetTableActionResult;
 use crate::ScanPartitionAction;
 use crate::ScanPartitionResult;
+use crate::StoreDoGet;
 
 pub type BlockStream =
     std::pin::Pin<Box<dyn futures::stream::Stream<Item = DataBlock> + Sync + Send + 'static>>;
@@ -162,7 +169,7 @@ impl StoreClient {
         anyhow::bail!("invalid response")
     }
 
-    /// Get table.
+    /// scan partition. TODO better name
     pub async fn scan_partition(
         &mut self,
         db_name: String,
@@ -178,6 +185,25 @@ impl StoreClient {
             return Ok(rst);
         }
         anyhow::bail!("invalid response")
+    }
+
+    /// Get partition.
+    pub async fn get_partition(
+        &self,
+        read_action: &ReadAction
+    ) -> anyhow::Result<SendableDataBlockStream> {
+        let cmd = StoreDoGet::Read(read_action.clone());
+        let ticket = tonic::Request::<Ticket>::from(&cmd);
+        let mut client = self.client.clone();
+        let res = client.do_get(ticket).await?.into_inner();
+        let schema: SchemaRef = DataSchemaRefExt::create(vec![]); // TODO
+        let res_stream = res.map(move |item| {
+            let item = item.unwrap(); // TODO
+            let batch = flight_data_to_arrow_batch(&item, schema.clone(), &[]).unwrap();
+            let batch = DataBlock::try_from(batch).unwrap();
+            Ok(batch)
+        });
+        Ok(Box::pin(res_stream))
     }
 
     /// Handshake.

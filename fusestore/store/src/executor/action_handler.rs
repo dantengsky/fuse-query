@@ -4,12 +4,23 @@
 
 use std::collections::HashMap;
 use std::convert::TryFrom;
+use std::io::Cursor;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
 
 use common_arrow::arrow::datatypes::Schema;
+use common_arrow::arrow::error::ArrowError;
+use common_arrow::arrow::ipc::writer::IpcWriteOptions;
+use common_arrow::arrow::record_batch::RecordBatch;
 use common_arrow::arrow_flight;
+use common_arrow::arrow_flight::utils::flight_data_from_arrow_batch;
+use common_arrow::arrow_flight::utils::flight_data_to_arrow_batch;
 use common_arrow::arrow_flight::FlightData;
+use common_arrow::parquet::arrow::ArrowReader;
+use common_arrow::parquet::arrow::ParquetFileArrowReader;
+use common_arrow::parquet::file::reader::SerializedFileReader;
+use common_arrow::parquet::file::serialized_reader::SliceableCursor;
 use common_flights::AppendResult;
 use common_flights::CreateDatabaseAction;
 use common_flights::CreateDatabaseActionResult;
@@ -22,12 +33,16 @@ use common_flights::DropTableActionResult;
 use common_flights::DataPartInfo;
 use common_flights::GetTableAction;
 use common_flights::GetTableActionResult;
+use common_flights::ReadPlanAction;
 use common_flights::ScanPartitionAction;
 use common_flights::ScanPartitionResult;
 use common_flights::StoreDoAction;
 use common_flights::StoreDoActionResult;
+use futures::Stream;
+//use futures::StreamExt;
 use log::info;
 use tokio::sync::mpsc::Sender;
+use tokio_stream::wrappers;
 use tokio_stream::StreamExt;
 use tonic::Status;
 use tonic::Streaming;
@@ -44,6 +59,9 @@ pub struct ActionHandler {
     meta: Arc<Mutex<MemEngine>>,
     fs: Arc<dyn IFileSystem>,
 }
+
+type DoGetStream =
+    Pin<Box<dyn Stream<Item = Result<FlightData, tonic::Status>> + Sync + Send + 'static>>;
 
 impl ActionHandler {
     pub fn create(fs: Arc<dyn IFileSystem>) -> Self {
@@ -254,5 +272,40 @@ impl ActionHandler {
 
         let meta = self.meta.lock().unwrap();
         meta.get_data_parts(db_name, tbl_name)
+    }
+
+    pub async fn read(&self, action: ReadPlanAction) -> anyhow::Result<DoGetStream> {
+        let part_file = "todo";
+        let content = self.fs.read_all(part_file.to_string()).await?;
+        let cursor = SliceableCursor::new(content);
+
+        let file_reader = SerializedFileReader::new(cursor)?;
+        let mut arrow_reader = ParquetFileArrowReader::new(Arc::new(file_reader));
+
+        // TODO Correct?
+        let projection = action
+            .scan
+            .projection
+            .ok_or_else(|| anyhow::Error::msg("empty proj"))?;
+
+        // TODO config
+        let batch_size = 2048;
+
+        let mut batch_reader =
+            arrow_reader.get_record_reader_by_columns(projection.clone(), batch_size)?;
+
+        // TODO config
+        let (tx, rx) = tokio::sync::mpsc::channel(2);
+        let write_opt = IpcWriteOptions::default();
+        while let Some(item) = batch_reader.next() {
+            match item {
+                Ok(batch) => {
+                    tx.send(Ok(flight_data_from_arrow_batch(&batch, &write_opt).1))
+                        .await?
+                }
+                Err(_) => anyhow::bail!("conversion failure (flight data from arrow batch")
+            }
+        }
+        Ok(Box::pin(wrappers::ReceiverStream::new(rx)))
     }
 }
