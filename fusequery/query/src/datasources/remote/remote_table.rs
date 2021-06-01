@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0.
 
 use std::any::Any;
+use std::sync::mpsc::channel;
 use std::sync::Arc;
 
 use common_datavalues::DataSchemaRef;
@@ -17,20 +18,19 @@ use common_planners::Statistics;
 use common_planners::TableOptions;
 use common_streams::SendableDataBlockStream;
 
-use crate::datasources::remote::store_client_provider::StoreClientProvider;
+use crate::datasources::remote::StoreClientProvider;
 use crate::datasources::ITable;
 use crate::sessions::FuseQueryContextRef;
 
 #[allow(dead_code)]
 pub struct RemoteTable {
-    pub(crate) db: String,
+    pub(super) db: String,
     pub(super) name: String,
     pub(super) schema: DataSchemaRef,
     pub(super) store_client_provider: StoreClientProvider,
 }
 
 impl RemoteTable {
-    #[allow(dead_code)]
     pub fn try_create(
         db: String,
         name: String,
@@ -76,13 +76,33 @@ impl ITable for RemoteTable {
         scan: &ScanPlan,
         _partitions: usize,
     ) -> Result<ReadDataSourcePlan> {
-        ctx.block_on(async {
-            let mut client = self.store_client_provider.try_get_client().await?;
-            let res = client
-                .scan_partition(self.db.clone(), self.name.clone(), scan)
-                .await?;
-            Ok(self.partitions_to_plan(res, scan.clone()))
-        })
+        let (tx, rx) = channel();
+        let cli_provider = self.store_client_provider.clone();
+        let db_name = self.db.clone();
+        let tbl_name = self.name.clone();
+        let scan = scan.clone();
+        {
+            let scan = scan.clone();
+            ctx.execute_task(async move {
+                let scan = scan.clone();
+                match cli_provider.try_get_client().await {
+                    Ok(mut client) => {
+                        let parts_info = client
+                            .scan_partition(db_name, tbl_name, &scan)
+                            .await
+                            .map_err(ErrorCodes::from);
+                        let _ = tx.send(parts_info);
+                    }
+                    Err(e) => {
+                        let _ = tx.send(Err(e));
+                    }
+                }
+            });
+        }
+
+        rx.recv()
+            .map_err(ErrorCodes::from_std_error)?
+            .map(|v| self.partitions_to_plan(v, scan))
     }
 
     async fn read(&self, ctx: FuseQueryContextRef) -> Result<SendableDataBlockStream> {
