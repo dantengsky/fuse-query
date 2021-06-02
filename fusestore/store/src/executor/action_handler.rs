@@ -269,11 +269,16 @@ impl ActionHandler {
         // For simplicity, we do the conversion in-memory, to be optimized later
         // TODO consider using `parquet_table` and `stream_parquet`
         let write_opt = IpcWriteOptions::default();
-        let flights = batch_reader
-            .into_iter()
-            .map(|batch| flight_data_from_arrow_batch(&batch.unwrap(), &write_opt).1)
-            .collect::<Vec<_>>();
-        let stream = futures::stream::iter(flights).map(Ok);
+        let flights =
+            batch_reader
+                .into_iter()
+                .map(|batch| {
+                    batch.map(
+                    |b| flight_data_from_arrow_batch(&b, &write_opt).1, /*dictionary ignored*/
+                ).map_err(|arrow_err| Status::internal(arrow_err.to_string()))
+                })
+                .collect::<Vec<_>>();
+        let stream = futures::stream::iter(flights);
 
         // This is not gonna work, cause `ParquetFileArrowReader` and `ParquetFileArrowReader` are neither Send nor Sync
         //

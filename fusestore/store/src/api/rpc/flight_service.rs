@@ -193,7 +193,7 @@ impl FlightService for StoreFlightImpl {
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
 
-        let bytes = serde_json::to_vec(&append_res).unwrap(); // TODO convert to Result
+        let bytes = serde_json::to_vec(&append_res).map_err(|e| Status::internal(e.to_string()))?;
         let put_res = PutResult {
             app_metadata: bytes,
         };
