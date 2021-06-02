@@ -75,13 +75,13 @@ pub struct GetTableActionResult {
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct ScanPartitionAction {
-    pub scan_plan: ScanPlan
+    pub scan_plan: ScanPlan,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct DataPartInfo {
     pub partition: Partition,
-    pub stats: Statistics
+    pub stats: Statistics,
 }
 
 pub type ScanPartitionResult = Option<Vec<DataPartInfo>>;

@@ -6,19 +6,6 @@ use std::convert::TryInto;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use futures::Stream;
-use futures::StreamExt;
-use log::info;
-use prost::Message;
-use tokio::sync::mpsc::Receiver;
-use tokio::sync::mpsc::Sender;
-use tokio_stream::wrappers::ReceiverStream;
-use tonic::metadata::MetadataMap;
-use tonic::Request;
-use tonic::Response;
-use tonic::Status;
-use tonic::Streaming;
-
 use common_arrow::arrow_flight;
 use common_arrow::arrow_flight::flight_service_server::FlightService;
 use common_arrow::arrow_flight::Action;
@@ -40,6 +27,18 @@ use common_flights::FlightToken;
 use common_flights::StoreDoAction;
 use common_flights::StoreDoActionResult;
 use common_flights::StoreDoGet;
+use futures::Stream;
+use futures::StreamExt;
+use log::info;
+use prost::Message;
+use tokio::sync::mpsc::Receiver;
+use tokio::sync::mpsc::Sender;
+use tokio_stream::wrappers::ReceiverStream;
+use tonic::metadata::MetadataMap;
+use tonic::Request;
+use tonic::Response;
+use tonic::Status;
+use tonic::Streaming;
 
 use crate::configs::Config;
 use crate::executor::ActionHandler;

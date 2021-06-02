@@ -6,16 +6,6 @@ use std::convert::TryFrom;
 use std::convert::TryInto;
 use std::time::Duration;
 
-use futures::stream;
-use futures::SinkExt;
-use futures::StreamExt;
-use log::info;
-use prost::Message;
-use tonic::metadata::MetadataValue;
-use tonic::transport::Channel;
-use tonic::transport::Endpoint;
-use tonic::Request;
-
 use common_arrow::arrow::datatypes::SchemaRef;
 use common_arrow::arrow::ipc::writer::IpcWriteOptions;
 use common_arrow::arrow::record_batch::RecordBatch;
@@ -28,6 +18,7 @@ use common_arrow::arrow_flight::BasicAuth;
 use common_arrow::arrow_flight::HandshakeRequest;
 use common_arrow::arrow_flight::Ticket;
 use common_datablocks::DataBlock;
+use common_exception::ErrorCodes;
 use common_planners::CreateDatabasePlan;
 use common_planners::CreateTablePlan;
 use common_planners::DropDatabasePlan;
@@ -64,7 +55,6 @@ use crate::GetTableActionResult;
 use crate::ScanPartitionAction;
 use crate::ScanPartitionResult;
 use crate::StoreDoGet;
-use common_exception::ErrorCodes;
 
 pub type BlockStream =
     std::pin::Pin<Box<dyn futures::stream::Stream<Item = DataBlock> + Sync + Send + 'static>>;

@@ -291,7 +291,7 @@ async fn test_scan_partition() -> anyhow::Result<()> {
             if_not_exists: false,
             db: db_name.to_string(),
             engine: DatabaseEngineType::Local,
-            options: Default::default()
+            options: Default::default(),
         };
         client.create_database(plan.clone()).await?;
         let plan = CreateTablePlan {
@@ -300,7 +300,7 @@ async fn test_scan_partition() -> anyhow::Result<()> {
             table: tbl_name.to_string(),
             schema: schema.clone(),
             options: maplit::hashmap! {"opt‐1".into() => "val-1".into()},
-            engine: TableEngineType::Parquet
+            engine: TableEngineType::Parquet,
         };
         client.create_table(plan.clone()).await?;
     }
@@ -309,7 +309,7 @@ async fn test_scan_partition() -> anyhow::Result<()> {
             db_name.to_string(),
             tbl_name.to_string(),
             schema,
-            Box::pin(stream)
+            Box::pin(stream),
         )
         .await?;
     log::info!("append res is {:?}", res);

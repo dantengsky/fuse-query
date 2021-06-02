@@ -51,7 +51,7 @@ use crate::protobuf::Table;
 
 pub struct ActionHandler {
     meta: Arc<Mutex<MemEngine>>,
-    fs: Arc<dyn IFileSystem>
+    fs: Arc<dyn IFileSystem>,
 }
 
 //type DoGetStream = Pin<Box<dyn Stream<Item = Result<FlightData, tonic::Status>> + 'static>>;
@@ -62,7 +62,7 @@ impl ActionHandler {
     pub fn create(fs: Arc<dyn IFileSystem>) -> Self {
         ActionHandler {
             meta: MemEngine::create(),
-            fs
+            fs,
         }
     }
 
@@ -71,7 +71,7 @@ impl ActionHandler {
     pub async fn do_pull_file(
         &self,
         key: String,
-        tx: Sender<Result<FlightData, tonic::Status>>
+        tx: Sender<Result<FlightData, tonic::Status>>,
     ) -> Result<(), Status> {
         // TODO: stream read if the file is too large.
         let buf = self
@@ -96,9 +96,11 @@ impl ActionHandler {
             StoreDoAction::CreateTable(a) => self.create_table(a).await,
             StoreDoAction::DropTable(act) => self.drop_table(act).await,
             StoreDoAction::GetTable(a) => self.get_table(a).await,
+
+            // this looks weird, always return Ok ?
             StoreDoAction::ScanPartition(act) => Ok(StoreDoActionResult::ScanPartition(
-                self.do_scan_partitions(&act)
-            ))
+                self.do_scan_partitions(&act),
+            )),
         }
     }
 
@@ -113,8 +115,8 @@ impl ActionHandler {
                 db_id: -1,
                 ver: -1,
                 table_name_to_id: HashMap::new(),
-                tables: HashMap::new()
-            })
+                tables: HashMap::new(),
+            }),
         };
 
         let database_id = meta
@@ -122,7 +124,7 @@ impl ActionHandler {
             .map_err(|e| Status::internal(e.to_string()))?;
 
         Ok(StoreDoActionResult::CreateDatabase(
-            CreateDatabaseActionResult { database_id }
+            CreateDatabaseActionResult { database_id },
         ))
     }
 
@@ -147,19 +149,19 @@ impl ActionHandler {
             options: plan.options,
 
             // TODO
-            placement_policy: vec![]
+            placement_policy: vec![],
         };
 
         let cmd = CmdCreateTable {
             db_name,
             table_name,
-            table: Some(table)
+            table: Some(table),
         };
 
         let table_id = meta.create_table(cmd, plan.if_not_exists)?;
 
         Ok(StoreDoActionResult::CreateTable(CreateTableActionResult {
-            table_id
+            table_id,
         }))
     }
 
@@ -183,7 +185,7 @@ impl ActionHandler {
             table_id: table.table_id,
             db: db_name,
             name: table_name,
-            schema: Arc::new(schema)
+            schema: Arc::new(schema),
         });
 
         Ok(rst)
@@ -193,7 +195,7 @@ impl ActionHandler {
         let mut meta = self.meta.lock().unwrap();
         let _ = meta.drop_database(&act.plan.db, act.plan.if_exists)?;
         Ok(StoreDoActionResult::DropDatabase(
-            DropDatabaseActionResult {}
+            DropDatabaseActionResult {},
         ))
     }
 
@@ -207,7 +209,7 @@ impl ActionHandler {
         &self,
         db_name: String,
         table_name: String,
-        parts: Streaming<FlightData>
+        parts: Streaming<FlightData>,
     ) -> anyhow::Result<common_flights::AppendResult> {
         {
             let mut meta = self.meta.lock().unwrap();

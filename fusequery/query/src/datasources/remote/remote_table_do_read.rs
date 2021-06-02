@@ -2,14 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0.
 
-use futures::StreamExt;
-
 use common_exception::ErrorCodes;
 use common_exception::Result;
 use common_flights::ReadAction;
 use common_planners::PlanNode;
 use common_planners::ReadDataSourcePlan;
 use common_streams::SendableDataBlockStream;
+use futures::StreamExt;
 
 use crate::datasources::remote::remote_table::RemoteTable;
 use crate::sessions::FuseQueryContextRef;

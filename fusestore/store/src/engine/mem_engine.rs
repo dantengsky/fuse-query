@@ -5,12 +5,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use tonic::Status;
-
 use common_flights::AppendResult;
 use common_flights::DataPartInfo;
 use common_planners::Partition;
 use common_planners::Statistics;
+use tonic::Status;
 
 use crate::protobuf::CmdCreateDatabase;
 use crate::protobuf::CmdCreateTable;
