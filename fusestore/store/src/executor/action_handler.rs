@@ -246,17 +246,10 @@ impl ActionHandler {
                 Ok(res)
             }
             Err(e) => {
-                // Try our best to rollback, a background gc task is supposed to do all the dirty works left.
-                // TODO or spawn a new task?
-                self.try_undo(&res).await;
+                // A background Garbage Collector is supposed to clean up
+                //  un-committed data files periodically.
                 Err(e)
             }
-        }
-    }
-
-    async fn try_undo(&self, append_result: &AppendResult) {
-        for item in append_result.parts.iter() {
-            let _ = self.fs.delete(item.location.clone()).await;
         }
     }
 
