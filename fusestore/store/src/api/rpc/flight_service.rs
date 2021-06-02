@@ -153,11 +153,10 @@ impl FlightService for StoreFlightImpl {
         let action: StoreDoGet = request.try_into()?;
         match action {
             StoreDoGet::Read(act) => {
-                log::info!("reading partitions");
-                let stream = self.action_handler.read(act).await.map_err(|e| {
-                    log::info!("we got an error {:?}", e);
-                    Status::internal("read failure")
-                })?;
+                let stream =
+                    self.action_handler.read_partition(act).await.map_err(|e| {
+                        Status::internal(format!("read failure: {}", e.to_string()))
+                    })?;
                 Ok(Response::new(Box::pin(stream)))
             }
             StoreDoGet::Pull(pull) => {

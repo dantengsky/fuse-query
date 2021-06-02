@@ -76,6 +76,7 @@ impl ITable for RemoteTable {
         scan: &ScanPlan,
         _partitions: usize,
     ) -> Result<ReadDataSourcePlan> {
+        // Change this method to async at current stage might be harsh
         let (tx, rx) = channel();
         let cli_provider = self.store_client_provider.clone();
         let db_name = self.db.clone();

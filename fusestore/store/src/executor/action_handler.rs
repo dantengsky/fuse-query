@@ -241,12 +241,9 @@ impl ActionHandler {
         ))
     }
 
-    pub async fn read(&self, action: ReadAction) -> anyhow::Result<DoGetStream> {
+    pub async fn read_partition(&self, action: ReadAction) -> anyhow::Result<DoGetStream> {
         log::info!("entering read");
-
-        // TODO doc this, action is supposed to have only one partition,
-        // we'd prefer parallel read to serial multipart read, since part are usually large(tens of MB)
-        let part_file = action.partition[0].name.clone();
+        let part_file = action.partition.name;
 
         let plan = if let PlanNode::ReadSource(read_source_plan) = action.push_down {
             read_source_plan
@@ -278,7 +275,8 @@ impl ActionHandler {
             .collect::<Vec<_>>();
         let stream = futures::stream::iter(flights).map(Ok);
 
-        // This is not gonna work, cause `ParquetFileArrowReader` and `ParquetFileArrowReader` are neither Send nor sync (which is reasonable I think)
+        // This is not gonna work, cause `ParquetFileArrowReader` and `ParquetFileArrowReader` are neither Send nor Sync
+        //
         // # let stream = futures::stream::iter(reader.into_iter());
         // # let stream =
         // #     stream.map(move |batch| flight_data_from_arrow_batch(&batch.unwrap(), &write_opt).1);
