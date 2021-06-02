@@ -8,15 +8,17 @@ use std::sync::Arc;
 use common_exception::ErrorCodes;
 use common_exception::Result;
 use common_infallible::RwLock;
+use common_planners::CreateDatabasePlan;
 use common_planners::DatabaseEngineType;
 use common_planners::DropDatabasePlan;
-use common_planners::{CreateDatabasePlan, TableOptions};
+use common_planners::TableOptions;
 
 use crate::configs::Config;
 use crate::datasources::local::LocalDatabase;
 use crate::datasources::local::LocalFactory;
+use crate::datasources::remote::RemoteDatabase;
 use crate::datasources::remote::RemoteFactory;
-use crate::datasources::remote::{RemoteDatabase, RemoteTable};
+use crate::datasources::remote::RemoteTable;
 use crate::datasources::system::SystemFactory;
 use crate::datasources::IDatabase;
 use crate::datasources::ITable;
@@ -134,22 +136,28 @@ impl IDataSource for DataSource {
     }
 
     async fn get_remote_table(&self, db_name: &str, table_name: &str) -> Result<Arc<dyn ITable>> {
-        let mut store_cli = self
-            .remote_factory
-            .store_client_provider()
-            .try_get_client()
-            .await?;
-        let res = store_cli
-            .get_table(db_name.to_string(), table_name.to_string())
-            .await?;
-        let remote_table = RemoteTable::try_create(
-            db_name.to_string(),
-            table_name.to_string(),
-            res.schema,
-            self.remote_factory.store_client_provider().clone(),
-            TableOptions::new(),
-        )?;
-        Ok(Arc::from(remote_table))
+        match self.get_table(db_name, table_name) {
+            Ok(t) if t.is_local() => Err(ErrorCodes::LogicalError(format!(
+                "local table {}.{} exists, which is used as remote",
+                db_name, table_name
+            ))),
+            tbl @ Ok(_) => tbl,
+            _ => {
+                let cli_provider = self.remote_factory.store_client_provider();
+                let mut store_cli = cli_provider.try_get_client().await?;
+                let res = store_cli
+                    .get_table(db_name.to_string(), table_name.to_string())
+                    .await?;
+                let remote_table = RemoteTable::try_create(
+                    db_name.to_string(),
+                    table_name.to_string(),
+                    res.schema,
+                    self.remote_factory.store_client_provider().clone(),
+                    TableOptions::new(),
+                )?;
+                Ok(Arc::from(remote_table))
+            }
+        }
     }
 
     fn get_all_tables(&self) -> Result<Vec<(String, Arc<dyn ITable>)>> {
