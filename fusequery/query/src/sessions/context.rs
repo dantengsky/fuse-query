@@ -166,6 +166,17 @@ impl FuseQueryContext {
         self.datasource.get_table(db_name, table_name)
     }
 
+    pub async fn get_remote_table(
+        &self,
+        db_name: &str,
+        table_name: &str,
+    ) -> Result<Arc<dyn ITable>> {
+        match self.datasource.get_table(db_name, table_name) {
+            t @ Ok(_) => t,
+            _ => self.datasource.get_remote_table(db_name, table_name).await,
+        }
+    }
+
     pub fn get_table_function(&self, function_name: &str) -> Result<Arc<dyn ITableFunction>> {
         self.datasource.get_table_function(function_name)
     }

@@ -8,15 +8,15 @@ use std::sync::Arc;
 use common_exception::ErrorCodes;
 use common_exception::Result;
 use common_infallible::RwLock;
-use common_planners::CreateDatabasePlan;
 use common_planners::DatabaseEngineType;
 use common_planners::DropDatabasePlan;
+use common_planners::{CreateDatabasePlan, TableOptions};
 
 use crate::configs::Config;
 use crate::datasources::local::LocalDatabase;
 use crate::datasources::local::LocalFactory;
-use crate::datasources::remote::RemoteDatabase;
 use crate::datasources::remote::RemoteFactory;
+use crate::datasources::remote::{RemoteDatabase, RemoteTable};
 use crate::datasources::system::SystemFactory;
 use crate::datasources::IDatabase;
 use crate::datasources::ITable;
@@ -31,6 +31,7 @@ pub trait IDataSource: Sync + Send {
     fn get_table_function(&self, name: &str) -> Result<Arc<dyn ITableFunction>>;
     async fn create_database(&self, plan: CreateDatabasePlan) -> Result<()>;
     async fn drop_database(&self, plan: DropDatabasePlan) -> Result<()>;
+    async fn get_remote_table(&self, db_name: &str, table_name: &str) -> Result<Arc<dyn ITable>>;
 }
 
 // Maintain all the databases of user.
@@ -130,6 +131,25 @@ impl IDataSource for DataSource {
 
         let table = database.get_table(table_name)?;
         Ok(table.clone())
+    }
+
+    async fn get_remote_table(&self, db_name: &str, table_name: &str) -> Result<Arc<dyn ITable>> {
+        let mut store_cli = self
+            .remote_factory
+            .store_client_provider()
+            .try_get_client()
+            .await?;
+        let res = store_cli
+            .get_table(db_name.to_string(), table_name.to_string())
+            .await?;
+        let remote_table = RemoteTable::try_create(
+            db_name.to_string(),
+            table_name.to_string(),
+            res.schema,
+            self.remote_factory.store_client_provider().clone(),
+            TableOptions::new(),
+        )?;
+        Ok(Arc::from(remote_table))
     }
 
     fn get_all_tables(&self) -> Result<Vec<(String, Arc<dyn ITable>)>> {

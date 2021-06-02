@@ -164,6 +164,7 @@ impl RemoteTable {
             statistics,
             description: "".to_string(),
             scan_plan: Arc::new(scan_plan),
+            remote: true,
         }
     }
 }

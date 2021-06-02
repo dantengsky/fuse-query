@@ -33,6 +33,7 @@ impl RemoteTable {
                     db: db.clone(),
                     table: tbl.clone(),
                     schema: schema.clone(),
+                    remote: true,
                     ..ReadDataSourcePlan::empty()
                 }),
             }),
