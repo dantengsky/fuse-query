@@ -168,7 +168,6 @@ impl StoreClient {
         anyhow::bail!("invalid response")
     }
 
-    /// scan partition. TODO better name
     pub async fn scan_partition(
         &mut self,
         db_name: String,
@@ -187,7 +186,7 @@ impl StoreClient {
     }
 
     /// Get partition.
-    pub async fn get_partition(
+    pub async fn read_partition(
         &mut self,
         schema: SchemaRef,
         read_action: &ReadAction,

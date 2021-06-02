@@ -7,6 +7,7 @@ use common_exception::Result;
 use common_flights::ReadAction;
 use common_planners::PlanNode;
 use common_planners::ReadDataSourcePlan;
+use common_streams::ProgressStream;
 use common_streams::SendableDataBlockStream;
 use futures::StreamExt;
 
@@ -23,6 +24,7 @@ impl RemoteTable {
         let schema = self.schema.clone();
         let db = self.db.to_string();
         let tbl = self.name.to_string();
+        let progress_callback = ctx.progress_callback();
 
         let iter = std::iter::from_fn(move || match ctx.try_get_partitions(1) {
             Err(_) => None,
@@ -45,7 +47,7 @@ impl RemoteTable {
             let mut client = client.clone();
             let schema = schema.clone();
             async move {
-                let r = client.get_partition(schema, &parts).await;
+                let r = client.read_partition(schema, &parts).await;
                 r.unwrap_or_else(|e| {
                     Box::pin(futures::stream::once(async move {
                         Err(ErrorCodes::CannotReadFile(format!(
@@ -57,7 +59,7 @@ impl RemoteTable {
             }
         });
 
-        let flatten = streams.flatten();
+        let flatten = ProgressStream::try_create(Box::pin(streams.flatten()), progress_callback?)?;
         Ok(Box::pin(flatten))
     }
 }
