@@ -33,12 +33,17 @@ pub trait IDataSource: Sync + Send {
     fn get_table_function(&self, name: &str) -> Result<Arc<dyn ITableFunction>>;
     async fn create_database(&self, plan: CreateDatabasePlan) -> Result<()>;
     async fn drop_database(&self, plan: DropDatabasePlan) -> Result<()>;
+
+    // This is an adhoc solution for the metadata syncing problem, far from elegant. let's tweak this later.
+    //
+    // The reason of not extending IDataSource::get_table (e.g. by adding a remote_hint parameter):
+    // Implementation of fetching remote table involves async operations which is not
+    // straight forward (but not infeasible) to do in a non-async method.
     async fn get_remote_table(&self, db_name: &str, table_name: &str) -> Result<Arc<dyn ITable>>;
 }
 
 // Maintain all the databases of user.
 pub struct DataSource {
-    // conf: Config,
     databases: RwLock<HashMap<String, Arc<dyn IDatabase>>>,
     table_functions: RwLock<HashMap<String, Arc<dyn ITableFunction>>>,
     remote_factory: RemoteFactory,
@@ -155,6 +160,11 @@ impl IDataSource for DataSource {
                     self.remote_factory.store_client_provider().clone(),
                     TableOptions::new(),
                 )?;
+
+                // Remote_table we've got here is NOT cached.
+                //
+                // Since we should solve the metadata synchronization problem in a more reasonable way,
+                // let's postpone it until we have taken all the things into account.
                 Ok(Arc::from(remote_table))
             }
         }

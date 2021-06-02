@@ -59,7 +59,7 @@ impl RemoteTable {
             }
         });
 
-        let flatten = ProgressStream::try_create(Box::pin(streams.flatten()), progress_callback?)?;
-        Ok(Box::pin(flatten))
+        let stream = ProgressStream::try_create(Box::pin(streams.flatten()), progress_callback?)?;
+        Ok(Box::pin(stream))
     }
 }
