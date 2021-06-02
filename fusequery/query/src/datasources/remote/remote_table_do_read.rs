@@ -51,7 +51,7 @@ impl RemoteTable {
                 r.unwrap_or_else(|e| {
                     Box::pin(futures::stream::once(async move {
                         Err(ErrorCodes::CannotReadFile(format!(
-                            "get partition failure. partition [{:?}], error {:?}",
+                            "get partition failure. partition [{:?}], error {}",
                             &parts, e
                         )))
                     }))

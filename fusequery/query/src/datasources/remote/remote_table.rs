@@ -24,10 +24,10 @@ use crate::sessions::FuseQueryContextRef;
 
 #[allow(dead_code)]
 pub struct RemoteTable {
-    pub(super) db: String,
-    pub(super) name: String,
-    pub(super) schema: DataSchemaRef,
-    pub(super) store_client_provider: StoreClientProvider,
+    pub(crate) db: String,
+    pub(crate) name: String,
+    pub(crate) schema: DataSchemaRef,
+    pub(crate) store_client_provider: StoreClientProvider,
 }
 
 impl RemoteTable {
@@ -80,11 +80,9 @@ impl ITable for RemoteTable {
         let cli_provider = self.store_client_provider.clone();
         let db_name = self.db.clone();
         let tbl_name = self.name.clone();
-        let scan = scan.clone();
         {
             let scan = scan.clone();
             ctx.execute_task(async move {
-                let scan = scan.clone();
                 match cli_provider.try_get_client().await {
                     Ok(mut client) => {
                         let parts_info = client
@@ -102,7 +100,7 @@ impl ITable for RemoteTable {
 
         rx.recv()
             .map_err(ErrorCodes::from_std_error)?
-            .map(|v| self.partitions_to_plan(v, scan))
+            .map(|v| self.partitions_to_plan(v, scan.clone()))
     }
 
     async fn read(&self, ctx: FuseQueryContextRef) -> Result<SendableDataBlockStream> {

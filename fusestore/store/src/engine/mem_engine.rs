@@ -176,8 +176,7 @@ impl MemEngine {
         db_name: &str,
         table_name: &str,
         append_res: &AppendResult,
-    ) -> anyhow::Result<()> {
-        println!("append res is {:?}", append_res);
+    ) {
         let part_info = || {
             append_res
                 .parts
@@ -210,7 +209,6 @@ impl MemEngine {
                     .cloned()
                     .collect()
             });
-        Ok(())
     }
 
     pub fn remove_table_data_parts(&mut self, db_name: &str, table_name: &str) {

@@ -29,7 +29,6 @@ use common_flights::GetTableAction;
 use common_flights::GetTableActionResult;
 use common_flights::ReadAction;
 use common_flights::ScanPartitionAction;
-use common_flights::ScanPartitionResult;
 use common_flights::StoreDoAction;
 use common_flights::StoreDoActionResult;
 use common_planners::PlanNode;
@@ -53,7 +52,6 @@ pub struct ActionHandler {
     fs: Arc<dyn IFileSystem>,
 }
 
-//type DoGetStream = Pin<Box<dyn Stream<Item = Result<FlightData, tonic::Status>> + 'static>>;
 type DoGetStream =
     Pin<Box<dyn Stream<Item = Result<FlightData, tonic::Status>> + Send + Sync + 'static>>;
 
@@ -95,11 +93,7 @@ impl ActionHandler {
             StoreDoAction::CreateTable(a) => self.create_table(a).await,
             StoreDoAction::DropTable(act) => self.drop_table(act).await,
             StoreDoAction::GetTable(a) => self.get_table(a).await,
-
-            // this looks weird, always return Ok ?
-            StoreDoAction::ScanPartition(act) => Ok(StoreDoActionResult::ScanPartition(
-                self.do_scan_partitions(&act),
-            )),
+            StoreDoAction::ScanPartition(act) => self.scan_partitions(&act),
         }
     }
 
@@ -228,32 +222,12 @@ impl ActionHandler {
             .append_data(format!("{}/{}", &db_name, &table_name), Box::pin(parts))
             .await?;
 
-        let update_meta_res = {
-            // note, table and db may be delete here ...
-            let mut meta = self.meta.lock().unwrap();
-            meta.append_data_parts(&db_name, &table_name, &res)
-        };
-
-        match update_meta_res {
-            Ok(_) => {
-                log::debug!(
-                    "append data to {}.{}, result {:?}",
-                    db_name,
-                    table_name,
-                    res
-                );
-                Ok(res)
-            }
-            Err(e) => {
-                // A background Garbage Collector is supposed to clean up
-                //  un-committed data files periodically.
-                Err(e)
-            }
-        }
+        let mut meta = self.meta.lock().unwrap();
+        meta.append_data_parts(&db_name, &table_name, &res);
+        Ok(res)
     }
 
-    // todo ScanPartitionResult is not a good name , XXX Result make me thinking of Result<T>
-    fn do_scan_partitions(&self, cmd: &ScanPartitionAction) -> ScanPartitionResult {
+    fn scan_partitions(&self, cmd: &ScanPartitionAction) -> Result<StoreDoActionResult, Status> {
         let schema = &cmd.scan_plan.schema_name;
         let splits: Vec<&str> = schema.split('/').collect();
         // TODO error handling
@@ -262,7 +236,9 @@ impl ActionHandler {
         let tbl_name = splits[1];
 
         let meta = self.meta.lock().unwrap();
-        meta.get_data_parts(db_name, tbl_name)
+        Ok(StoreDoActionResult::ScanPartition(
+            meta.get_data_parts(db_name, tbl_name),
+        ))
     }
 
     pub async fn read(&self, action: ReadAction) -> anyhow::Result<DoGetStream> {
@@ -294,7 +270,7 @@ impl ActionHandler {
         let batch_reader = arrow_reader.get_record_reader_by_columns(projection, batch_size)?;
 
         // For simplicity, we do the conversion in-memory, to be optimized later
-        // TODO consider using `parquet_table` and `stream_parquet` if spawn_blocking is not a big deal
+        // TODO consider using `parquet_table` and `stream_parquet`
         let write_opt = IpcWriteOptions::default();
         let flights = batch_reader
             .into_iter()
@@ -302,8 +278,8 @@ impl ActionHandler {
             .collect::<Vec<_>>();
         let stream = futures::stream::iter(flights).map(Ok);
 
-        // This is not gonna work, cause ....
-        // # let stream = futures::stream::iter(wrapper.into_iter());
+        // This is not gonna work, cause `ParquetFileArrowReader` and `ParquetFileArrowReader` are neither Send nor sync (which is reasonable I think)
+        // # let stream = futures::stream::iter(reader.into_iter());
         // # let stream =
         // #     stream.map(move |batch| flight_data_from_arrow_batch(&batch.unwrap(), &write_opt).1);
         // # let stream = stream.map(|v| Ok(v));

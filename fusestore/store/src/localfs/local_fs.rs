@@ -90,9 +90,4 @@ impl IFileSystem for LocalFS {
 
         Ok(ListResult { dirs, files })
     }
-
-    async fn delete(&self, path: String) -> anyhow::Result<()> {
-        let p = Path::new(self.root.as_path()).join(&path);
-        std::fs::remove_file(p).with_context(|| format!("LocalFS: failed to delete file {}", path))
-    }
 }

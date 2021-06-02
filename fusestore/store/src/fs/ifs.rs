@@ -21,9 +21,6 @@ where Self: Sync + Send
     /// List dir and returns directories and files.
     async fn list(&self, path: String) -> anyhow::Result<ListResult>;
 
-    /// Delete a path
-    async fn delete(&self, path: String) -> anyhow::Result<()>;
-
     // async fn read(
     //     path: &str,
     //     offset: usize,
