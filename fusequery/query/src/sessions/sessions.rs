@@ -20,7 +20,8 @@ use metrics::counter;
 use crate::clusters::Cluster;
 use crate::clusters::ClusterRef;
 use crate::configs::Config;
-use crate::datasources::DataSource;
+use crate::datasources::Catalog;
+use crate::datasources::DatabaseCatalog;
 use crate::servers::AbortableService;
 use crate::servers::Elapsed;
 use crate::sessions::session::ISession;
@@ -30,14 +31,14 @@ use crate::sessions::FuseQueryContextRef;
 
 pub struct SessionManager {
     cluster: ClusterRef,
-    datasource: Arc<DataSource>,
+    datasource: Arc<dyn Catalog>,
 
     max_mysql_sessions: usize,
     sessions: RwLock<HashMap<String, Arc<Box<dyn ISession>>>>,
     // TODO: remove queries_context.
     queries_context: RwLock<HashMap<String, FuseQueryContextRef>>,
 
-    notifyed: Arc<AtomicBool>,
+    notified: Arc<AtomicBool>,
     aborted_notify: Arc<tokio::sync::Notify>,
 }
 
@@ -47,13 +48,13 @@ impl SessionManager {
     pub fn try_create(max_mysql_sessions: u64) -> Result<SessionManagerRef> {
         Ok(Arc::new(SessionManager {
             cluster: Cluster::empty(),
-            datasource: Arc::new(DataSource::try_create()?),
+            datasource: Arc::new(DatabaseCatalog::try_create()?),
 
             max_mysql_sessions: max_mysql_sessions as usize,
             sessions: RwLock::new(HashMap::with_capacity(max_mysql_sessions as usize)),
             queries_context: RwLock::new(HashMap::with_capacity(max_mysql_sessions as usize)),
 
-            notifyed: Arc::new(AtomicBool::new(false)),
+            notified: Arc::new(AtomicBool::new(false)),
             aborted_notify: Arc::new(tokio::sync::Notify::new()),
         }))
     }
@@ -62,13 +63,13 @@ impl SessionManager {
         let max_mysql_sessions = conf.mysql_handler_thread_num as usize;
         Ok(Arc::new(SessionManager {
             cluster,
-            datasource: Arc::new(DataSource::try_create()?),
+            datasource: Arc::new(DatabaseCatalog::try_create()?),
 
             max_mysql_sessions,
             sessions: RwLock::new(HashMap::with_capacity(max_mysql_sessions)),
             queries_context: RwLock::new(HashMap::with_capacity(max_mysql_sessions)),
 
-            notifyed: Arc::new(AtomicBool::new(false)),
+            notified: Arc::new(AtomicBool::new(false)),
             aborted_notify: Arc::new(tokio::sync::Notify::new()),
         }))
     }
@@ -77,7 +78,7 @@ impl SessionManager {
         self.cluster.clone()
     }
 
-    pub fn get_datasource(self: &Arc<Self>) -> Arc<DataSource> {
+    pub fn get_datasource(self: &Arc<Self>) -> Arc<dyn Catalog> {
         self.datasource.clone()
     }
 
@@ -118,7 +119,7 @@ impl SessionManager {
     pub fn try_create_context(&self) -> Result<FuseQueryContextRef> {
         counter!(super::metrics::METRIC_SESSION_CONNECT_NUMBERS, 1);
 
-        let ctx = FuseQueryContext::try_create()?;
+        let ctx = FuseQueryContext::try_create(self.datasource.clone())?;
         self.queries_context
             .write()
             .insert(ctx.get_id(), ctx.clone());
@@ -151,9 +152,9 @@ impl AbortableService<(), ()> for SessionManager {
             .map(|(_, session)| session.abort(force))
             .collect::<Result<Vec<_>>>()?;
 
-        if !self.notifyed.load(Ordering::Relaxed) {
+        if !self.notified.load(Ordering::Relaxed) {
             self.aborted_notify.notify_waiters();
-            self.notifyed.store(true, Ordering::Relaxed);
+            self.notified.store(true, Ordering::Relaxed);
         }
 
         Ok(())
@@ -178,7 +179,7 @@ impl AbortableService<(), ()> for SessionManager {
 
         match duration {
             None => {
-                if !self.notifyed.load(Ordering::Relaxed) {
+                if !self.notified.load(Ordering::Relaxed) {
                     self.aborted_notify.notified().await;
                 }
 
@@ -189,7 +190,7 @@ impl AbortableService<(), ()> for SessionManager {
             Some(duration) => {
                 let mut duration = duration;
 
-                if !self.notifyed.load(Ordering::Relaxed) {
+                if !self.notified.load(Ordering::Relaxed) {
                     tokio::time::timeout(duration, self.aborted_notify.notified())
                         .await
                         .map_err(|_| {

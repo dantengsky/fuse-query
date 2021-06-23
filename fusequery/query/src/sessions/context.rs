@@ -21,7 +21,7 @@ use uuid::Uuid;
 
 use crate::clusters::Cluster;
 use crate::clusters::ClusterRef;
-use crate::datasources::DataSource;
+use crate::datasources::Catalog;
 use crate::datasources::Table;
 use crate::datasources::TableFunction;
 use crate::sessions::Settings;
@@ -31,7 +31,7 @@ pub struct FuseQueryContext {
     uuid: Arc<RwLock<String>>,
     settings: Arc<Settings>,
     cluster: Arc<RwLock<ClusterRef>>,
-    datasource: Arc<DataSource>,
+    datasource: Arc<dyn Catalog>,
     statistics: Arc<RwLock<Statistics>>,
     partition_queue: Arc<RwLock<VecDeque<Partition>>>,
     current_database: Arc<RwLock<String>>,
@@ -43,13 +43,13 @@ pub struct FuseQueryContext {
 pub type FuseQueryContextRef = Arc<FuseQueryContext>;
 
 impl FuseQueryContext {
-    pub fn try_create() -> Result<FuseQueryContextRef> {
+    pub fn try_create(catalog: Arc<dyn Catalog>) -> Result<FuseQueryContextRef> {
         let settings = Settings::try_create()?;
         let ctx = FuseQueryContext {
             uuid: Arc::new(RwLock::new(Uuid::new_v4().to_string())),
             settings: settings.clone(),
             cluster: Arc::new(RwLock::new(Cluster::empty())),
-            datasource: Arc::new(DataSource::try_create()?),
+            datasource: catalog,
             statistics: Arc::new(RwLock::new(Statistics::default())),
             partition_queue: Arc::new(RwLock::new(VecDeque::new())),
             current_database: Arc::new(RwLock::new(String::from("default"))),
@@ -69,7 +69,7 @@ impl FuseQueryContext {
     pub fn from_settings(
         settings: Arc<Settings>,
         default_database: String,
-        datasource: Arc<DataSource>,
+        datasource: Arc<dyn Catalog>,
     ) -> Result<FuseQueryContextRef> {
         Ok(Arc::new(FuseQueryContext {
             uuid: Arc::new(RwLock::new(Uuid::new_v4().to_string())),
@@ -182,7 +182,7 @@ impl FuseQueryContext {
         Ok(cluster.clone())
     }
 
-    pub fn get_datasource(&self) -> Arc<DataSource> {
+    pub fn get_datasource(&self) -> Arc<dyn Catalog> {
         self.datasource.clone()
     }
 

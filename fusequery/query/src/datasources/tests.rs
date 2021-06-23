@@ -6,11 +6,12 @@ use common_planners::*;
 use common_runtime::tokio;
 use pretty_assertions::assert_eq;
 
-use crate::datasources::DataSource;
+use crate::datasources::catalog::Catalog;
+use crate::datasources::DatabaseCatalog;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_datasource() -> anyhow::Result<()> {
-    let datasource = DataSource::try_create()?;
+    let datasource = DatabaseCatalog::try_create()?;
 
     // Table check.
     datasource.get_table("system", "numbers_mt")?;

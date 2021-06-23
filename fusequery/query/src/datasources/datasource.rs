@@ -20,25 +20,127 @@ use crate::datasources::remote::RemoteDatabase;
 use crate::datasources::remote::RemoteFactory;
 use crate::datasources::remote::RemoteTable;
 use crate::datasources::system::SystemFactory;
+use crate::datasources::Catalog;
 use crate::datasources::Database;
 use crate::datasources::Table;
 use crate::datasources::TableFunction;
 
 // Maintain all the databases of user.
-pub struct DataSource {
+pub struct DatabaseCatalog {
     databases: RwLock<HashMap<String, Arc<dyn Database>>>,
     table_functions: RwLock<HashMap<String, Arc<dyn TableFunction>>>,
     remote_factory: RemoteFactory,
 }
 
-impl DataSource {
+pub struct MetaHolder {
+    databases: RwLock<HashMap<String, Arc<dyn Database>>>,
+    table_functions: RwLock<HashMap<String, Arc<dyn TableFunction>>>,
+    remote_factory: RemoteFactory,
+}
+
+#[async_trait::async_trait]
+impl Catalog for MetaHolder {
+    fn get_database(&self, db_name: &str) -> Result<Arc<dyn Database>> {
+        let db_lock = self.databases.read();
+        let database = db_lock.get(db_name).ok_or_else(|| {
+            ErrorCode::UnknownDatabase(format!("Unknown database: '{}'", db_name))
+        })?;
+        Ok(database.clone())
+    }
+
+    fn get_databases(&self) -> Result<Vec<String>> {
+        let mut results = vec![];
+        for (k, _v) in self.databases.read().iter() {
+            results.push(k.clone());
+        }
+        Ok(results)
+    }
+
+    fn get_table(&self, db_name: &str, table_name: &str) -> Result<Arc<dyn Table>> {
+        let db_lock = self.databases.read();
+        let database = db_lock.get(db_name).ok_or_else(|| {
+            ErrorCode::UnknownDatabase(format!("Unknown database: '{}'", db_name))
+        })?;
+
+        let table = database.get_table(table_name)?;
+        Ok(table.clone())
+    }
+
+    async fn get_remote_table(&self, db_name: &str, table_name: &str) -> Result<Arc<dyn Table>> {
+        todo!()
+    }
+
+    fn get_all_tables(&self) -> common_exception::Result<Vec<(String, Arc<dyn Table>)>> {
+        let mut results = vec![];
+        for (k, v) in self.databases.read().iter() {
+            let tables = v.get_tables()?;
+            for table in tables {
+                results.push((k.clone(), table.clone()));
+            }
+        }
+        Ok(results)
+    }
+
+    fn get_table_function(&self, name: &str) -> Result<Arc<dyn TableFunction>> {
+        let table_func_lock = self.table_functions.read();
+        let table = table_func_lock.get(name).ok_or_else(|| {
+            ErrorCode::UnknownTableFunction(format!("Unknown table function: '{}'", name))
+        })?;
+
+        Ok(table.clone())
+    }
+
+    async fn create_database(&self, plan: CreateDatabasePlan) -> Result<()> {
+        let db_name = plan.db.as_str();
+        if self.databases.read().get(db_name).is_some() {
+            return if plan.if_not_exists {
+                Ok(())
+            } else {
+                Err(ErrorCode::UnknownDatabase(format!(
+                    "Database: '{}' already exists.",
+                    plan.db
+                )))
+            };
+        }
+
+        match plan.engine {
+            DatabaseEngineType::Local => {
+                let database = LocalDatabase::create();
+                self.databases.write().insert(plan.db, Arc::new(database));
+            }
+            DatabaseEngineType::Remote => {
+                let mut client = self
+                    .remote_factory
+                    .store_client_provider()
+                    .try_get_client()
+                    .await?;
+                client.create_database(plan.clone()).await.map(|_| {
+                    let database = RemoteDatabase::create(
+                        self.remote_factory.store_client_provider(),
+                        plan.db.clone(),
+                    );
+                    self.databases
+                        .write()
+                        .insert(plan.db.clone(), Arc::new(database));
+                })?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn drop_database(&self, plan: DropDatabasePlan) -> Result<()> {
+        todo!()
+    }
+}
+
+impl DatabaseCatalog {
     pub fn try_create() -> Result<Self> {
         let conf = Config::default();
-        DataSource::try_create_with_config(&conf)
+        DatabaseCatalog::try_create_with_config(&conf)
     }
 
     pub fn try_create_with_config(conf: &Config) -> Result<Self> {
-        let mut datasource = DataSource {
+        let mut datasource = DatabaseCatalog {
             databases: Default::default(),
             table_functions: Default::default(),
             remote_factory: RemoteFactory::new(conf),
@@ -94,8 +196,9 @@ impl DataSource {
     }
 }
 
-impl DataSource {
-    pub fn get_database(&self, db_name: &str) -> Result<Arc<dyn Database>> {
+#[async_trait::async_trait]
+impl Catalog for DatabaseCatalog {
+    fn get_database(&self, db_name: &str) -> Result<Arc<dyn Database>> {
         let db_lock = self.databases.read();
         let database = db_lock.get(db_name).ok_or_else(|| {
             ErrorCode::UnknownDatabase(format!("Unknown database: '{}'", db_name))
@@ -103,7 +206,7 @@ impl DataSource {
         Ok(database.clone())
     }
 
-    pub fn get_databases(&self) -> Result<Vec<String>> {
+    fn get_databases(&self) -> Result<Vec<String>> {
         let mut results = vec![];
         for (k, _v) in self.databases.read().iter() {
             results.push(k.clone());
@@ -111,7 +214,7 @@ impl DataSource {
         Ok(results)
     }
 
-    pub fn get_table(&self, db_name: &str, table_name: &str) -> Result<Arc<dyn Table>> {
+    fn get_table(&self, db_name: &str, table_name: &str) -> Result<Arc<dyn Table>> {
         let db_lock = self.databases.read();
         let database = db_lock.get(db_name).ok_or_else(|| {
             ErrorCode::UnknownDatabase(format!("Unknown database: '{}'", db_name))
@@ -121,11 +224,7 @@ impl DataSource {
         Ok(table.clone())
     }
 
-    pub async fn get_remote_table(
-        &self,
-        db_name: &str,
-        table_name: &str,
-    ) -> Result<Arc<dyn Table>> {
+    async fn get_remote_table(&self, db_name: &str, table_name: &str) -> Result<Arc<dyn Table>> {
         match self.get_table(db_name, table_name) {
             Ok(t) if t.is_local() => Err(ErrorCode::LogicalError(format!(
                 "local table {}.{} exists, which is used as remote",
@@ -155,7 +254,7 @@ impl DataSource {
         }
     }
 
-    pub fn get_all_tables(&self) -> Result<Vec<(String, Arc<dyn Table>)>> {
+    fn get_all_tables(&self) -> common_exception::Result<Vec<(String, Arc<dyn Table>)>> {
         let mut results = vec![];
         for (k, v) in self.databases.read().iter() {
             let tables = v.get_tables()?;
@@ -166,7 +265,7 @@ impl DataSource {
         Ok(results)
     }
 
-    pub fn get_table_function(&self, name: &str) -> Result<Arc<dyn TableFunction>> {
+    fn get_table_function(&self, name: &str) -> Result<Arc<dyn TableFunction>> {
         let table_func_lock = self.table_functions.read();
         let table = table_func_lock.get(name).ok_or_else(|| {
             ErrorCode::UnknownTableFunction(format!("Unknown table function: '{}'", name))
@@ -175,7 +274,7 @@ impl DataSource {
         Ok(table.clone())
     }
 
-    pub async fn create_database(&self, plan: CreateDatabasePlan) -> Result<()> {
+    async fn create_database(&self, plan: CreateDatabasePlan) -> Result<()> {
         let db_name = plan.db.as_str();
         if self.databases.read().get(db_name).is_some() {
             return if plan.if_not_exists {
@@ -213,7 +312,7 @@ impl DataSource {
         Ok(())
     }
 
-    pub async fn drop_database(&self, plan: DropDatabasePlan) -> Result<()> {
+    async fn drop_database(&self, plan: DropDatabasePlan) -> Result<()> {
         let db_name = plan.db.as_str();
         if self.databases.read().get(db_name).is_none() {
             return if plan.if_exists {
