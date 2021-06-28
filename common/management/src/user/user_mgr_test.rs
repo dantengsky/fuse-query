@@ -55,22 +55,42 @@ mock! {
 
 #[tokio::test]
 async fn test_add_user() -> common_exception::Result<()> {
-    let mut v = MockKV::new();
-    let test_key = USER_API_KEY_PREFIX.to_string() + "test";
+    {
+        let mut v = MockKV::new();
+        let test_key = USER_API_KEY_PREFIX.to_string() + "test";
 
-    v.expect_delete_kv()
-        //.with(predicate::eq(key), predicate::eq(None))
-        .with(
-            // seems we must use a move closure here
-            // predicate:eq(&test_key) will cause lifetime error
-            predicate::function(move |v| v == test_key.as_str()),
-            predicate::eq(None),
-        )
-        .times(1)
-        .returning(|_k, _seq| Ok(()));
-    let mut user_mgr = UserMgr::new(v);
-    let res = user_mgr.drop_user("test", None).await;
-    assert!(res.is_ok());
+        // normal case
+        v.expect_delete_kv()
+            .with(
+                // seems we must use a move closure here
+                // predicate:eq(&test_key) will cause lifetime error
+                predicate::function(move |v| v == test_key.as_str()),
+                predicate::eq(None),
+            )
+            .times(1)
+            .returning(|_k, _seq| Ok(()));
+        let mut user_mgr = UserMgr::new(v);
+        let res = user_mgr.drop_user("test", None).await;
+        assert!(res.is_ok());
+    }
+
+    // not found
+    {
+        let mut v = MockKV::new();
+        let test_key = USER_API_KEY_PREFIX.to_string() + "test";
+        v.expect_delete_kv()
+            .with(
+                // seems we must use a move closure here
+                // predicate:eq(&test_key) will cause lifetime error
+                predicate::function(move |v| v == test_key.as_str()),
+                predicate::eq(None),
+            )
+            .times(1)
+            .returning(|_k, _seq| Err(ErrorCode::UnknownKey("")));
+        let mut user_mgr = UserMgr::new(v);
+        let res = user_mgr.drop_user("test", None).await;
+        assert_eq!(res.unwrap_err().code(), ErrorCode::UnknownKey("").code());
+    }
 
     Ok(())
 }
