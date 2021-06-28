@@ -70,23 +70,35 @@ action_declare!(PrefixListReq, PrefixListReply, StoreDoAction::PrefixListKV);
 
 // - delete by key
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
-pub struct DeleteByKeyReq {
+pub struct DeleteKVReq {
     pub key: String,
     pub seq: Option<u64>,
 }
 
 // we can choose another reply type (other than KVApi method's)
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
-pub struct DeleteByKeyReply {
+pub struct DeleteKVReply {
     pub prev: Option<SeqValue>,
     pub result: Option<SeqValue>,
 }
 
-action_declare!(
-    DeleteByKeyReq,
-    DeleteByKeyReply,
-    StoreDoAction::DeleteByKeyKV
-);
+action_declare!(DeleteKVReq, DeleteKVReply, StoreDoAction::DeleteKV);
+
+// - update by key
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct UpdateKVReq {
+    pub key: String,
+    pub seq: Option<u64>,
+    pub value: Vec<u8>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct UpdateByKeyReply {
+    pub prev: Option<SeqValue>,
+    pub result: Option<SeqValue>,
+}
+
+action_declare!(UpdateKVReq, UpdateByKeyReply, StoreDoAction::UpdateKV);
 
 #[async_trait::async_trait]
 impl KVApi for StoreClient {
@@ -106,15 +118,37 @@ impl KVApi for StoreClient {
 
     async fn delete_kv(&mut self, key: &str, seq: Option<u64>) -> Result<()> {
         let res = self
-            .do_action(DeleteByKeyReq {
+            .do_action(DeleteKVReq {
                 key: key.to_string(),
                 seq,
             })
             .await?;
 
         match (&res.prev, &res.result) {
-            //            (Some(prev), None) if seq.is_none() => Ok(()),
             (Some(prev), None) if prev.0 == seq.map_or(0, identity) => Ok(()),
+            _ => Err(ErrorCode::UnknownKey(format!(
+                "unknown key {:?}, seq {:?}",
+                key, seq
+            ))),
+        }
+    }
+
+    async fn update_kv(
+        &mut self,
+        key: &str,
+        seq: Option<u64>,
+        value: Vec<u8>,
+    ) -> common_exception::Result<()> {
+        let res = self
+            .do_action(UpdateKVReq {
+                key: key.to_string(),
+                seq,
+                value,
+            })
+            .await?;
+        match (&res.prev, &res.result) {
+            (Some(_), Some(_)) if seq.is_none() => Ok(()),
+            (Some(prev), Some(_)) if prev.0 == seq.map_or(0, identity) => Ok(()),
             _ => Err(ErrorCode::UnknownKey(format!(
                 "unknown key {:?}, seq {:?}",
                 key, seq

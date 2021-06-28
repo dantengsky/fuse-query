@@ -105,6 +105,12 @@ pub enum Cmd {
         key: String,
         seq: Option<u64>,
     },
+
+    UpdateByKeyKV {
+        key: String,
+        seq: Option<u64>,
+        value: Vec<u8>,
+    },
 }
 
 impl fmt::Display for Cmd {
@@ -130,6 +136,9 @@ impl fmt::Display for Cmd {
             }
             Cmd::DeleteByKeyKV { key, seq } => {
                 write!(f, "delete_by_key_kv: {}({:?})", key, seq)
+            }
+            Cmd::UpdateByKeyKV { key, seq, value } => {
+                write!(f, "update_kv: {}({:?}) = {:?}", key, seq, value)
             }
         }
     }

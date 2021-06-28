@@ -4,12 +4,14 @@
 //
 
 use common_exception::ErrorCode;
-use common_flights::DeleteByKeyReply;
-use common_flights::DeleteByKeyReq;
+use common_flights::DeleteKVReply;
+use common_flights::DeleteKVReq;
 use common_flights::GetKVAction;
 use common_flights::MGetKVAction;
 use common_flights::MGetKVActionResult;
 use common_flights::PrefixListReq;
+use common_flights::UpdateByKeyReply;
+use common_flights::UpdateKVReq;
 use common_flights::UpsertKVAction;
 //TODO
 // Do not import form common_store_api directly
@@ -74,8 +76,8 @@ impl RequestHandler<PrefixListReq> for ActionHandler {
 }
 
 #[async_trait::async_trait]
-impl RequestHandler<DeleteByKeyReq> for ActionHandler {
-    async fn handle(&self, act: DeleteByKeyReq) -> common_exception::Result<DeleteByKeyReply> {
+impl RequestHandler<DeleteKVReq> for ActionHandler {
+    async fn handle(&self, act: DeleteKVReq) -> common_exception::Result<DeleteKVReply> {
         let cr = ClientRequest {
             txid: None,
             cmd: Cmd::DeleteByKeyKV {
@@ -91,7 +93,32 @@ impl RequestHandler<DeleteByKeyReq> for ActionHandler {
             .map_err(|e| ErrorCode::MetaNodeInternalError(e.to_string()))?;
 
         match rst {
-            ClientResponse::KV { prev, result } => Ok(DeleteByKeyReply { prev, result }),
+            ClientResponse::KV { prev, result } => Ok(DeleteKVReply { prev, result }),
+            _ => Err(ErrorCode::MetaNodeInternalError("not a KV result")),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl RequestHandler<UpdateKVReq> for ActionHandler {
+    async fn handle(&self, act: UpdateKVReq) -> common_exception::Result<UpdateByKeyReply> {
+        let cr = ClientRequest {
+            txid: None,
+            cmd: Cmd::UpdateByKeyKV {
+                key: act.key,
+                seq: act.seq,
+                value: act.value,
+            },
+        };
+
+        let rst = self
+            .meta_node
+            .write(cr)
+            .await
+            .map_err(|e| ErrorCode::MetaNodeInternalError(e.to_string()))?;
+
+        match rst {
+            ClientResponse::KV { prev, result } => Ok(UpdateByKeyReply { prev, result }),
             _ => Err(ErrorCode::MetaNodeInternalError("not a KV result")),
         }
     }

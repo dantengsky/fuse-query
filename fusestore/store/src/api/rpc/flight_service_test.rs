@@ -486,6 +486,48 @@ async fn test_flight_generic_kv() -> anyhow::Result<()> {
 
         let res = client.delete_kv("not exists", None).await;
         assert!(res.is_err());
+        assert_eq!(res.unwrap_err().code(), ErrorCode::UnknownKey("").code());
+    }
+
+    // delete
+    {
+        let test_key = "test_key_forupdate";
+        let r = client
+            .update_kv(test_key, None, "value of ak".to_string().into_bytes())
+            .await;
+        assert!(r.is_err());
+        assert_eq!(r.unwrap_err().code(), ErrorCode::UnknownKey("").code());
+
+        let r = client
+            .upsert_kv(test_key, None, "value of ak".to_string().into_bytes())
+            .await?;
+        let seq = r.result.unwrap().0;
+
+        // unmatched seq
+        let r = client
+            .update_kv(
+                test_key,
+                Some(seq + 1),
+                "value of ak".to_string().into_bytes(),
+            )
+            .await;
+        assert!(r.is_err());
+        assert_eq!(r.unwrap_err().code(), ErrorCode::UnknownKey("").code());
+
+        // matched seq
+        let r = client
+            .update_kv(test_key, Some(seq), "value of ak".to_string().into_bytes())
+            .await;
+        assert!(r.is_ok());
+
+        //or unconditional (on seq number)
+        let r = client
+            .update_kv(test_key, None, "brand new value".to_string().into_bytes())
+            .await;
+        assert!(r.is_ok());
+
+        let kv = client.get_kv(test_key).await?;
+        assert_eq!(kv.result.unwrap().1, "brand new value".as_bytes());
     }
 
     Ok(())

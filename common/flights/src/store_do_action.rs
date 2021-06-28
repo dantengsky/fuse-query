@@ -25,11 +25,12 @@ use common_store_api::UpsertKVActionResult;
 use prost::Message;
 use tonic::Request;
 
-use crate::impls::kv_api_impl::DeleteByKeyReq;
+use crate::impls::kv_api_impl::DeleteKVReq;
 use crate::impls::kv_api_impl::GetKVAction;
 use crate::impls::kv_api_impl::MGetKVAction;
 use crate::impls::kv_api_impl::PrefixListReq;
 use crate::protobuf::FlightStoreRequest;
+use crate::UpdateKVReq;
 
 pub trait RequestFor {
     type Reply;
@@ -267,7 +268,8 @@ pub enum StoreDoAction {
     GetKV(GetKVAction),
     MGetKV(MGetKVAction),
     PrefixListKV(PrefixListReq),
-    DeleteByKeyKV(DeleteByKeyReq),
+    DeleteKV(DeleteKVReq),
+    UpdateKV(UpdateKVReq),
 }
 
 /// Try convert tonic::Request<Action> to DoActionAction.
