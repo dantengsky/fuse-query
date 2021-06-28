@@ -114,35 +114,6 @@ pub struct GetTableAction {
     pub table: String,
 }
 
-//impl RequestFor for GetTableAction {
-//    type Reply = GetTableActionResult;
-//}
-//
-//
-//impl RequestFor for DropDatabaseAction {
-//    type Reply = DropDatabaseActionResult;
-//}
-//
-//impl RequestFor for GetDatabaseAction {
-//    type Reply = GetDatabaseActionResult;
-//}
-//
-//impl RequestFor for CreateDatabaseAction {
-//    type Reply = CreateDatabaseActionResult;
-//}
-//
-//impl From<CreateDatabaseAction> for StoreDoAction {
-//    fn from(act: CreateDatabaseAction) -> Self {
-//        StoreDoAction::CreateDatabase(act)
-//    }
-//}
-//
-//impl From<GetTableAction> for StoreDoAction {
-//    fn from(act: GetTableAction) -> Self {
-//        StoreDoAction::GetTable(act)
-//    }
-//}
-
 action_declare!(
     CreateTableAction,
     CreateTableActionResult,

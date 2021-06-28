@@ -19,6 +19,84 @@ use crate::RequestFor;
 use crate::StoreClient;
 use crate::StoreDoAction;
 
+#[async_trait::async_trait]
+impl KVApi for StoreClient {
+    async fn upsert_kv(
+        &mut self,
+        key: &str,
+        seq: Option<u64>,
+        value: Vec<u8>,
+    ) -> Result<UpsertKVActionResult> {
+        self.do_action(UpsertKVAction {
+            key: key.to_string(),
+            seq,
+            value,
+        })
+        .await
+    }
+
+    async fn delete_kv(&mut self, key: &str, seq: Option<u64>) -> Result<()> {
+        let res = self
+            .do_action(DeleteKVReq {
+                key: key.to_string(),
+                seq,
+            })
+            .await?;
+
+        match (&res.prev, &res.result) {
+            (Some(prev), None) if prev.0 == seq.map_or(0, identity) => Ok(()),
+            _ => Err(ErrorCode::UnknownKey(format!(
+                "unknown key {:?}, seq {:?}",
+                key, seq
+            ))),
+        }
+    }
+
+    async fn update_kv(
+        &mut self,
+        key: &str,
+        seq: Option<u64>,
+        value: Vec<u8>,
+    ) -> common_exception::Result<()> {
+        let res = self
+            .do_action(UpdateKVReq {
+                key: key.to_string(),
+                seq,
+                value,
+            })
+            .await?;
+        match (&res.prev, &res.result) {
+            (Some(_), Some(_)) if seq.is_none() => Ok(()),
+            (Some(prev), Some(_)) if prev.0 == seq.map_or(0, identity) => Ok(()),
+            _ => Err(ErrorCode::UnknownKey(format!(
+                "unknown key {:?}, seq {:?}",
+                key, seq
+            ))),
+        }
+    }
+
+    async fn get_kv(&mut self, key: &str) -> Result<GetKVActionResult> {
+        self.do_action(GetKVAction {
+            key: key.to_string(),
+        })
+        .await
+    }
+
+    async fn mget_kv<T: AsRef<str> + Sync>(
+        &mut self,
+        keys: &[T],
+    ) -> common_exception::Result<MGetKVActionResult> {
+        self.do_action(MGetKVAction {
+            keys: keys.iter().map(|k| k.as_ref().to_string()).collect(),
+        })
+        .await
+    }
+
+    async fn prefix_list_kv(&mut self, prefix: &str) -> common_exception::Result<PrefixListReply> {
+        self.do_action(PrefixListReq(prefix.to_string())).await
+    }
+}
+
 // Let take this API for a reference of the implementations of a store API
 
 // - GetKV
@@ -112,81 +190,3 @@ action_declare!(
     UpsertKVActionResult,
     StoreDoAction::UpsertKV
 );
-
-#[async_trait::async_trait]
-impl KVApi for StoreClient {
-    async fn upsert_kv(
-        &mut self,
-        key: &str,
-        seq: Option<u64>,
-        value: Vec<u8>,
-    ) -> Result<UpsertKVActionResult> {
-        self.do_action(UpsertKVAction {
-            key: key.to_string(),
-            seq,
-            value,
-        })
-        .await
-    }
-
-    async fn delete_kv(&mut self, key: &str, seq: Option<u64>) -> Result<()> {
-        let res = self
-            .do_action(DeleteKVReq {
-                key: key.to_string(),
-                seq,
-            })
-            .await?;
-
-        match (&res.prev, &res.result) {
-            (Some(prev), None) if prev.0 == seq.map_or(0, identity) => Ok(()),
-            _ => Err(ErrorCode::UnknownKey(format!(
-                "unknown key {:?}, seq {:?}",
-                key, seq
-            ))),
-        }
-    }
-
-    async fn update_kv(
-        &mut self,
-        key: &str,
-        seq: Option<u64>,
-        value: Vec<u8>,
-    ) -> common_exception::Result<()> {
-        let res = self
-            .do_action(UpdateKVReq {
-                key: key.to_string(),
-                seq,
-                value,
-            })
-            .await?;
-        match (&res.prev, &res.result) {
-            (Some(_), Some(_)) if seq.is_none() => Ok(()),
-            (Some(prev), Some(_)) if prev.0 == seq.map_or(0, identity) => Ok(()),
-            _ => Err(ErrorCode::UnknownKey(format!(
-                "unknown key {:?}, seq {:?}",
-                key, seq
-            ))),
-        }
-    }
-
-    async fn get_kv(&mut self, key: &str) -> Result<GetKVActionResult> {
-        self.do_action(GetKVAction {
-            key: key.to_string(),
-        })
-        .await
-    }
-
-    async fn mget_kv<T: AsRef<str> + Sync>(
-        &mut self,
-        keys: &[T],
-    ) -> common_exception::Result<MGetKVActionResult> {
-        self.do_action(MGetKVAction {
-            keys: keys.iter().map(|k| k.as_ref().to_string()).collect(),
-        })
-        .await
-    }
-
-    async fn prefix_list_kv(&mut self, prefix: &str) -> common_exception::Result<PrefixListReply> {
-        self.do_action(PrefixListReq(prefix.to_string())).await
-    }
-}

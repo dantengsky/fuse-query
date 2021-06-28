@@ -13,22 +13,21 @@ use crate::impls::kv_api_impl::DeleteKVReq;
 use crate::impls::kv_api_impl::GetKVAction;
 use crate::impls::kv_api_impl::MGetKVAction;
 use crate::impls::kv_api_impl::PrefixListReq;
+use crate::impls::kv_api_impl::UpdateKVReq;
+use crate::impls::kv_api_impl::UpsertKVAction;
+use crate::impls::meta_api_impl::CreateDatabaseAction;
+use crate::impls::meta_api_impl::CreateTableAction;
+use crate::impls::meta_api_impl::DropDatabaseAction;
+use crate::impls::meta_api_impl::DropTableAction;
+use crate::impls::meta_api_impl::GetDatabaseAction;
+use crate::impls::meta_api_impl::GetTableAction;
 use crate::impls::storage_api_impl::ReadPlanAction;
 use crate::protobuf::FlightStoreRequest;
-use crate::CreateDatabaseAction;
-use crate::CreateTableAction;
-use crate::DropDatabaseAction;
-use crate::DropTableAction;
-use crate::GetDatabaseAction;
-use crate::GetTableAction;
-use crate::UpdateKVReq;
-use crate::UpsertKVAction;
 
 pub trait RequestFor {
     type Reply;
 }
 
-// TODO move this to somewhere else (impls/mod.rs?)
 #[macro_export]
 macro_rules! action_declare {
     ($req:ident, $reply:ident, $enum_ctor:expr) => {
@@ -43,8 +42,6 @@ macro_rules! action_declare {
         }
     };
 }
-
-// === partition: read_plan===
 
 // Action wrapper for do_action.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]

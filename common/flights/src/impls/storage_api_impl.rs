@@ -34,6 +34,27 @@ use crate::StoreClient;
 use crate::StoreDoAction;
 use crate::StoreDoGet;
 
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct ReadPlanAction {
+    pub scan_plan: ScanPlan,
+}
+
+impl RequestFor for ReadPlanAction {
+    type Reply = ReadPlanResult;
+}
+
+impl From<ReadPlanAction> for StoreDoAction {
+    fn from(act: ReadPlanAction) -> Self {
+        StoreDoAction::ReadPlan(act)
+    }
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
+pub struct DataPartInfo {
+    pub part: Part,
+    pub stats: Statistics,
+}
+
 #[async_trait::async_trait]
 impl StorageApi for StoreClient {
     async fn read_plan(
@@ -117,24 +138,4 @@ impl StorageApi for StoreClient {
         let vec = serde_json::from_slice(&put_result.app_metadata)?;
         Ok(vec)
     }
-}
-
-impl From<ReadPlanAction> for StoreDoAction {
-    fn from(act: ReadPlanAction) -> Self {
-        StoreDoAction::ReadPlan(act)
-    }
-}
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
-pub struct ReadPlanAction {
-    pub scan_plan: ScanPlan,
-}
-
-impl RequestFor for ReadPlanAction {
-    type Reply = ReadPlanResult;
-}
-
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
-pub struct DataPartInfo {
-    pub part: Part,
-    pub stats: Statistics,
 }
