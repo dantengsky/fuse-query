@@ -434,6 +434,33 @@ async fn test_flight_generic_kv() -> anyhow::Result<()> {
         ]);
     }
 
+    // prefix list
+
+    let mut values = vec![];
+    {
+        client.upsert_kv("t", None, "".as_bytes().to_vec()).await?;
+
+        for i in 0..9 {
+            let key = format!("__users/{}", i);
+            let val = format!("val_{}", i);
+            values.push(val.clone());
+            client
+                .upsert_kv(&key, None, val.as_bytes().to_vec())
+                .await?;
+        }
+        client.upsert_kv("v", None, "".as_bytes().to_vec()).await?;
+    }
+
+    let res = client.prefix_list_kv("__users/").await?;
+    res.iter().for_each(|v| println!("r is {:?}", v));
+    assert_eq!(
+        res.iter().map(|i| i.1.clone()).collect::<Vec<_>>(),
+        values
+            .iter()
+            .map(|v| v.as_bytes().to_vec())
+            .collect::<Vec<_>>()
+    );
+
     Ok(())
 }
 

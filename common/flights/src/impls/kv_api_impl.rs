@@ -5,6 +5,7 @@
 
 use common_exception::Result;
 use common_store_api::kv_api::MGetKVActionResult;
+use common_store_api::kv_api::PrefixListReply;
 use common_store_api::kv_api::UpsertKVActionResult;
 use common_store_api::GetKVActionResult;
 use common_store_api::KVApi;
@@ -20,7 +21,7 @@ use crate::UpsertKVAction;
 // - GetKV
 
 // We wrap the "request of getting a kv" up here as GetKVAction,
-// Technically we can use `String` directly,
+// Technically we can use `String` directly, but as we are ...
 // provides that StoreDoAction::GetKV is typed as `:: String -> StoreAction`
 
 // The return type of GetKVAction is `GetActionResult`, which is defined by the KVApi,
@@ -58,6 +59,11 @@ pub struct MGetKVAction {
 // here we use a macro to simplify the declarations
 action_declare!(MGetKVAction, MGetKVActionResult, StoreDoAction::MGetKV);
 
+// - prefix list
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct PrefixListReq(pub String);
+action_declare!(PrefixListReq, PrefixListReply, StoreDoAction::PrefixListKV);
+
 #[async_trait::async_trait]
 impl KVApi for StoreClient {
     async fn upsert_kv(
@@ -86,5 +92,9 @@ impl KVApi for StoreClient {
             keys: keys.iter().map(|k| k.to_string()).collect(),
         })
         .await
+    }
+
+    async fn prefix_list_kv(&mut self, prefix: &str) -> common_exception::Result<PrefixListReply> {
+        self.do_action(PrefixListReq(prefix.to_string())).await
     }
 }

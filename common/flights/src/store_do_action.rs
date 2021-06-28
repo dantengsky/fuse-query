@@ -27,6 +27,7 @@ use tonic::Request;
 
 use crate::impls::kv_api_impl::GetKVAction;
 use crate::impls::kv_api_impl::MGetKVAction;
+use crate::impls::kv_api_impl::PrefixListReq;
 use crate::protobuf::FlightStoreRequest;
 
 pub trait RequestFor {
@@ -264,6 +265,7 @@ pub enum StoreDoAction {
     UpsertKV(UpsertKVAction),
     GetKV(GetKVAction),
     MGetKV(MGetKVAction),
+    PrefixListKV(PrefixListReq),
 }
 
 /// Try convert tonic::Request<Action> to DoActionAction.

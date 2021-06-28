@@ -7,7 +7,13 @@ use common_exception::ErrorCode;
 use common_flights::GetKVAction;
 use common_flights::MGetKVAction;
 use common_flights::MGetKVActionResult;
+use common_flights::PrefixListReq;
 use common_flights::UpsertKVAction;
+//TODO
+// Do not import form common_store_api directly
+// we should depends on the comm_flights only, as we are implementing the services requested by
+// common_flights, the common_flights component are free to wrap the store_api's parameter / result
+use common_store_api::kv_api::PrefixListReply;
 use common_store_api::GetKVActionResult;
 use common_store_api::UpsertKVActionResult;
 
@@ -55,5 +61,13 @@ impl RequestHandler<MGetKVAction> for ActionHandler {
     async fn handle(&self, act: MGetKVAction) -> common_exception::Result<MGetKVActionResult> {
         let result = self.meta_node.mget_kv(&act.keys).await;
         Ok(MGetKVActionResult { result })
+    }
+}
+
+#[async_trait::async_trait]
+impl RequestHandler<PrefixListReq> for ActionHandler {
+    async fn handle(&self, act: PrefixListReq) -> common_exception::Result<PrefixListReply> {
+        let result = self.meta_node.prefix_list_kv(&(act.0)).await;
+        Ok(result)
     }
 }

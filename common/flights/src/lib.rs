@@ -12,6 +12,7 @@ pub use flight_token::FlightClaim;
 pub use flight_token::FlightToken;
 pub use impls::kv_api_impl::GetKVAction;
 pub use impls::kv_api_impl::MGetKVAction;
+pub use impls::kv_api_impl::PrefixListReq;
 pub use impls::storage_api_impl_utils::get_do_put_meta;
 pub use impls::storage_api_impl_utils::set_do_put_meta;
 pub use store_client::StoreClient;
