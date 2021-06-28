@@ -21,8 +21,8 @@ use tonic::Request;
 
 use crate::flight_result_to_str;
 use crate::store_do_action::RequestFor;
+use crate::store_do_action::StoreDoAction;
 use crate::ConnectionFactory;
-use crate::StoreDoAction;
 
 #[derive(Clone)]
 pub struct StoreClient {

@@ -18,7 +18,6 @@ use crate::action_declare;
 use crate::RequestFor;
 use crate::StoreClient;
 use crate::StoreDoAction;
-use crate::UpsertKVAction;
 
 // Let take this API for a reference of the implementations of a store API
 
@@ -99,6 +98,20 @@ pub struct UpdateByKeyReply {
 }
 
 action_declare!(UpdateKVReq, UpdateByKeyReply, StoreDoAction::UpdateKV);
+
+// === general-kv: upsert ===
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct UpsertKVAction {
+    pub key: String,
+    pub seq: Option<u64>,
+    pub value: Vec<u8>,
+}
+
+action_declare!(
+    UpsertKVAction,
+    UpsertKVActionResult,
+    StoreDoAction::UpsertKV
+);
 
 #[async_trait::async_trait]
 impl KVApi for StoreClient {

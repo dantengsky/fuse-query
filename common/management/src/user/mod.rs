@@ -5,3 +5,6 @@
 
 mod user_info;
 mod user_mgr;
+
+#[cfg(test)]
+mod user_mgr_test;
