@@ -4,6 +4,8 @@
 //
 
 use common_exception::ErrorCode;
+use common_flights::DeleteByKeyReply;
+use common_flights::DeleteByKeyReq;
 use common_flights::GetKVAction;
 use common_flights::MGetKVAction;
 use common_flights::MGetKVActionResult;
@@ -34,7 +36,6 @@ impl RequestHandler<UpsertKVAction> for ActionHandler {
                 value: act.value,
             },
         };
-        // TODO(xp): raftmeta should use ErrorCode instead of anyhow::Error
         let rst = self
             .meta_node
             .write(cr)
@@ -69,5 +70,29 @@ impl RequestHandler<PrefixListReq> for ActionHandler {
     async fn handle(&self, act: PrefixListReq) -> common_exception::Result<PrefixListReply> {
         let result = self.meta_node.prefix_list_kv(&(act.0)).await;
         Ok(result)
+    }
+}
+
+#[async_trait::async_trait]
+impl RequestHandler<DeleteByKeyReq> for ActionHandler {
+    async fn handle(&self, act: DeleteByKeyReq) -> common_exception::Result<DeleteByKeyReply> {
+        let cr = ClientRequest {
+            txid: None,
+            cmd: Cmd::DeleteByKeyKV {
+                key: act.key,
+                seq: act.seq,
+            },
+        };
+
+        let rst = self
+            .meta_node
+            .write(cr)
+            .await
+            .map_err(|e| ErrorCode::MetaNodeInternalError(e.to_string()))?;
+
+        match rst {
+            ClientResponse::KV { prev, result } => Ok(DeleteByKeyReply { prev, result }),
+            _ => Err(ErrorCode::MetaNodeInternalError("not a KV result")),
+        }
     }
 }

@@ -265,6 +265,35 @@ impl StateMachine {
 
                 Ok((prev, Some(record_value)).into())
             }
+
+            Cmd::DeleteByKeyKV { ref key, ref seq } => {
+                let prev = self.kv.get(key).cloned();
+
+                // TODO duplicated code
+                let seq_matched = if let Some(seq) = seq {
+                    if *seq == 0 {
+                        prev.is_none()
+                    } else {
+                        match prev {
+                            Some(ref p) => *seq == (*p).0,
+                            None => false,
+                        }
+                    }
+                } else {
+                    // If seq is None, always override it.
+                    true
+                };
+
+                if !seq_matched {
+                    println!("not math, prev {:?}", prev);
+                    return Ok((prev, None).into());
+                }
+
+                let prev = self.kv.remove(key);
+                tracing::debug!("applied DeleteByKeyKV: {}={:?}", key, seq);
+                println!("do math, prev {:?}", prev);
+                Ok((prev, None).into())
+            }
         }
     }
 

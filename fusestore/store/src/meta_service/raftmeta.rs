@@ -65,19 +65,32 @@ const ERR_INCONSISTENT_LOG: &str =
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum Cmd {
     /// AKA put-if-absent. add a key-value record only when key is absent.
-    AddFile { key: String, value: String },
+    AddFile {
+        key: String,
+        value: String,
+    },
 
     /// Override the record with key.
-    SetFile { key: String, value: String },
+    SetFile {
+        key: String,
+        value: String,
+    },
 
     /// Increment the sequence number generator specified by `key` and returns the new value.
-    IncrSeq { key: String },
+    IncrSeq {
+        key: String,
+    },
 
     /// Add node if absent
-    AddNode { node_id: NodeId, node: Node },
+    AddNode {
+        node_id: NodeId,
+        node: Node,
+    },
 
     /// Add a database if absent
-    AddDatabase { name: String },
+    AddDatabase {
+        name: String,
+    },
 
     /// Update or insert a general purpose kv store
     UpsertKV {
@@ -86,6 +99,11 @@ pub enum Cmd {
         /// Since a sequence number is positive, use Some(0) to perform an add-if-absent operation.
         seq: Option<u64>,
         value: Vec<u8>,
+    },
+
+    DeleteByKeyKV {
+        key: String,
+        seq: Option<u64>,
     },
 }
 
@@ -109,6 +127,9 @@ impl fmt::Display for Cmd {
             }
             Cmd::UpsertKV { key, seq, value } => {
                 write!(f, "upsert_kv: {}({:?}) = {:?}", key, seq, value)
+            }
+            Cmd::DeleteByKeyKV { key, seq } => {
+                write!(f, "delete_by_key_kv: {}({:?})", key, seq)
             }
         }
     }

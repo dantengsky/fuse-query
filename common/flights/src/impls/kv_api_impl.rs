@@ -3,7 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0.
 //
 
+use std::convert::identity;
+
+use common_exception::ErrorCode;
 use common_exception::Result;
+use common_metatypes::SeqValue;
 use common_store_api::kv_api::MGetKVActionResult;
 use common_store_api::kv_api::PrefixListReply;
 use common_store_api::kv_api::UpsertKVActionResult;
@@ -16,7 +20,7 @@ use crate::StoreClient;
 use crate::StoreDoAction;
 use crate::UpsertKVAction;
 
-// Let take this API for a reference for the implementations of a store API
+// Let take this API for a reference of the implementations of a store API
 
 // - GetKV
 
@@ -64,6 +68,26 @@ action_declare!(MGetKVAction, MGetKVActionResult, StoreDoAction::MGetKV);
 pub struct PrefixListReq(pub String);
 action_declare!(PrefixListReq, PrefixListReply, StoreDoAction::PrefixListKV);
 
+// - delete by key
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct DeleteByKeyReq {
+    pub key: String,
+    pub seq: Option<u64>,
+}
+
+// we can choose another reply type (other than KVApi method's)
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct DeleteByKeyReply {
+    pub prev: Option<SeqValue>,
+    pub result: Option<SeqValue>,
+}
+
+action_declare!(
+    DeleteByKeyReq,
+    DeleteByKeyReply,
+    StoreDoAction::DeleteByKeyKV
+);
+
 #[async_trait::async_trait]
 impl KVApi for StoreClient {
     async fn upsert_kv(
@@ -78,6 +102,24 @@ impl KVApi for StoreClient {
             value,
         })
         .await
+    }
+
+    async fn delete_kv(&mut self, key: &str, seq: Option<u64>) -> Result<()> {
+        let res = self
+            .do_action(DeleteByKeyReq {
+                key: key.to_string(),
+                seq,
+            })
+            .await?;
+
+        match (&res.prev, &res.result) {
+            //            (Some(prev), None) if seq.is_none() => Ok(()),
+            (Some(prev), None) if prev.0 == seq.map_or(0, identity) => Ok(()),
+            _ => Err(ErrorCode::UnknownKey(format!(
+                "unknown key {:?}, seq {:?}",
+                key, seq
+            ))),
+        }
     }
 
     async fn get_kv(&mut self, key: &str) -> Result<GetKVActionResult> {

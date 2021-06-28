@@ -5,6 +5,7 @@
 use common_arrow::arrow::array::ArrayRef;
 use common_datablocks::DataBlock;
 use common_datavalues::DataColumnarValue;
+use common_exception::ErrorCode;
 use common_flights::StoreClient;
 use common_planners::CreateDatabasePlan;
 use common_planners::DatabaseEngineType;
@@ -427,7 +428,7 @@ async fn test_flight_generic_kv() -> anyhow::Result<()> {
             Some((3, "value of ak".to_string().into_bytes())),
         ]);
 
-        let res = client.mget_kv(&vec!["foo", "no exist"]).await?;
+        let res = client.mget_kv(&vec!["foo", "key_no exist"]).await?;
         assert_eq!(res.result, vec![
             Some((2, "wow".to_string().into_bytes())),
             None
@@ -460,6 +461,32 @@ async fn test_flight_generic_kv() -> anyhow::Result<()> {
             .map(|v| v.as_bytes().to_vec())
             .collect::<Vec<_>>()
     );
+
+    // delete
+    {
+        let test_key = "test_key";
+        client
+            .upsert_kv(test_key, None, "value of ak".to_string().into_bytes())
+            .await?;
+
+        let current = client.get_kv(test_key).await?;
+        if let Some((seq, _val)) = current.result {
+            let wrong_seq = Some(seq + 1);
+            let res = client.delete_kv(test_key, wrong_seq).await;
+            assert_eq!(res.unwrap_err().code(), ErrorCode::UnknownKey("").code());
+
+            let res = client.delete_kv(test_key, Some(seq)).await;
+            assert!(res.is_ok());
+
+            let r = client.get_kv(test_key).await?;
+            assert!(r.result.is_none());
+        } else {
+            panic!("expecting a value, but got nothing");
+        }
+
+        let res = client.delete_kv("not exists", None).await;
+        assert!(res.is_err());
+    }
 
     Ok(())
 }

@@ -204,6 +204,9 @@ build_exceptions! {
     ReadFileError(5001),
     BrokenChannel(5002),
 
+    // kv-api error codes
+    UnknownKey(6000),
+
 }
 
 pub type Result<T> = std::result::Result<T, ErrorCode>;

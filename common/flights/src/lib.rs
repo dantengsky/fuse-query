@@ -5,11 +5,15 @@
 pub use common::flight_result_to_str;
 pub use common::status_err;
 pub use common_store_api::kv_api::MGetKVActionResult;
+pub use common_store_api::kv_api::PrefixListReply;
+//pub use common_store_api::kv_api::PrefixListReply;
 pub use common_store_api::ReadPlanResult;
 pub use dns_resolver::ConnectionFactory;
 pub use dns_resolver::DNSResolver;
 pub use flight_token::FlightClaim;
 pub use flight_token::FlightToken;
+pub use impls::kv_api_impl::DeleteByKeyReply;
+pub use impls::kv_api_impl::DeleteByKeyReq;
 pub use impls::kv_api_impl::GetKVAction;
 pub use impls::kv_api_impl::MGetKVAction;
 pub use impls::kv_api_impl::PrefixListReq;
