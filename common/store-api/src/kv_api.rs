@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0.
 //
 
+use async_trait::async_trait;
 use common_metatypes::SeqValue;
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
@@ -25,7 +26,7 @@ pub struct MGetKVActionResult {
 
 pub type PrefixListReply = Vec<SeqValue>;
 
-#[async_trait::async_trait]
+#[async_trait]
 pub trait KVApi: Sync + Send {
     async fn upsert_kv(
         &mut self,
@@ -44,7 +45,8 @@ pub trait KVApi: Sync + Send {
 
     async fn get_kv(&mut self, key: &str) -> common_exception::Result<GetKVActionResult>;
 
-    async fn mget_kv<T: AsRef<str> + Sync>(
+    // TODO 'static in introduced by mock, let's figure how to avoid it later.
+    async fn mget_kv<T: 'static + AsRef<str> + Sync>(
         &mut self,
         key: &[T],
     ) -> common_exception::Result<MGetKVActionResult>;

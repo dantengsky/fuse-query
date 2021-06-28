@@ -12,14 +12,22 @@ use sha2::Digest;
 use crate::user::user_info::NewUser;
 use crate::user::user_info::UserInfo;
 
-static USER_API_KEY_PREFIX: &str = "__fd_users/";
+pub static USER_API_KEY_PREFIX: &str = "__fd_users/";
 
-struct UserMgr<KV: KVApi> {
+pub struct UserMgr<KV: KVApi> {
     kv_api: KV,
 }
 
+impl<T> UserMgr<T>
+where T: KVApi
+{
+    pub fn new(kv_api: T) -> Self {
+        UserMgr { kv_api }
+    }
+}
+
 impl<T: KVApi> UserMgr<T> {
-    pub(crate) async fn upsert_user(
+    async fn upsert_user(
         &mut self,
         username: impl AsRef<str>,
         password: impl AsRef<str>,
@@ -30,7 +38,7 @@ impl<T: KVApi> UserMgr<T> {
         self.upsert_user_info(&(&new_user).into(), seq).await
     }
 
-    pub(crate) async fn upsert_user_info(
+    async fn upsert_user_info(
         &mut self,
         user_info: &UserInfo,
         seq: Option<u64>,
