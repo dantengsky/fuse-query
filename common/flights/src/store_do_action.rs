@@ -19,19 +19,22 @@ use common_store_api::CreateTableActionResult;
 use common_store_api::DropDatabaseActionResult;
 use common_store_api::DropTableActionResult;
 use common_store_api::GetDatabaseActionResult;
-use common_store_api::GetKVActionResult;
 use common_store_api::GetTableActionResult;
 use common_store_api::ReadPlanResult;
 use common_store_api::UpsertKVActionResult;
 use prost::Message;
 use tonic::Request;
 
+use crate::impls::kv_api_impl::GetKVAction;
+use crate::impls::kv_api_impl::MGetKVAction;
 use crate::protobuf::FlightStoreRequest;
 
 pub trait RequestFor {
     type Reply;
 }
 
+// TODO move this to somewhere else (impls/mod.rs?)
+#[macro_export]
 macro_rules! action_declare {
     ($req:ident, $reply:ident, $enum_ctor:expr) => {
         impl RequestFor for $req {
@@ -65,20 +68,6 @@ impl From<UpsertKVAction> for StoreDoAction {
 }
 
 // === general-kv: get ===
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
-pub struct GetKVAction {
-    pub key: String,
-}
-
-impl RequestFor for GetKVAction {
-    type Reply = GetKVActionResult;
-}
-
-impl From<GetKVAction> for StoreDoAction {
-    fn from(act: GetKVAction) -> Self {
-        StoreDoAction::GetKV(act)
-    }
-}
 
 // === database: create ===
 
@@ -274,6 +263,7 @@ pub enum StoreDoAction {
     // general purpose kv
     UpsertKV(UpsertKVAction),
     GetKV(GetKVAction),
+    MGetKV(MGetKVAction),
 }
 
 /// Try convert tonic::Request<Action> to DoActionAction.

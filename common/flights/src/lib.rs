@@ -4,11 +4,14 @@
 
 pub use common::flight_result_to_str;
 pub use common::status_err;
+pub use common_store_api::kv_api::MGetKVActionResult;
 pub use common_store_api::ReadPlanResult;
 pub use dns_resolver::ConnectionFactory;
 pub use dns_resolver::DNSResolver;
 pub use flight_token::FlightClaim;
 pub use flight_token::FlightToken;
+pub use impls::kv_api_impl::GetKVAction;
+pub use impls::kv_api_impl::MGetKVAction;
 pub use impls::storage_api_impl_utils::get_do_put_meta;
 pub use impls::storage_api_impl_utils::set_do_put_meta;
 pub use store_client::StoreClient;
@@ -22,7 +25,6 @@ pub use store_do_action::DropUserActionResult;
 pub use store_do_action::GetAllUsersAction;
 pub use store_do_action::GetAllUsersActionResult;
 pub use store_do_action::GetDatabaseAction;
-pub use store_do_action::GetKVAction;
 pub use store_do_action::GetTableAction;
 pub use store_do_action::GetUserAction;
 pub use store_do_action::GetUserActionResult;
@@ -42,6 +44,7 @@ mod dns_resolver;
 mod flight_token;
 mod impls;
 mod store_client;
+#[macro_use]
 mod store_do_action;
 mod store_do_get;
 

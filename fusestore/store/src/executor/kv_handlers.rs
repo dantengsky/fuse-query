@@ -5,6 +5,8 @@
 
 use common_exception::ErrorCode;
 use common_flights::GetKVAction;
+use common_flights::MGetKVAction;
+use common_flights::MGetKVActionResult;
 use common_flights::UpsertKVAction;
 use common_store_api::GetKVActionResult;
 use common_store_api::UpsertKVActionResult;
@@ -45,5 +47,13 @@ impl RequestHandler<GetKVAction> for ActionHandler {
     async fn handle(&self, act: GetKVAction) -> common_exception::Result<GetKVActionResult> {
         let result = self.meta_node.get_kv(&act.key).await;
         Ok(GetKVActionResult { result })
+    }
+}
+
+#[async_trait::async_trait]
+impl RequestHandler<MGetKVAction> for ActionHandler {
+    async fn handle(&self, act: MGetKVAction) -> common_exception::Result<MGetKVActionResult> {
+        let result = self.meta_node.mget_kv(&act.keys).await;
+        Ok(MGetKVActionResult { result })
     }
 }

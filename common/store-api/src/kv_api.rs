@@ -18,6 +18,16 @@ pub struct GetKVActionResult {
     pub result: Option<SeqValue>,
 }
 
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
+pub struct MGetKVActionResult {
+    pub result: Vec<Option<SeqValue>>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
+pub struct PrefixListActionResult {
+    pub result: Vec<SeqValue>,
+}
+
 #[async_trait::async_trait]
 pub trait KVApi: Sync + Send {
     async fn upsert_kv(
@@ -28,4 +38,6 @@ pub trait KVApi: Sync + Send {
     ) -> common_exception::Result<UpsertKVActionResult>;
 
     async fn get_kv(&mut self, key: &str) -> common_exception::Result<GetKVActionResult>;
+
+    async fn mget_kv(&mut self, key: &[&str]) -> common_exception::Result<MGetKVActionResult>;
 }

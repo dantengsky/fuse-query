@@ -411,11 +411,27 @@ async fn test_flight_generic_kv() -> anyhow::Result<()> {
         );
     }
 
-    // get
+    // mget
 
     {
         let res = client.get_kv("foo").await?;
         assert_eq!(Some((2, "wow".to_string().into_bytes())), res.result);
+
+        client
+            .upsert_kv("another_key", None, "value of ak".to_string().into_bytes())
+            .await?;
+        let res = client.mget_kv(&vec!["foo", "another_key"]).await?;
+        assert_eq!(res.result, vec![
+            Some((2, "wow".to_string().into_bytes())),
+            // NOTE, the sequence number is increased globally (inside the namespace of generic kv)
+            Some((3, "value of ak".to_string().into_bytes())),
+        ]);
+
+        let res = client.mget_kv(&vec!["foo", "no exist"]).await?;
+        assert_eq!(res.result, vec![
+            Some((2, "wow".to_string().into_bytes())),
+            None
+        ]);
     }
 
     Ok(())

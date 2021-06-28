@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0.
 //
 
-mod kv_api;
+pub mod kv_api;
 mod meta_api;
 mod storage_api;
 

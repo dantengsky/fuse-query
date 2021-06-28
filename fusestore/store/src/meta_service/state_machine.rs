@@ -322,6 +322,20 @@ impl StateMachine {
         let x = self.kv.get(key);
         x.cloned()
     }
+
+    pub fn mget_kv(&self, keys: &[impl AsRef<str>]) -> Vec<Option<SeqValue>> {
+        keys.iter()
+            .map(|key| self.kv.get(key.as_ref()).cloned())
+            .collect()
+    }
+
+    pub fn prefix_list_kv(&self, prefix: &str) -> Vec<SeqValue> {
+        self.kv
+            .range(prefix.to_string()..)
+            .take_while(|(k, _)| k.starts_with(prefix))
+            .map(|v| v.1.clone())
+            .collect()
+    }
 }
 
 /// A slot is a virtual and intermediate allocation unit in a distributed storage.

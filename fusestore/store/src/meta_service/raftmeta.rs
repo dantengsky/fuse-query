@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::fmt;
+use std::fmt::Debug;
 use std::io::Cursor;
 use std::sync::Arc;
 
@@ -1162,6 +1163,20 @@ impl MetaNode {
 
         let sm = self.sto.sm.read().await;
         sm.get_kv(key)
+    }
+
+    #[tracing::instrument(level = "debug", skip(self))]
+    pub async fn mget_kv(&self, keys: &[impl AsRef<str> + Debug]) -> Vec<Option<SeqValue>> {
+        // inconsistent get: from local state machine
+        let sm = self.sto.sm.read().await;
+        sm.mget_kv(keys)
+    }
+
+    #[tracing::instrument(level = "debug", skip(self))]
+    pub async fn prefix_list_kv(&self, prefix: &str) -> Vec<SeqValue> {
+        // inconsistent get: from local state machine
+        let sm = self.sto.sm.read().await;
+        sm.prefix_list_kv(prefix)
     }
 
     /// Submit a write request to the known leader. Returns the response after applying the request.
