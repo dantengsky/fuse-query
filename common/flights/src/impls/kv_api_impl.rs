@@ -163,9 +163,12 @@ impl KVApi for StoreClient {
         .await
     }
 
-    async fn mget_kv(&mut self, keys: &[&str]) -> common_exception::Result<MGetKVActionResult> {
+    async fn mget_kv<T: AsRef<str> + Sync>(
+        &mut self,
+        keys: &[T],
+    ) -> common_exception::Result<MGetKVActionResult> {
         self.do_action(MGetKVAction {
-            keys: keys.iter().map(|k| k.to_string()).collect(),
+            keys: keys.iter().map(|k| k.as_ref().to_string()).collect(),
         })
         .await
     }

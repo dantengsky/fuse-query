@@ -44,7 +44,10 @@ pub trait KVApi: Sync + Send {
 
     async fn get_kv(&mut self, key: &str) -> common_exception::Result<GetKVActionResult>;
 
-    async fn mget_kv(&mut self, key: &[&str]) -> common_exception::Result<MGetKVActionResult>;
+    async fn mget_kv<T: AsRef<str> + Sync>(
+        &mut self,
+        key: &[T],
+    ) -> common_exception::Result<MGetKVActionResult>;
 
     async fn prefix_list_kv(&mut self, prefix: &str) -> common_exception::Result<PrefixListReply>;
 }

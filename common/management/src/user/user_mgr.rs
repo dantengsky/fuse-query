@@ -12,7 +12,7 @@ use sha2::Digest;
 use crate::user::user_info::NewUser;
 use crate::user::user_info::UserInfo;
 
-static USER_API_KEY_PREFIX: &str = "__fd_user_kv_/";
+static USER_API_KEY_PREFIX: &str = "__fd_users/";
 
 struct UserMgr<KV: KVApi> {
     kv_api: KV,
@@ -48,10 +48,10 @@ impl<T: KVApi> UserMgr<T> {
         username: impl AsRef<str>,
         password: impl AsRef<str>,
         salt: impl AsRef<str>,
-    ) -> common_exception::Result<()> {
+    ) -> common_exception::Result<u64> {
         let res = self.upsert_user(username, password, salt, Some(0)).await?;
         match (res.prev, res.result) {
-            (None, Some(_)) => Ok(()), // do we need to check the seq returned?
+            (None, Some((s, _))) => Ok(s), // do we need to check the seq returned?
             (Some((s, _)), None) => Err(ErrorCode::UserAlreadyExists(format!(
                 "user already exists, seq [{}]",
                 s
@@ -64,8 +64,10 @@ impl<T: KVApi> UserMgr<T> {
     }
 
     #[allow(dead_code)]
-    pub async fn drop_user(&mut self, _username: impl AsRef<str>) -> Result<()> {
-        todo!()
+    pub async fn drop_user(&mut self, username: impl AsRef<str>, seq: Option<u64>) -> Result<()> {
+        let key = prepend(username);
+        self.kv_api.delete_kv(&key, seq).await?;
+        Ok(())
     }
 
     #[allow(dead_code)]
@@ -75,7 +77,7 @@ impl<T: KVApi> UserMgr<T> {
         new_password: Option<impl AsRef<str>>,
         new_salt: Option<impl AsRef<str>>,
         seq: u64,
-    ) -> Result<Option<u64>> {
+    ) -> Result<()> {
         let partial_update = new_salt.is_none() || new_password.is_none();
         let user_info = if partial_update {
             let user_info = self
@@ -99,42 +101,56 @@ impl<T: KVApi> UserMgr<T> {
             )
             .into()
         };
-        let res = self.upsert_user_info(&user_info, Some(seq)).await?;
 
-        match (&(res.prev), &(res.result)) {
-            (Some(_), Some((v, _))) => Ok(Some(*v)),
-            (_, None) => Err(ErrorCode::UnknownUser(format!(
-                "user not found, name [{}],  seq[{}]",
-                username.as_ref(),
-                seq
-            ))),
-            (_, _) => Err(ErrorCode::UnknownException(format!(
-                "upsert result not expected, response: {:?})",
-                res,
-            ))),
-        }
+        let value = serde_json::to_vec(&user_info)?;
+        let key = prepend(&user_info.name);
+        self.kv_api.update_kv(&key, Some(seq), value).await
     }
 
     #[allow(dead_code)]
     pub async fn get_all_users(&mut self) -> Result<Vec<UserInfo>> {
-        todo!()
+        let values = self.kv_api.prefix_list_kv(USER_API_KEY_PREFIX).await?;
+        let mut r = vec![];
+        for v in values {
+            let u = serde_json::from_slice::<UserInfo>(&v.1)?;
+            r.push(u);
+        }
+        Ok(r)
     }
 
     #[allow(dead_code)]
-    pub async fn get_users(
+    pub async fn get_users<V: AsRef<str>>(
         &mut self,
-        _usernames: &[impl AsRef<str>],
+        usernames: &[V],
     ) -> Result<Vec<Option<UserInfo>>> {
-        todo!()
+        let keys = usernames.iter().map(prepend).collect::<Vec<String>>();
+        let values = self.kv_api.mget_kv(&keys).await?;
+        let mut r = vec![];
+        for v in values.result {
+            match v {
+                Some(v) => {
+                    let u = serde_json::from_slice::<UserInfo>(&v.1)?;
+                    r.push(Some(u));
+                }
+                None => r.push(None),
+            }
+        }
+        Ok(r)
     }
 
     #[allow(dead_code)]
     pub async fn get_user(
         &mut self,
-        _username: impl AsRef<str>,
+        username: impl AsRef<str>,
         _seq: Option<u64>,
     ) -> Result<Option<UserInfo>> {
-        todo!()
+        let key = prepend(username);
+        let value = self.kv_api.get_kv(&key).await?;
+        value
+            .result
+            .map(|(_s, v)| serde_json::from_slice::<UserInfo>(&v))
+            .transpose()
+            .map_err(Into::into)
     }
 }
 
