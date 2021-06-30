@@ -286,10 +286,10 @@ mod get_users {
     use crate::user::user_mgr::prepend;
 
     type Strings = Vec<String>;
-    type UserInfos = Vec<Option<UserInfo>>;
+    type UserInfos = Vec<Option<(u64, UserInfo)>>;
     type Values = Vec<Option<SeqValue>>;
 
-    fn prepare(len: u8) -> common_exception::Result<(Strings, Strings, Values, UserInfos)> {
+    fn prepare(len: u64) -> common_exception::Result<(Strings, Strings, Values, UserInfos)> {
         let mut names = vec![];
         let mut keys = vec![];
         let mut res = vec![];
@@ -301,8 +301,8 @@ mod get_users {
             let new_user = NewUser::new(&name, "pass", "salt");
             let user_info = UserInfo::from(new_user);
             if i % 2 == 0 {
-                res.push(Some((0, serde_json::to_vec(&user_info)?)));
-                user_infos.push(Some(user_info));
+                res.push(Some((i, serde_json::to_vec(&user_info)?)));
+                user_infos.push(Some((i, user_info)));
             } else {
                 res.push(None);
                 user_infos.push(None);
@@ -355,7 +355,7 @@ mod get_all_users {
     use super::*;
     use crate::user::user_mgr::prepend;
 
-    type UserInfos = Vec<UserInfo>;
+    type UserInfos = Vec<(u64, UserInfo)>;
     fn prepare() -> common_exception::Result<(Vec<SeqValue>, UserInfos)> {
         let mut names = vec![];
         let mut keys = vec![];
@@ -367,8 +367,8 @@ mod get_all_users {
             keys.push(prepend(&name));
             let new_user = NewUser::new(&name, "pass", "salt");
             let user_info = UserInfo::from(new_user);
-            res.push((0, serde_json::to_vec(&user_info)?));
-            user_infos.push(user_info);
+            res.push((i, serde_json::to_vec(&user_info)?));
+            user_infos.push((i, user_info));
         }
         Ok((res, user_infos))
     }

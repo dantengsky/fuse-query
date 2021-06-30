@@ -50,6 +50,7 @@ pub trait KVApi {
 
     async fn get_kv(&mut self, key: &str) -> common_exception::Result<GetKVActionResult>;
 
+    // mockall complains about AsRef... so we use String here
     async fn mget_kv(&mut self, key: &[String]) -> common_exception::Result<MGetKVActionResult>;
 
     async fn prefix_list_kv(&mut self, prefix: &str) -> common_exception::Result<PrefixListReply>;

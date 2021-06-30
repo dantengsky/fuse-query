@@ -11,7 +11,6 @@ use sha2::Digest;
 
 use crate::user::user_info::NewUser;
 use crate::user::user_info::UserInfo;
-
 pub static USER_API_KEY_PREFIX: &str = "__fd_users/";
 
 pub struct UserMgrImpl<KV> {
@@ -160,7 +159,7 @@ impl<T: KVApi> UserMgrImpl<T> {
     }
 
     #[allow(dead_code)]
-    pub async fn get_all_users(&mut self) -> Result<Vec<UserInfo>> {
+    pub async fn get_all_users(&mut self) -> Result<Vec<(u64, UserInfo)>> {
         let values = self.kv_api.prefix_list_kv(USER_API_KEY_PREFIX).await?;
         let mut r = vec![];
         for v in values {
@@ -171,7 +170,7 @@ impl<T: KVApi> UserMgrImpl<T> {
                 }
                 Ok(v) => v,
             };
-            r.push(val);
+            r.push((v.0, val));
         }
         Ok(r)
     }
@@ -180,7 +179,7 @@ impl<T: KVApi> UserMgrImpl<T> {
     pub async fn get_users<V: AsRef<str>>(
         &mut self,
         usernames: &[V],
-    ) -> Result<Vec<Option<UserInfo>>> {
+    ) -> Result<Vec<Option<(u64, UserInfo)>>> {
         let keys = usernames.iter().map(prepend).collect::<Vec<String>>();
         let values = self.kv_api.mget_kv(&keys).await?;
         let mut r = vec![];
@@ -193,7 +192,7 @@ impl<T: KVApi> UserMgrImpl<T> {
                         }
                         Ok(val) => val,
                     };
-                    r.push(Some(u));
+                    r.push(Some((v.0, u)));
                 }
                 None => r.push(None),
             }
