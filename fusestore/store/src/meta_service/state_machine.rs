@@ -254,7 +254,11 @@ impl StateMachine {
 
             Cmd::DeleteByKeyKV { ref key, ref seq } => {
                 let prev = self.kv.get(key).cloned();
-                let seq_matched = StateMachine::match_seq(&prev, seq);
+                let seq_matched = match prev {
+                    Some((s, _)) if seq.is_some() && seq.unwrap() == s => true,
+                    Some(_) if seq.is_none() => true,
+                    _ => false,
+                };
                 if !seq_matched {
                     return Ok((prev, None).into());
                 }
@@ -270,9 +274,11 @@ impl StateMachine {
                 ref value,
             } => {
                 let prev = self.kv.get(key).cloned();
-                let seq_matched = prev
-                    .as_ref()
-                    .map_or_else(|| false, |s| seq.is_none() || s.0 == seq.unwrap_or(0));
+                let seq_matched = match prev {
+                    Some((s, _)) if seq.is_some() && seq.unwrap() == s => true,
+                    Some(_) if seq.is_none() => true,
+                    _ => false,
+                };
                 if !seq_matched {
                     return Ok((prev, None).into());
                 }

@@ -65,18 +65,14 @@ impl KVApi for StoreClient {
                 value,
             })
             .await?;
-        let seq_expected = seq.unwrap_or(0);
 
-        // if we got a prev which seq matches argument seq, then return the prev SeqValue,
-        // otherwise return None
         match (&res.prev, &res.result) {
-            (Some((prev_s, prev_v)), _) if seq_expected == *prev_s => {
-                Ok(Some((*prev_s, prev_v.clone())))
-            }
-            (Some(_), _) => Ok(None),
+            (prev @ Some(_), Some(_)) => Ok(prev.clone()),
+            // key not exist or seq not match
+            (_, None) => Ok(None),
             _ => Err(ErrorCode::LogicalError(format!(
-                "we are in some awkward situation(while updating kv): {:?}",
-                res
+                "unexpected response from kv service: {:?}",
+                &res
             ))),
         }
     }
@@ -88,14 +84,10 @@ impl KVApi for StoreClient {
         .await
     }
 
-    async fn mget_kv<T: AsRef<str> + Sync>(
-        &mut self,
-        keys: &[T],
-    ) -> common_exception::Result<MGetKVActionResult> {
-        self.do_action(MGetKVAction {
-            keys: keys.iter().map(|k| k.as_ref().to_string()).collect(),
-        })
-        .await
+    async fn mget_kv(&mut self, keys: &[String]) -> common_exception::Result<MGetKVActionResult> {
+        let keys = keys.to_vec();
+        //keys.iter().map(|k| k.to_string()).collect();
+        self.do_action(MGetKVAction { keys }).await
     }
 
     async fn prefix_list_kv(&mut self, prefix: &str) -> common_exception::Result<PrefixListReply> {

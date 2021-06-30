@@ -27,7 +27,7 @@ pub struct MGetKVActionResult {
 pub type PrefixListReply = Vec<SeqValue>;
 
 #[async_trait]
-pub trait KVApi: Sync + Send {
+pub trait KVApi {
     async fn upsert_kv(
         &mut self,
         key: &str,
@@ -45,11 +45,7 @@ pub trait KVApi: Sync + Send {
 
     async fn get_kv(&mut self, key: &str) -> common_exception::Result<GetKVActionResult>;
 
-    // TODO 'static in introduced by mock, let's figure how to avoid it later.
-    async fn mget_kv<T: 'static + AsRef<str> + Sync>(
-        &mut self,
-        key: &[T],
-    ) -> common_exception::Result<MGetKVActionResult>;
+    async fn mget_kv(&mut self, key: &[String]) -> common_exception::Result<MGetKVActionResult>;
 
     async fn prefix_list_kv(&mut self, prefix: &str) -> common_exception::Result<PrefixListReply>;
 }

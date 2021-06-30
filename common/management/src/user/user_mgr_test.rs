@@ -40,10 +40,9 @@ mock! {
 
     async fn get_kv(&mut self, key: &str) -> common_exception::Result<GetKVActionResult>;
 
-    // TODO 'static in introduced by mock, let's figure how to avoid it later.
-    async fn mget_kv<T: 'static + AsRef<str> + Sync>(
+    async fn mget_kv(
         &mut self,
-        key: &[T],
+        key: &[String],
     ) -> common_exception::Result<MGetKVActionResult>;
 
     async fn prefix_list_kv(&mut self, prefix: &str) -> common_exception::Result<PrefixListReply>;
@@ -89,7 +88,7 @@ mod add {
                     predicate::eq(value.clone()),
                 )
                 .times(1)
-                .returning(|_u, _s, _salt| {
+                .return_once(|_u, _s, _salt| {
                     Ok(UpsertKVActionResult {
                         prev: None,
                         result: None,
@@ -269,7 +268,8 @@ mod get_users {
         let (names, keys, res, user_infos) = prepare(9)?;
         let mut kv = MockKV::new();
         kv.expect_mget_kv()
-            .with(predicate::function(move |ks: &[String]| ks == keys))
+            .with(predicate::function(move |ks: &[String]| ks == keys.clone()))
+            //.withf(|args| args.0 == keys.clone())
             .times(1)
             .return_once(move |_: &[String]| Ok(MGetKVActionResult { result: res }));
         let mut user_mgr = UserMgr::new(kv);
