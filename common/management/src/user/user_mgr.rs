@@ -14,20 +14,20 @@ use crate::user::user_info::UserInfo;
 
 pub static USER_API_KEY_PREFIX: &str = "__fd_users/";
 
-pub struct UserMgr<KV: KVApi> {
+pub struct UserMgrImpl<KV> {
     kv_api: KV,
 }
 
-impl<T> UserMgr<T>
+impl<T> UserMgrImpl<T>
 where T: KVApi
 {
     #[allow(dead_code)]
     pub fn new(kv_api: T) -> Self {
-        UserMgr { kv_api }
+        UserMgrImpl { kv_api }
     }
 }
 
-impl<T: KVApi> UserMgr<T> {
+impl<T: KVApi> UserMgrImpl<T> {
     async fn upsert_user(
         &mut self,
         username: impl AsRef<str>,
@@ -50,7 +50,7 @@ impl<T: KVApi> UserMgr<T> {
     }
 }
 
-impl<T: KVApi> UserMgr<T> {
+impl<T: KVApi> UserMgrImpl<T> {
     #[allow(dead_code)]
     pub async fn add_user(
         &mut self,
@@ -74,9 +74,16 @@ impl<T: KVApi> UserMgr<T> {
 
     #[allow(dead_code)]
     pub async fn drop_user(&mut self, username: impl AsRef<str>, seq: Option<u64>) -> Result<()> {
-        let key = prepend(username);
-        self.kv_api.delete_kv(&key, seq).await?;
-        Ok(())
+        let key = prepend(username.as_ref());
+        let r = self.kv_api.delete_kv(&key, seq).await?;
+        if r.is_some() {
+            Ok(())
+        } else {
+            Err(ErrorCode::UnknownUser(format!(
+                "unknown user {}",
+                username.as_ref()
+            )))
+        }
     }
 
     #[allow(dead_code)]
@@ -86,17 +93,17 @@ impl<T: KVApi> UserMgr<T> {
         new_password: Option<impl AsRef<str>>,
         new_salt: Option<impl AsRef<str>>,
         seq: Option<u64>,
-    ) -> Result<()> {
-        if new_salt.is_none() && new_password.is_none() {
-            return Ok(());
+    ) -> Result<Option<u64>> {
+        if new_password.is_none() && new_salt.is_none() {
+            return Ok(seq);
         }
-
         let partial_update = new_salt.is_none() || new_password.is_none();
         let user_info = if partial_update {
-            let user_info = self
+            let user_val_seq = self
                 .get_user(username.as_ref(), seq)
                 .await?
                 .ok_or_else(|| ErrorCode::UnknownUser(""))?;
+            let user_info = user_val_seq.1;
             UserInfo {
                 password_sha256: new_password.map_or(user_info.password_sha256, |v| {
                     sha2::Sha256::digest(v.as_ref().as_bytes()).into()
@@ -118,13 +125,12 @@ impl<T: KVApi> UserMgr<T> {
         let value = serde_json::to_vec(&user_info)?;
         let key = prepend(&user_info.name);
         let res = self.kv_api.update_kv(&key, seq, value).await?;
-        if let Some(_) = res {
-            Ok(())
-        } else {
-            Err(ErrorCode::UnknownUser(format!(
+        match res {
+            Some((s, _)) => Ok(Some(s)),
+            None => Err(ErrorCode::UnknownUser(format!(
                 "unknown user, or seq not match {}",
                 username.as_ref()
-            )))
+            ))),
         }
     }
 
@@ -132,15 +138,25 @@ impl<T: KVApi> UserMgr<T> {
     pub async fn get_user(
         &mut self,
         username: impl AsRef<str>,
-        _seq: Option<u64>,
-    ) -> Result<Option<UserInfo>> {
-        let key = prepend(username);
+        seq: Option<u64>,
+    ) -> Result<Option<(u64, UserInfo)>> {
+        let key = prepend(username.as_ref());
         let value = self.kv_api.get_kv(&key).await?;
-        value
-            .result
-            .map(|(_s, v)| serde_json::from_slice::<UserInfo>(&v))
-            .transpose()
-            .map_err(|e| ErrorCode::IllegalUserInfoFormat(e.to_string()))
+        let res = value.result;
+        let f = |s, val| {
+            let user_info = serde_json::from_slice(val);
+            let user_info =
+                user_info.map_err(|e| ErrorCode::IllegalUserInfoFormat(e.to_string()))?;
+            Ok(Some((s, user_info)))
+        };
+        match res {
+            Some((s, val)) if seq.is_none() => f(s, val.as_slice()),
+            Some((s, val)) if seq.unwrap() == s => f(s, val.as_slice()),
+            _ => Err(ErrorCode::UnknownUser(format!(
+                "unknown user {}",
+                username.as_ref()
+            ))),
+        }
     }
 
     #[allow(dead_code)]

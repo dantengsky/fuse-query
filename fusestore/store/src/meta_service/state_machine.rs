@@ -263,7 +263,7 @@ impl StateMachine {
                     return Ok((prev, None).into());
                 }
 
-                let prev = self.kv.remove(key);
+                self.kv.remove(key);
                 tracing::debug!("applied DeleteByKeyKV: {}={:?}", key, seq);
                 Ok((prev, None).into())
             }

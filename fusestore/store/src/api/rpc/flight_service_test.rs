@@ -5,7 +5,6 @@
 use common_arrow::arrow::array::ArrayRef;
 use common_datablocks::DataBlock;
 use common_datavalues::DataColumnarValue;
-use common_exception::ErrorCode;
 use common_flights::StoreClient;
 use common_planners::CreateDatabasePlan;
 use common_planners::DatabaseEngineType;
@@ -457,7 +456,6 @@ async fn test_flight_generic_kv() -> anyhow::Result<()> {
     }
 
     let res = client.prefix_list_kv("__users/").await?;
-    res.iter().for_each(|v| println!("r is {:?}", v));
     assert_eq!(
         res.iter().map(|i| i.1.clone()).collect::<Vec<_>>(),
         values
@@ -475,27 +473,38 @@ async fn test_flight_generic_kv() -> anyhow::Result<()> {
 
         let current = client.get_kv(test_key).await?;
         if let Some((seq, _val)) = current.result {
+            // seq mismatch
             let wrong_seq = Some(seq + 1);
-            let res = client.delete_kv(test_key, wrong_seq).await;
-            assert_eq!(res.unwrap_err().code(), ErrorCode::UnknownKey("").code());
+            let res = client.delete_kv(test_key, wrong_seq).await?;
+            assert!(res.is_none());
 
-            let res = client.delete_kv(test_key, Some(seq)).await;
-            assert!(res.is_ok());
+            // seq match
+            let res = client.delete_kv(test_key, Some(seq)).await?;
+            assert!(res.is_some());
 
+            // read nothing
             let r = client.get_kv(test_key).await?;
             assert!(r.result.is_none());
         } else {
             panic!("expecting a value, but got nothing");
         }
 
-        let res = client.delete_kv("not exists", None).await;
-        assert!(res.is_err());
-        assert_eq!(res.unwrap_err().code(), ErrorCode::UnknownKey("").code());
+        // key not exist
+        let res = client.delete_kv("not exists", None).await?;
+        assert!(res.is_none());
+
+        // do not care seq
+        client
+            .upsert_kv(test_key, None, "value of ak".to_string().into_bytes())
+            .await?;
+
+        let res = client.delete_kv(test_key, None).await?;
+        assert!(res.is_some());
     }
 
     // update
     {
-        let test_key = "test_key_forupdate";
+        let test_key = "test_key_for_update";
         let r = client
             .update_kv(test_key, None, "value of ak".to_string().into_bytes())
             .await?;
@@ -523,12 +532,13 @@ async fn test_flight_generic_kv() -> anyhow::Result<()> {
             .await?;
         assert!(r.is_some());
 
-        //or unconditional (on seq number)
+        // blind update
         let r = client
             .update_kv(test_key, None, "brand new value".to_string().into_bytes())
             .await?;
         assert!(r.is_some());
 
+        // value updated
         let kv = client.get_kv(test_key).await?;
         assert!(kv.result.is_some());
         assert_eq!(kv.result.unwrap().1, "brand new value".as_bytes());

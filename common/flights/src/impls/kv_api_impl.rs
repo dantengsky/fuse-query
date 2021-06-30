@@ -3,8 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0.
 //
 
-use std::convert::identity;
-
 use common_exception::ErrorCode;
 use common_exception::Result;
 use common_metatypes::SeqValue;
@@ -35,7 +33,7 @@ impl KVApi for StoreClient {
         .await
     }
 
-    async fn delete_kv(&mut self, key: &str, seq: Option<u64>) -> Result<()> {
+    async fn delete_kv(&mut self, key: &str, seq: Option<u64>) -> Result<Option<SeqValue>> {
         let res = self
             .do_action(DeleteKVReq {
                 key: key.to_string(),
@@ -44,10 +42,14 @@ impl KVApi for StoreClient {
             .await?;
 
         match (&res.prev, &res.result) {
-            (Some(prev), None) if prev.0 == seq.map_or(0, identity) => Ok(()),
-            _ => Err(ErrorCode::UnknownKey(format!(
-                "unknown key {:?}, seq {:?}",
-                key, seq
+            (prev @ Some(_), None) if seq.is_none() => Ok(prev.clone()),
+            (Some((s, v)), None) if seq.is_some() && *s == seq.unwrap() => {
+                Ok(Some((*s, v.clone())))
+            }
+            (_, None) => Ok(None),
+            _ => Err(ErrorCode::LogicalError(format!(
+                "unexpected response from kv service(delete): {:?}",
+                &res
             ))),
         }
     }
@@ -71,7 +73,7 @@ impl KVApi for StoreClient {
             // key not exist or seq not match
             (_, None) => Ok(None),
             _ => Err(ErrorCode::LogicalError(format!(
-                "unexpected response from kv service: {:?}",
+                "unexpected response from kv service(update): {:?}",
                 &res
             ))),
         }

@@ -18,7 +18,7 @@ use sha2::Digest;
 use crate::user::user_info::NewUser;
 use crate::user::user_info::UserInfo;
 use crate::user::user_mgr::USER_API_KEY_PREFIX;
-use crate::user::UserMgr;
+use crate::user::UserMgrImpl;
 // and mock!
 mock! {
     pub KV {}
@@ -30,7 +30,7 @@ mock! {
             seq: Option<u64>,
             value: Vec<u8>,
         ) -> common_exception::Result<UpsertKVActionResult>;
-    async fn delete_kv(&mut self, key: &str, seq: Option<u64>) -> common_exception::Result<()>;
+    async fn delete_kv(&mut self, key: &str, seq: Option<u64>) -> common_exception::Result<Option<SeqValue>>;
     async fn update_kv(
         &mut self,
         key: &str,
@@ -94,7 +94,7 @@ mod add {
                         result: None,
                     })
                 });
-            let mut user_mgr = UserMgr::new(api);
+            let mut user_mgr = UserMgrImpl::new(api);
             let res = user_mgr
                 .add_user(test_user_name, test_password, test_salt)
                 .await;
@@ -122,7 +122,7 @@ mod add {
                         result: None,
                     })
                 });
-            let mut user_mgr = UserMgr::new(api);
+            let mut user_mgr = UserMgrImpl::new(api);
             let res = user_mgr
                 .add_user(test_user_name, test_password, test_salt)
                 .await;
@@ -149,7 +149,7 @@ mod add {
                         result: None,
                     })
                 });
-            let mut user_mgr = UserMgr::new(api);
+            let mut user_mgr = UserMgrImpl::new(api);
             let res = user_mgr
                 .add_user(test_user_name, test_password, test_salt)
                 .await;
@@ -167,7 +167,7 @@ mod get {
     use super::*;
 
     #[tokio::test]
-    async fn test_get_user_normal() -> common_exception::Result<()> {
+    async fn test_get_user_seq_match() -> common_exception::Result<()> {
         let test_name = "test";
         let test_key = USER_API_KEY_PREFIX.to_string() + test_name;
 
@@ -184,10 +184,36 @@ mod get {
                     result: Some((1, value)),
                 })
             });
-        let mut user_mgr = UserMgr::new(kv);
+        let mut user_mgr = UserMgrImpl::new(kv);
+        let res = user_mgr.get_user(test_name, Some(1)).await;
+        assert!(res.is_ok());
+        assert!(res.unwrap().is_some());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_user_do_not_care_seq() -> common_exception::Result<()> {
+        let test_name = "test";
+        let test_key = USER_API_KEY_PREFIX.to_string() + test_name;
+
+        let user = NewUser::new(test_name, "pass", "salt");
+        let user_info = UserInfo::from(user);
+        let value = serde_json::to_vec(&user_info)?;
+
+        let mut kv = MockKV::new();
+        kv.expect_get_kv()
+            .with(predicate::function(move |v| v == test_key.as_str()))
+            .times(1)
+            .return_once(move |_k| {
+                Ok(GetKVActionResult {
+                    result: Some((100, value)),
+                })
+            });
+        let mut user_mgr = UserMgrImpl::new(kv);
         let res = user_mgr.get_user(test_name, None).await;
         assert!(res.is_ok());
-
+        assert!(res.unwrap().is_some());
         Ok(())
     }
 
@@ -201,9 +227,31 @@ mod get {
             .with(predicate::function(move |v| v == test_key.as_str()))
             .times(1)
             .return_once(move |_k| Ok(GetKVActionResult { result: None }));
-        let mut user_mgr = UserMgr::new(kv);
+        let mut user_mgr = UserMgrImpl::new(kv);
         let res = user_mgr.get_user(test_name, None).await;
-        assert!(res.unwrap().is_none());
+        assert!(res.is_err());
+        assert_eq!(res.unwrap_err().code(), ErrorCode::UnknownUser("").code());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_user_not_exist_seq_mismatch() -> common_exception::Result<()> {
+        let test_name = "test";
+        let test_key = USER_API_KEY_PREFIX.to_string() + test_name;
+
+        let mut kv = MockKV::new();
+        kv.expect_get_kv()
+            .with(predicate::function(move |v| v == test_key.as_str()))
+            .times(1)
+            .return_once(move |_k| {
+                Ok(GetKVActionResult {
+                    result: Some((1, vec![])),
+                })
+            });
+        let mut user_mgr = UserMgrImpl::new(kv);
+        let res = user_mgr.get_user(test_name, Some(2)).await;
+        assert!(res.is_err());
+        assert_eq!(res.unwrap_err().code(), ErrorCode::UnknownUser("").code());
         Ok(())
     }
 
@@ -221,7 +269,7 @@ mod get {
                     result: Some((1, vec![1])),
                 })
             });
-        let mut user_mgr = UserMgr::new(kv);
+        let mut user_mgr = UserMgrImpl::new(kv);
         let res = user_mgr.get_user(test_name, None).await;
         assert_eq!(
             res.unwrap_err().code(),
@@ -272,7 +320,7 @@ mod get_users {
             //.withf(|args| args.0 == keys.clone())
             .times(1)
             .return_once(move |_: &[String]| Ok(MGetKVActionResult { result: res }));
-        let mut user_mgr = UserMgr::new(kv);
+        let mut user_mgr = UserMgrImpl::new(kv);
         let res = user_mgr.get_users(&names).await?;
         assert_eq!(res, user_infos);
 
@@ -290,7 +338,7 @@ mod get_users {
                 .times(1)
                 .return_once(move |_: &[String]| Ok(MGetKVActionResult { result: res }));
         }
-        let mut user_mgr = UserMgr::new(kv);
+        let mut user_mgr = UserMgrImpl::new(kv);
         let res = user_mgr.get_users(&names).await;
         assert_eq!(
             res.unwrap_err().code(),
@@ -335,7 +383,7 @@ mod get_all_users {
                 .times(1)
                 .return_once(|_p| Ok(res));
         }
-        let mut user_mgr = UserMgr::new(kv);
+        let mut user_mgr = UserMgrImpl::new(kv);
         let res = user_mgr.get_all_users().await?;
         assert_eq!(res, user_infos);
 
@@ -354,7 +402,7 @@ mod get_all_users {
                 .times(1)
                 .return_once(|_p| Ok(res));
         }
-        let mut user_mgr = UserMgr::new(kv);
+        let mut user_mgr = UserMgrImpl::new(kv);
         let res = user_mgr.get_all_users().await;
         assert_eq!(
             res.unwrap_err().code(),
@@ -365,11 +413,11 @@ mod get_all_users {
     }
 }
 
-mod del {
+mod drop {
     use super::*;
 
     #[tokio::test]
-    async fn test_del_user_normal_case() -> common_exception::Result<()> {
+    async fn test_drop_user_normal_case() -> common_exception::Result<()> {
         let mut kv = MockKV::new();
         let test_key = USER_API_KEY_PREFIX.to_string() + "test";
         kv.expect_delete_kv()
@@ -378,8 +426,8 @@ mod del {
                 predicate::eq(None),
             )
             .times(1)
-            .returning(|_k, _seq| Ok(()));
-        let mut user_mgr = UserMgr::new(kv);
+            .returning(|_k, _seq| Ok(Some((1, vec![]))));
+        let mut user_mgr = UserMgrImpl::new(kv);
         let res = user_mgr.drop_user("test", None).await;
         assert!(res.is_ok());
 
@@ -387,7 +435,7 @@ mod del {
     }
 
     #[tokio::test]
-    async fn test_del_user_unknown() -> common_exception::Result<()> {
+    async fn test_drop_user_unknown() -> common_exception::Result<()> {
         let mut v = MockKV::new();
         let test_key = USER_API_KEY_PREFIX.to_string() + "test";
         v.expect_delete_kv()
@@ -396,10 +444,10 @@ mod del {
                 predicate::eq(None),
             )
             .times(1)
-            .returning(|_k, _seq| Err(ErrorCode::UnknownKey("")));
-        let mut user_mgr = UserMgr::new(v);
+            .returning(|_k, _seq| Ok(None));
+        let mut user_mgr = UserMgrImpl::new(v);
         let res = user_mgr.drop_user("test", None).await;
-        assert_eq!(res.unwrap_err().code(), ErrorCode::UnknownKey("").code());
+        assert_eq!(res.unwrap_err().code(), ErrorCode::UnknownUser("").code());
         Ok(())
     }
 }
@@ -452,7 +500,7 @@ mod update {
             .times(1)
             .return_once(|_, _, _| Ok(Some((0, vec![]))));
 
-        let mut user_mgr = UserMgr::new(kv);
+        let mut user_mgr = UserMgrImpl::new(kv);
 
         let res = user_mgr
             .update_user(test_name, Some(new_pass), new_salt, test_seq)
@@ -487,7 +535,7 @@ mod update {
             .times(1)
             .return_once(|_, _, _| Ok(Some((0, vec![]))));
 
-        let mut user_mgr = UserMgr::new(kv);
+        let mut user_mgr = UserMgrImpl::new(kv);
 
         let res = user_mgr
             .update_user(test_name, Some(new_pass), Some(new_salt), test_seq)
@@ -499,10 +547,9 @@ mod update {
     #[tokio::test]
     async fn test_update_user_none_update() -> common_exception::Result<()> {
         // mock kv expects nothing
-
         let test_name = "name";
         let kv = MockKV::new();
-        let mut user_mgr = UserMgr::new(kv);
+        let mut user_mgr = UserMgrImpl::new(kv);
 
         let new_password: Option<&str> = None;
         let new_salt: Option<&str> = None;
@@ -527,7 +574,7 @@ mod update {
             .with(predicate::function(move |v| v == test_key.as_str()))
             .times(1)
             .return_once(move |_k| Ok(GetKVActionResult { result: None }));
-        let mut user_mgr = UserMgr::new(kv);
+        let mut user_mgr = UserMgrImpl::new(kv);
 
         let new_salt: Option<&str> = None;
         let res = user_mgr
@@ -558,7 +605,7 @@ mod update {
             .times(1)
             .returning(|_u, _s, _salt| Ok(None));
 
-        let mut user_mgr = UserMgr::new(kv);
+        let mut user_mgr = UserMgrImpl::new(kv);
 
         let res = user_mgr
             .update_user(test_name, Some("new_pass"), Some("new_salt"), test_seq)
