@@ -21,6 +21,7 @@ pub struct UserMgr<KV: KVApi> {
 impl<T> UserMgr<T>
 where T: KVApi
 {
+    #[allow(dead_code)]
     pub fn new(kv_api: T) -> Self {
         UserMgr { kv_api }
     }
