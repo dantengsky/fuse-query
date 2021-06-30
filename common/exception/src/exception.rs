@@ -190,6 +190,7 @@ build_exceptions! {
     // user-api error codes
     UnknownUser(3000),
     UserAlreadyExists(3001),
+    IllegalUserInfoFormat(3002),
 
     // meta-api error codes
     DatabaseAlreadyExists(4001),

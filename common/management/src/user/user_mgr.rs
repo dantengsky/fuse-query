@@ -84,12 +84,16 @@ impl<T: KVApi> UserMgr<T> {
         username: impl AsRef<str>,
         new_password: Option<impl AsRef<str>>,
         new_salt: Option<impl AsRef<str>>,
-        seq: u64,
+        seq: Option<u64>,
     ) -> Result<()> {
+        if new_salt.is_none() && new_password.is_none() {
+            return Ok(());
+        }
+
         let partial_update = new_salt.is_none() || new_password.is_none();
         let user_info = if partial_update {
             let user_info = self
-                .get_user(username.as_ref(), Some(seq))
+                .get_user(username.as_ref(), seq)
                 .await?
                 .ok_or_else(|| ErrorCode::UnknownUser(""))?;
             UserInfo {
@@ -112,7 +116,29 @@ impl<T: KVApi> UserMgr<T> {
 
         let value = serde_json::to_vec(&user_info)?;
         let key = prepend(&user_info.name);
-        self.kv_api.update_kv(&key, Some(seq), value).await
+        self.kv_api.update_kv(&key, seq, value).await.map_err(|e| {
+            let unknown_key_code = ErrorCode::UnknownKey("").code();
+            if e.code() == unknown_key_code {
+                ErrorCode::UnknownUser(format!("unknown user {}", username.as_ref()))
+            } else {
+                e
+            }
+        })
+    }
+
+    #[allow(dead_code)]
+    pub async fn get_user(
+        &mut self,
+        username: impl AsRef<str>,
+        _seq: Option<u64>,
+    ) -> Result<Option<UserInfo>> {
+        let key = prepend(username);
+        let value = self.kv_api.get_kv(&key).await?;
+        value
+            .result
+            .map(|(_s, v)| serde_json::from_slice::<UserInfo>(&v))
+            .transpose()
+            .map_err(|e| ErrorCode::IllegalUserInfoFormat(e.to_string()))
     }
 
     #[allow(dead_code)]
@@ -120,8 +146,14 @@ impl<T: KVApi> UserMgr<T> {
         let values = self.kv_api.prefix_list_kv(USER_API_KEY_PREFIX).await?;
         let mut r = vec![];
         for v in values {
-            let u = serde_json::from_slice::<UserInfo>(&v.1)?;
-            r.push(u);
+            let u = serde_json::from_slice::<UserInfo>(&v.1);
+            let val = match u {
+                Err(e) => {
+                    return Err(ErrorCode::IllegalUserInfoFormat(e.to_string()));
+                }
+                Ok(v) => v,
+            };
+            r.push(val);
         }
         Ok(r)
     }
@@ -137,7 +169,12 @@ impl<T: KVApi> UserMgr<T> {
         for v in values.result {
             match v {
                 Some(v) => {
-                    let u = serde_json::from_slice::<UserInfo>(&v.1)?;
+                    let u = match serde_json::from_slice::<UserInfo>(&v.1) {
+                        Err(e) => {
+                            return Err(ErrorCode::IllegalUserInfoFormat(e.to_string()));
+                        }
+                        Ok(val) => val,
+                    };
                     r.push(Some(u));
                 }
                 None => r.push(None),
@@ -145,24 +182,9 @@ impl<T: KVApi> UserMgr<T> {
         }
         Ok(r)
     }
-
-    #[allow(dead_code)]
-    pub async fn get_user(
-        &mut self,
-        username: impl AsRef<str>,
-        _seq: Option<u64>,
-    ) -> Result<Option<UserInfo>> {
-        let key = prepend(username);
-        let value = self.kv_api.get_kv(&key).await?;
-        value
-            .result
-            .map(|(_s, v)| serde_json::from_slice::<UserInfo>(&v))
-            .transpose()
-            .map_err(Into::into)
-    }
 }
 
-fn prepend(v: impl AsRef<str>) -> String {
+pub(crate) fn prepend(v: impl AsRef<str>) -> String {
     let mut res = USER_API_KEY_PREFIX.to_string();
     res.push_str(v.as_ref());
     res

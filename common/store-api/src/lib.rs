@@ -9,6 +9,7 @@ mod storage_api;
 
 pub use kv_api::GetKVActionResult;
 pub use kv_api::KVApi;
+pub use kv_api::PrefixListReply;
 pub use kv_api::UpsertKVActionResult;
 pub use meta_api::CreateDatabaseActionResult;
 pub use meta_api::CreateTableActionResult;
