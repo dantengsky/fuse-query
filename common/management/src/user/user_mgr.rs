@@ -117,14 +117,24 @@ impl<T: KVApi> UserMgr<T> {
 
         let value = serde_json::to_vec(&user_info)?;
         let key = prepend(&user_info.name);
-        self.kv_api.update_kv(&key, seq, value).await.map_err(|e| {
-            let unknown_key_code = ErrorCode::UnknownKey("").code();
-            if e.code() == unknown_key_code {
-                ErrorCode::UnknownUser(format!("unknown user {}", username.as_ref()))
-            } else {
-                e
-            }
-        })
+        let res = self.kv_api.update_kv(&key, seq, value).await?;
+        if let Some(_) = res {
+            Ok(())
+        } else {
+            Err(ErrorCode::UnknownUser(format!(
+                "unknown user {}",
+                username.as_ref()
+            )))
+        }
+
+        //self.kv_api.update_kv(&key, seq, value).await.map_err(|e| {
+        //    let unknown_key_code = ErrorCode::UnknownKey("").code();
+        //    if e.code() == unknown_key_code {
+        //        ErrorCode::UnknownUser(format!("unknown user {}", username.as_ref()))
+        //    } else {
+        //        e
+        //    }
+        //})
     }
 
     #[allow(dead_code)]

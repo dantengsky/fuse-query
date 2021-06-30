@@ -57,7 +57,7 @@ impl KVApi for StoreClient {
         key: &str,
         seq: Option<u64>,
         value: Vec<u8>,
-    ) -> common_exception::Result<()> {
+    ) -> common_exception::Result<Option<SeqValue>> {
         let res = self
             .do_action(UpdateKVReq {
                 key: key.to_string(),
@@ -65,12 +65,18 @@ impl KVApi for StoreClient {
                 value,
             })
             .await?;
+        let seq_expected = seq.unwrap_or(0);
+
+        // if we got a prev which seq matches argument seq, then return the prev SeqValue,
+        // otherwise return None
         match (&res.prev, &res.result) {
-            (Some(_), Some(_)) if seq.is_none() => Ok(()),
-            (Some(prev), Some(_)) if prev.0 == seq.map_or(0, identity) => Ok(()),
-            _ => Err(ErrorCode::UnknownKey(format!(
-                "unknown key {:?}, seq {:?}",
-                key, seq
+            (Some((prev_s, prev_v)), _) if seq_expected == *prev_s => {
+                Ok(Some((*prev_s, prev_v.clone())))
+            }
+            (Some(_), _) => Ok(None),
+            _ => Err(ErrorCode::LogicalError(format!(
+                "we are in some awkward situation(while updating kv): {:?}",
+                res
             ))),
         }
     }

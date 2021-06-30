@@ -5,6 +5,7 @@
 
 use async_trait::async_trait;
 use common_exception::ErrorCode;
+use common_metatypes::SeqValue;
 use common_store_api::kv_api::MGetKVActionResult;
 use common_store_api::kv_api::PrefixListReply;
 use common_store_api::GetKVActionResult;
@@ -18,7 +19,6 @@ use crate::user::user_info::NewUser;
 use crate::user::user_info::UserInfo;
 use crate::user::user_mgr::USER_API_KEY_PREFIX;
 use crate::user::UserMgr;
-
 // and mock!
 mock! {
     pub KV {}
@@ -36,7 +36,7 @@ mock! {
         key: &str,
         seq: Option<u64>,
         value: Vec<u8>,
-    ) -> common_exception::Result<()>;
+    ) -> common_exception::Result<Option<SeqValue>>;
 
     async fn get_kv(&mut self, key: &str) -> common_exception::Result<GetKVActionResult>;
 
@@ -234,7 +234,6 @@ mod get {
 }
 
 mod get_users {
-    use common_metatypes::SeqValue;
 
     use super::*;
     use crate::user::user_mgr::prepend;
@@ -282,7 +281,7 @@ mod get_users {
 
     #[tokio::test]
     async fn test_get_users_invalid_user_info_encoding() -> common_exception::Result<()> {
-        let (names, keys, mut res, user_infos) = prepare(9)?;
+        let (names, keys, mut res, _user_infos) = prepare(9)?;
         res.insert(8, Some((0, "some arbitrary str".as_bytes().to_vec())));
         let mut kv = MockKV::new();
         {
@@ -308,9 +307,8 @@ mod get_all_users {
     use super::*;
     use crate::user::user_mgr::prepend;
 
-    type Strings = Vec<String>;
     type UserInfos = Vec<UserInfo>;
-    fn prepare() -> common_exception::Result<(Strings, Strings, Vec<SeqValue>, UserInfos)> {
+    fn prepare() -> common_exception::Result<(Vec<SeqValue>, UserInfos)> {
         let mut names = vec![];
         let mut keys = vec![];
         let mut res = vec![];
@@ -324,12 +322,12 @@ mod get_all_users {
             res.push((0, serde_json::to_vec(&user_info)?));
             user_infos.push(user_info);
         }
-        Ok((names, keys, res, user_infos))
+        Ok((res, user_infos))
     }
 
     #[tokio::test]
     async fn test_get_all_users_normal() -> common_exception::Result<()> {
-        let (names, keys, res, user_infos) = prepare()?;
+        let (res, user_infos) = prepare()?;
         let mut kv = MockKV::new();
         {
             kv.expect_prefix_list_kv()
@@ -346,7 +344,7 @@ mod get_all_users {
 
     #[tokio::test]
     async fn test_get_all_users_invalid_user_info_encoding() -> common_exception::Result<()> {
-        let (names, keys, mut res, user_infos) = prepare()?;
+        let (mut res, _user_infos) = prepare()?;
         res.insert(8, (0, "some arbitrary str".as_bytes().to_vec()));
 
         let mut kv = MockKV::new();
@@ -452,7 +450,7 @@ mod update {
                 predicate::eq(new_value_with_old_salt),
             )
             .times(1)
-            .return_once(|_, _, _| Ok(()));
+            .return_once(|_, _, _| Ok(Some((0, vec![]))));
 
         let mut user_mgr = UserMgr::new(kv);
 
@@ -487,7 +485,7 @@ mod update {
                 predicate::eq(new_value),
             )
             .times(1)
-            .return_once(|_, _, _| Ok(()));
+            .return_once(|_, _, _| Ok(Some((0, vec![]))));
 
         let mut user_mgr = UserMgr::new(kv);
 
@@ -558,7 +556,7 @@ mod update {
                 predicate::always(), // a little bit relax here, as we've covered it before
             )
             .times(1)
-            .returning(|_u, _s, _salt| Err(ErrorCode::UnknownKey("")));
+            .returning(|_u, _s, _salt| Ok(None));
 
         let mut user_mgr = UserMgr::new(kv);
 

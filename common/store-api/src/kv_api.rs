@@ -41,7 +41,7 @@ pub trait KVApi: Sync + Send {
         key: &str,
         seq: Option<u64>,
         value: Vec<u8>,
-    ) -> common_exception::Result<()>;
+    ) -> common_exception::Result<Option<SeqValue>>;
 
     async fn get_kv(&mut self, key: &str) -> common_exception::Result<GetKVActionResult>;
 
