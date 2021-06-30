@@ -234,16 +234,21 @@ mod get {
 }
 
 mod get_users {
+    use common_metatypes::SeqValue;
+
     use super::*;
     use crate::user::user_mgr::prepend;
 
-    #[tokio::test]
-    async fn test_get_users_normal() -> common_exception::Result<()> {
+    type Strings = Vec<String>;
+    type UserInfos = Vec<Option<UserInfo>>;
+    type Values = Vec<Option<SeqValue>>;
+
+    fn prepare(len: u8) -> common_exception::Result<(Strings, Strings, Values, UserInfos)> {
         let mut names = vec![];
         let mut keys = vec![];
         let mut res = vec![];
         let mut user_infos = vec![];
-        for i in 0..9 {
+        for i in 0..len {
             let name = format!("test_user_{}", i);
             names.push(name.clone());
             keys.push(prepend(&name));
@@ -257,14 +262,17 @@ mod get_users {
                 user_infos.push(None);
             }
         }
+        Ok((names, keys, res, user_infos))
+    }
 
+    #[tokio::test]
+    async fn test_get_users_normal() -> common_exception::Result<()> {
+        let (names, keys, res, user_infos) = prepare(9)?;
         let mut kv = MockKV::new();
-        {
-            kv.expect_mget_kv()
-                .with(predicate::function(move |ks: &[String]| ks == keys))
-                .times(1)
-                .return_once(move |_: &[String]| Ok(MGetKVActionResult { result: res }));
-        }
+        kv.expect_mget_kv()
+            .with(predicate::function(move |ks: &[String]| ks == keys))
+            .times(1)
+            .return_once(move |_: &[String]| Ok(MGetKVActionResult { result: res }));
         let mut user_mgr = UserMgr::new(kv);
         let res = user_mgr.get_users(&names).await?;
         assert_eq!(res, user_infos);
@@ -274,21 +282,8 @@ mod get_users {
 
     #[tokio::test]
     async fn test_get_users_invalid_user_info_encoding() -> common_exception::Result<()> {
-        let mut names = vec![];
-        let mut keys = vec![];
-        let mut res = vec![];
-        for i in 0..9 {
-            let name = format!("test_user_{}", i);
-            names.push(name.clone());
-            keys.push(prepend(&name));
-            let new_user = NewUser::new(&name, "pass", "salt");
-            let user_info = UserInfo::from(new_user);
-            res.push(Some((0, serde_json::to_vec(&user_info)?)));
-            if i == 8 {
-                res.push(Some((0, "some arbitrary string".as_bytes().to_vec())));
-            }
-        }
-
+        let (names, keys, mut res, user_infos) = prepare(9)?;
+        res.insert(8, Some((0, "some arbitrary str".as_bytes().to_vec())));
         let mut kv = MockKV::new();
         {
             kv.expect_mget_kv()
@@ -307,11 +302,15 @@ mod get_users {
 }
 
 mod get_all_users {
+
+    use common_metatypes::SeqValue;
+
     use super::*;
     use crate::user::user_mgr::prepend;
 
-    #[tokio::test]
-    async fn test_get_all_users_normal() -> common_exception::Result<()> {
+    type Strings = Vec<String>;
+    type UserInfos = Vec<UserInfo>;
+    fn prepare() -> common_exception::Result<(Strings, Strings, Vec<SeqValue>, UserInfos)> {
         let mut names = vec![];
         let mut keys = vec![];
         let mut res = vec![];
@@ -325,7 +324,12 @@ mod get_all_users {
             res.push((0, serde_json::to_vec(&user_info)?));
             user_infos.push(user_info);
         }
+        Ok((names, keys, res, user_infos))
+    }
 
+    #[tokio::test]
+    async fn test_get_all_users_normal() -> common_exception::Result<()> {
+        let (names, keys, res, user_infos) = prepare()?;
         let mut kv = MockKV::new();
         {
             kv.expect_prefix_list_kv()
@@ -342,17 +346,7 @@ mod get_all_users {
 
     #[tokio::test]
     async fn test_get_all_users_invalid_user_info_encoding() -> common_exception::Result<()> {
-        let mut names = vec![];
-        let mut keys = vec![];
-        let mut res = vec![];
-        for i in 0..9 {
-            let name = format!("test_user_{}", i);
-            names.push(name.clone());
-            keys.push(prepend(&name));
-            let new_user = NewUser::new(&name, "pass", "salt");
-            let user_info = UserInfo::from(new_user);
-            res.push((0, serde_json::to_vec(&user_info)?));
-        }
+        let (names, keys, mut res, user_infos) = prepare()?;
         res.insert(8, (0, "some arbitrary str".as_bytes().to_vec()));
 
         let mut kv = MockKV::new();
@@ -382,8 +376,6 @@ mod del {
         let test_key = USER_API_KEY_PREFIX.to_string() + "test";
         kv.expect_delete_kv()
             .with(
-                // seems we must use a move closure here
-                // predicate:eq(&test_key) will cause lifetime error
                 predicate::function(move |v| v == test_key.as_str()),
                 predicate::eq(None),
             )
