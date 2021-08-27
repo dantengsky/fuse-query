@@ -51,8 +51,8 @@ pub trait Table: Sync + Send {
     // temporary added, pls feel free to rm it
     async fn append_data(
         &self,
-        _ctx: DatafuseQueryContextRef,
-        _insert_plan: InsertIntoPlan,
+        ctx: DatafuseQueryContextRef,
+        insert_plan: InsertIntoPlan,
     ) -> Result<()> {
         Err(ErrorCode::UnImplement(format!(
             "append data for local table {} is not implemented",
@@ -62,8 +62,8 @@ pub trait Table: Sync + Send {
 
     async fn truncate(
         &self,
-        _ctx: DatafuseQueryContextRef,
-        _truncate_plan: TruncateTablePlan,
+        ctx: DatafuseQueryContextRef,
+        truncate_plan: TruncateTablePlan,
     ) -> Result<()> {
         Err(ErrorCode::UnImplement(format!(
             "truncate for local table {} is not implemented",
