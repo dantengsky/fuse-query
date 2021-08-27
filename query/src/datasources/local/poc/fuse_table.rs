@@ -60,7 +60,6 @@ impl Table for FuseTable {
     ) -> common_exception::Result<ReadDataSourcePlan> {
         //
         let expression = &scan.push_downs.filters;
-
         let partitioning_def = scan.table_schema.
         index_util::partitioning_expr(expression, schema.partitioning_def());
         let index_pointer = schema.index_pointer();
@@ -114,7 +113,7 @@ impl Table for FuseTable {
         _ctx: DatafuseQueryContextRef,
         _insert_plan: InsertIntoPlan,
     ) -> common_exception::Result<()> {
-        todo!()
+        // while ingesting data, we take in all the blocks as it is
     }
 
     async fn truncate(

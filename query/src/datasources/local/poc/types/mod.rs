@@ -13,6 +13,4 @@
 //  limitations under the License.
 //
 
-mod data_part;
-mod fuse_table;
-mod types;
+mod table_snapshot;
