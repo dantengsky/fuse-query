@@ -39,6 +39,7 @@ common-profling = { path = "../common/profiling" }
 common-store-api = { path = "../common/store-api" }
 common-io = { path = "../common/io" }
 common-metatypes = { path = "../common/metatypes" }
+common-dal= {path = "../common/dal"}
 
 # Github dependencies
 msql-srv = { git = "https://github.com/datafuse-extras/msql-srv", rev = "cc53408" }

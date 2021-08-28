@@ -17,9 +17,8 @@ use common_datavalues::DataSchema;
 
 type TableId = u64;
 type SnapshotId = u64;
-struct PartitionDef;
+struct PartitioningDef;
 
-struct TableStatistics;
 struct Statistics;
 struct Location;
 
@@ -32,22 +31,21 @@ struct TableSnapshot {
     snapshot_id: SnapshotId,
     /// parent snapshot's id of this snapshot
     previous_snapshot_id: SnapshotId,
-
     /// current table schema
     schema: DataSchema,
-
     /// current partitioning definition
     partition_def: PartitioningDef,
 
-    /// summary statistics, for table level optimizations, like partition pruning, constant folding etc.
-    summary_stats: TableStatistics,
-
-    partitions_list: Vec<Location>,
+    chunk_list: Vec<Location>,
 }
 
-struct PartitionMeta {
+struct ChunkListInfo {
+    //    summary: TableStatistics,
+    chunk_list: Vec<Location>,
+}
+
+struct ChunkMeta {
     table_id: TableId,
-    schema: DataSchema,
     partition_def: PartitioningDef,
-    summary_stats: TableStatistics,
+    // summary_stats: TableStatistics,
 }

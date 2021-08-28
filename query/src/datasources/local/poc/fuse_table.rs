@@ -15,7 +15,9 @@
 
 use std::any::Any;
 
+use common_dal::DataAccessor;
 use common_datavalues::DataSchemaRef;
+use common_exception::ErrorCode;
 use common_flights::storage_api_impl::ReadAction;
 use common_planners::InsertIntoPlan;
 use common_planners::PlanNode;
@@ -25,13 +27,19 @@ use common_planners::TruncateTablePlan;
 use common_streams::ProgressStream;
 use common_streams::SendableDataBlockStream;
 use futures::StreamExt;
+use mysql::uuid::Uuid;
 
 use crate::datasources::Table;
 use crate::sessions::DatafuseQueryContextRef;
 
-struct FuseTable {}
+pub struct FuseTable<T> {
+    pub(crate) data_accessor: T,
+}
 
-impl Table for FuseTable {
+#[async_trait::async_trait]
+impl<T> Table for FuseTable<T>
+where T: DataAccessor + Send + Sync
+{
     fn name(&self) -> &str {
         todo!()
     }
@@ -58,14 +66,14 @@ impl Table for FuseTable {
         scan: &ScanPlan,
         partitions: usize,
     ) -> common_exception::Result<ReadDataSourcePlan> {
-        //
-        let expression = &scan.push_downs.filters;
-        let partitioning_def = scan.table_schema.
-        index_util::partitioning_expr(expression, schema.partitioning_def());
-        let index_pointer = schema.index_pointer();
-        let tbl_index = index_util::open(index_pointer)?;
-        let parts = tbl_index.apply(expr);
-        Ok(self.read_datasource_paln(parts))
+        todo!()
+        //let expression = &scan.push_downs.filters;
+        //let partitioning_def = scan.table_schema.
+        //index_util::partitioning_expr(expression, schema.partitioning_def());
+        //let index_pointer = schema.index_pointer();
+        //let tbl_index = index_util::open(index_pointer)?;
+        //let parts = tbl_index.apply(expr);
+        //Ok(self.read_datasource_paln(parts))
     }
 
     async fn read(
@@ -75,45 +83,67 @@ impl Table for FuseTable {
     ) -> common_exception::Result<SendableDataBlockStream> {
         let progress_callback = ctx.progress_callback();
         let plan = source_plan.clone();
-        let iter = std::iter::from_fn(move || match ctx.try_get_partitions(1) {
-            Err(_) => None, // TODO error handling
+        // TODO config
+        let bite = 1;
+        let iter = std::iter::from_fn(move || match ctx.try_get_partitions(bite) {
+            Err(e) => {
+                log::warn!(
+                    "error while getting next partitions from context, {}",
+                    e.to_string()
+                );
+                // TODO is it correct to ignore this?
+                None
+            }
             Ok(parts) if parts.is_empty() => None,
-            Ok(parts) => {
-                let plan = plan.clone();
-                Some(ReadAction {
-                    part: parts[0].clone(),
-                    push_down: PlanNode::ReadSource(plan),
-                })
-            }
+            Ok(parts) => Some(parts.clone()),
         });
+        todo!()
 
-        let schema = source_plan.schema.clone();
-        let parts = futures::stream::iter(iter);
-        let streams = parts.then(move |parts| {
-            let schema = schema.clone();
-            async move {
-                let r = self.read_partition(schema, &parts).await;
-                r.unwrap_or_else(|e| {
-                    Box::pin(futures::stream::once(async move {
-                        Err(ErrorCode::CannotReadFile(format!(
-                            "get partition failure. partition [{:?}], error {}",
-                            &parts, e
-                        )))
-                    }))
-                })
-            }
-        });
-
-        let stream = ProgressStream::try_create(Box::pin(streams.flatten()), progress_callback?)?;
-        Ok(Box::pin(stream))
+        //        let schema = source_plan.schema.clone();
+        //        let parts = futures::stream::iter(iter);
+        //        let streams = parts.then(move |parts| {
+        //            let schema = schema.clone();
+        //            async move {
+        //                let r = self.read_partition(schema, &parts).await;
+        //                r.unwrap_or_else(|e| {
+        //                    Box::pin(futures::stream::once(async move {
+        //                        Err(common_exception::ErrorCode::CannotReadFile(format!(
+        //                            "get partition failure. partition [{:?}], error {}",
+        //                            &parts, e
+        //                        )))
+        //                    }))
+        //                })
+        //            }
+        //        });
+        //
+        //        let stream = ProgressStream::try_create(Box::pin(streams.flatten()), progress_callback?)?;
+        //        Ok(Box::pin(stream))
     }
 
     async fn append_data(
         &self,
         _ctx: DatafuseQueryContextRef,
-        _insert_plan: InsertIntoPlan,
+        insert_plan: InsertIntoPlan,
     ) -> common_exception::Result<()> {
-        // while ingesting data, we take in all the blocks as it is
+        let mut stream = {
+            match insert_plan.input_stream.lock().take() {
+                Some(s) => s,
+                None => return Err(ErrorCode::EmptyData("input stream consumed")),
+            }
+        };
+        let arrow_schema = insert_plan.schema.to_arrow();
+        while let Some(block) = stream.next().await {
+            let (rows, cols, wire_bytes) =
+                (block.num_rows(), block.num_columns(), block.memory_size());
+            let part_uuid = Uuid::new_v4().to_simple().to_string() + ".parquet";
+            let location = format!("{}/{}", path, part_uuid);
+            let buffer = write_in_memory(block)?;
+
+            result.append_part(&location, rows, cols, wire_bytes, buffer.len());
+
+            self.fs.add(&location, &buffer).await?;
+        }
+        Ok(result)
     }
 
     async fn truncate(

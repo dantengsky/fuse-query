@@ -18,32 +18,28 @@ use std::io::Cursor;
 use std::iter::repeat;
 use std::sync::Arc;
 
-use anyhow::Result;
 use common_arrow::arrow::datatypes::Schema as ArrowSchema;
 use common_arrow::arrow::io::parquet::write::*;
 use common_arrow::arrow::record_batch::RecordBatch;
 use common_arrow::arrow_flight::utils::flight_data_to_arrow_batch;
 use common_arrow::arrow_flight::FlightData;
-// use common_arrow::parquet::arrow::ArrowWriter;
-// use common_arrow::parquet::file::writer::InMemoryWriteableCursor;
+use common_dal::DataAccessor;
 use common_datablocks::DataBlock;
+use common_exception::ErrorCode;
+use common_exception::Result;
 use common_flights::storage_api_impl::AppendResult;
 use futures::StreamExt;
 use uuid::Uuid;
 
-use crate::fs::FileSystem;
-
-pub(crate) struct Appender {
-    fs: Arc<dyn FileSystem>,
+pub(crate) struct Appender<T> {
+    data_accessor: T,
 }
 
 pub type InputData = std::pin::Pin<Box<dyn futures::Stream<Item = FlightData> + Send>>;
 
-impl Appender {
-    pub fn new(fs: Arc<dyn FileSystem>) -> Self {
-        Appender { fs }
-    }
-
+impl<T> Appender<T>
+where T: DataAccessor
+{
     /// Assumes
     /// - upstream caller has properly batched data
     /// - first element of the incoming stream is a properly serialized schema
@@ -65,11 +61,13 @@ impl Appender {
 
                 result.append_part(&location, rows, cols, wire_bytes, buffer.len());
 
-                self.fs.add(&location, &buffer).await?;
+                self.data_accessor.put(&location, buffer).await?;
             }
             Ok(result)
         } else {
-            anyhow::bail!("Schema of input data must be provided")
+            Err(ErrorCode::IllegalMetaState(
+                "Schema of input data must be provided",
+            ))
         }
     }
 }

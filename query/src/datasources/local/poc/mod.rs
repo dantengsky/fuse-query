@@ -13,6 +13,6 @@
 //  limitations under the License.
 //
 
-mod data_part;
+mod chunk_io;
 mod fuse_table;
 mod types;

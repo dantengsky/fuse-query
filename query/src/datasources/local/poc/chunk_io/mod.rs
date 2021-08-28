@@ -14,6 +14,4 @@
 //
 
 pub(crate) mod appender;
-
-#[cfg(test)]
-mod appender_test;
+pub(crate) mod reader;

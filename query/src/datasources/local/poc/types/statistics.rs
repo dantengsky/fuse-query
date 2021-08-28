@@ -13,5 +13,24 @@
 //  limitations under the License.
 //
 
-mod statistics;
-mod table_snapshot;
+use std::collections::HashMap;
+
+pub type Bytes = Vec<u8>;
+
+pub struct TableSummary {
+    pub chunks: u64,
+    pub cols: u32,
+    pub rows: u64,
+    pub uncompressed_size: u64,
+    pub persistent_size: u64,
+    pub col_stats: HashMap<ColumnId, ColStats>,
+}
+
+pub type ColumnId = u64;
+
+pub struct ColStats {
+    min: Bytes,
+    max: Bytes,
+    null_count: u64,
+    distinct_count: Option<u64>,
+}

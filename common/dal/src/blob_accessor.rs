@@ -21,7 +21,7 @@ pub type Bytes = Vec<u8>;
 
 #[async_trait::async_trait]
 pub trait DataAccessor {
-    type InputStream: AsyncRead + AsyncSeek;
+    type InputStream: AsyncRead + AsyncSeek + Send + Unpin;
 
     async fn get_input_stream(
         &self,
