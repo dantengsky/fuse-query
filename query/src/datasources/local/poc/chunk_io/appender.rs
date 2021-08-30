@@ -56,13 +56,10 @@ where T: DataAccessor + Send + Sync
         mut stream: BlockStream,
     ) -> Result<()> {
         //TODO base patch
-        let path = "";
+        let prefix = "tbl_id/tbl_name"; // a hint
         while let Some(block) = stream.next().await {
-            let (rows, cols, wire_bytes) =
-                (block.num_rows(), block.num_columns(), block.memory_size());
-
             let part_uuid = Uuid::new_v4().to_simple().to_string() + ".parquet";
-            let location = format!("{}/{}", path, part_uuid);
+            let location = format!("{}/{}", prefix, part_uuid);
             let buffer = self.write_in_memory(&arrow_schema, block)?;
 
             // TODO : it is silly to read it again
