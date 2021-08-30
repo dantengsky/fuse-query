@@ -144,7 +144,7 @@ dependencies = [
  "multiversion",
  "num",
  "packed_simd_2",
- "parquet2 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "parquet2",
  "rand 0.8.4",
  "regex",
  "serde",
@@ -708,7 +708,7 @@ version = "0.1.0"
 dependencies = [
  "arrow-flight",
  "arrow2",
- "parquet2 0.3.0 (git+https://github.com/datafuse-extras/parquet2?rev=d28330f)",
+ "parquet2",
 ]
 
 [[package]]
@@ -3579,23 +3579,6 @@ name = "parquet2"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6b9cfd5adabbb93efd417dcee71a2ebbb0f4978b1d8e65ab7fce84b72b966bc"
-dependencies = [
- "async-stream",
- "bitpacking",
- "brotli",
- "flate2",
- "futures",
- "lz4",
- "parquet-format-async-temp",
- "snap",
- "streaming-iterator",
- "zstd",
-]
-
-[[package]]
-name = "parquet2"
-version = "0.3.0"
-source = "git+https://github.com/datafuse-extras/parquet2?rev=d28330f#d28330f92b8f0f69931dc78c7b3ce4f0a0f892bf"
 dependencies = [
  "async-stream",
  "bitpacking",

@@ -18,7 +18,6 @@ use common_datablocks::DataBlock;
 use common_datavalues::DataSchemaRef;
 use common_infallible::Mutex;
 
-/// please do not keep this, this code is just for test purpose
 type BlockStream =
     std::pin::Pin<Box<dyn futures::stream::Stream<Item = DataBlock> + Sync + Send + 'static>>;
 
