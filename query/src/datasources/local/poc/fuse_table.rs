@@ -122,28 +122,31 @@ where T: DataAccessor + Send + Sync
 
     async fn append_data(
         &self,
-        _ctx: DatafuseQueryContextRef,
+        ctx: DatafuseQueryContextRef,
         insert_plan: InsertIntoPlan,
     ) -> common_exception::Result<()> {
-        let mut stream = {
+        // take out input stream from plan
+        let mut block_stream = {
             match insert_plan.input_stream.lock().take() {
                 Some(s) => s,
                 None => return Err(ErrorCode::EmptyData("input stream consumed")),
             }
         };
+
         let arrow_schema = insert_plan.schema.to_arrow();
-        while let Some(block) = stream.next().await {
-            let (rows, cols, wire_bytes) =
-                (block.num_rows(), block.num_columns(), block.memory_size());
-            let part_uuid = Uuid::new_v4().to_simple().to_string() + ".parquet";
-            let location = format!("{}/{}", path, part_uuid);
-            let buffer = write_in_memory(block)?;
 
-            result.append_part(&location, rows, cols, wire_bytes, buffer.len());
+        // we should pass in a tx operation logger, so that, during appending data to
+        // cloud storage, we can log the operation, something like this:
+        //   let wal = ctx.current_tx_logger();
+        //   append_blocks(schema, blocks, wal);
+        let append_results = append_blocks(arrow_schema, blocl_stream)?;
 
-            self.fs.add(&location, &buffer).await?;
-        }
-        Ok(result)
+        let commit_message = to_commit_msg(append_results);
+        let meta_service = ctx.meta_service();
+
+        metat_service.commit_table(commit_message)?;
+
+        Ok(())
     }
 
     async fn truncate(
