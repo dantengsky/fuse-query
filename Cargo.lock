@@ -1441,6 +1441,7 @@ dependencies = [
  "nom 7.0.0",
  "num",
  "num_cpus",
+ "parquet-format-async-temp",
  "paste",
  "pnet",
  "pretty_assertions",

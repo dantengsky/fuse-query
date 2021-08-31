@@ -13,24 +13,100 @@
 //  limitations under the License.
 //
 
+/*
+
+
+//    ───────────────────────────────────────────────────────────────────────────────────
+//
+//                ┌─────────┐            chunk_info
+//                └─────────┘         ┌───────────────┐
+//                                    │---------------│
+//                ┌─────────┐         │               │
+//                └─────────┘         └───────────────┘
+//
+//                                                              table_info
+//                                                           ┌─────────────────┐
+//                                                           │                 │
+//                                                           │                 │
+//                                                           │                 │
+//                                                           │                 │
+//                                                           └─────────────────┘
+//                ┌─────────┐
+//                └─────────┘             chunk_info
+//                                     ┌───────────────┐
+//                ┌─────────┐          │               │
+//                └─────────┘          │               │
+//                                     └───────────────┘
+//                ┌─────────┐
+//                └─────────┘
+//
+//
+//
+//
+//
+//
+*/
 use std::collections::HashMap;
 
-pub type Bytes = Vec<u8>;
+use uuid::Uuid;
 
-pub struct TableSummary {
-    pub chunks: u64,
-    pub cols: u32,
-    pub rows: u64,
-    pub uncompressed_size: u64,
-    pub persistent_size: u64,
+pub type Bytes = Vec<u8>;
+pub type SnapshotId = Uuid;
+pub type ColumnId = i32;
+pub type ChunkLocation = String;
+
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
+pub struct TableSnapshot {
+    /// id of current snapshot
+    pub snapshot_id: SnapshotId,
+    /// id of previous snapshot
+    pub prev_snapshot_id: SnapshotId,
+    /// row count
+    pub row_count: u64,
+    /// block count
+    pub block_count: u64,
+
+    /// uncompressed size of this table (pure data & housekeeping data)
+    pub uncompressed_byte_size: u64,
+    /// compressed size of this table (pure data & housekeeping data)
+    pub compressed_byte_size: u64,
+
+    /// table level statistics
+    pub col_stats: HashMap<ColumnId, ColStats>,
+
+    /// segment info location
+    pub segment_info_location: String,
+    /// size of the segment info object
+    pub segment_file_byte_size: u64,
+}
+
+pub struct SegmentInfo {
+    pub chunks: Vec<BlockInfo>,
+    pub summary: Summary,
+}
+
+pub struct Summary {
+    pub row_count: u64,
+    pub uncompressed_byte_size: u64,
+    pub compressed_byte_size: u64,
     pub col_stats: HashMap<ColumnId, ColStats>,
 }
 
-pub type ColumnId = u64;
+pub struct BlockInfo {
+    pub location: String,
+    pub file_byte_size: u64,
+    pub compressed_size: u64,
+    pub total_byte_size: u64,
+    pub row_count: u64,
+    pub col_stats: HashMap<ColumnId, ColStats>,
+}
 
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
 pub struct ColStats {
-    min: Bytes,
-    max: Bytes,
-    null_count: u64,
-    distinct_count: Option<u64>,
+    pub min: Bytes,
+    pub max: Bytes,
+    pub null_count: u64,
+    pub distinct_count: Option<u64>,
+    pub uncompressed_size: u64,
+    pub compressed_size: u64,
 }

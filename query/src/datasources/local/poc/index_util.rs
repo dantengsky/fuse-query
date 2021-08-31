@@ -13,4 +13,17 @@
 //  limitations under the License.
 //
 
-pub mod statistics;
+use common_planners::Extras;
+use common_planners::Partitions;
+
+use crate::datasources::local::poc::types::statistics::ChunkLocation;
+use crate::datasources::local::poc::types::statistics::ColStats;
+use crate::datasources::local::poc::types::statistics::TableSnapshot;
+
+pub fn filter(_table_snapshot: &TableSnapshot, _push_down: &Extras) -> Partitions {
+    todo!()
+}
+
+pub fn filter_by_col_stats(_col_statistics: &ColStats, _push_down: &Extras) -> Vec<ChunkLocation> {
+    todo!()
+}

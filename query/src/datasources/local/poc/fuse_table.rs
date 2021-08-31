@@ -14,43 +14,35 @@
 //
 
 use std::any::Any;
-use std::io::Cursor;
+use std::sync::Arc;
 
-use common_arrow::arrow::datatypes::Schema as ArrowSchema;
-use common_arrow::arrow::io::parquet::read::read_metadata;
-use common_arrow::arrow::io::parquet::write::write_file;
-use common_arrow::arrow::io::parquet::write::WriteOptions;
-use common_arrow::arrow::io::parquet::write::*;
-use common_arrow::arrow::record_batch::RecordBatch;
-use common_arrow::parquet::statistics::serialize_statistics;
 use common_dal::DataAccessor;
-use common_datablocks::DataBlock;
-use common_datavalues::arrays::ArrayAgg;
 use common_datavalues::DataSchemaRef;
 use common_exception::ErrorCode;
 use common_exception::Result;
-use common_flights::storage_api_impl::ReadAction;
-use common_flights::MetaApi;
 use common_planners::InsertIntoPlan;
-use common_planners::PlanNode;
 use common_planners::ReadDataSourcePlan;
 use common_planners::ScanPlan;
+use common_planners::Statistics;
 use common_planners::TruncateTablePlan;
-use common_streams::ProgressStream;
 use common_streams::SendableDataBlockStream;
-use futures::StreamExt;
-use uuid::Uuid;
+use futures::AsyncReadExt;
 
 use crate::catalogs::Table;
+use crate::datasources::local::poc::index_util;
+use crate::datasources::local::poc::types::statistics::TableSnapshot;
 use crate::sessions::DatafuseQueryContextRef;
 
 pub struct FuseTable<T> {
     pub(crate) data_accessor: T,
 }
 
+const META_KEY_SNAPSHOT_OBJ_LOC: &'static str = "snapshot_location";
+const META_KEY_SNAPSHOT_OBJ_SIZE: &'static str = "snapshot_size";
+
 #[async_trait::async_trait]
 impl<T> Table for FuseTable<T>
-where T: DataAccessor + Send + Sync
+where T: DataAccessor + Send + Sync + Clone + 'static
 {
     fn name(&self) -> &str {
         todo!()
@@ -76,16 +68,64 @@ where T: DataAccessor + Send + Sync
         &self,
         ctx: DatafuseQueryContextRef,
         scan: &ScanPlan,
-        partitions: usize,
+        _partitions: usize,
     ) -> Result<ReadDataSourcePlan> {
-        todo!()
-        //let expression = &scan.push_downs.filters;
-        //let partitioning_def = scan.table_schema.
-        //index_util::partitioning_expr(expression, schema.partitioning_def());
-        //let index_pointer = schema.index_pointer();
-        //let tbl_index = index_util::open(index_pointer)?;
-        //let parts = tbl_index.apply(expr);
-        //Ok(self.read_datasource_paln(parts))
+        let schema = self.schema()?;
+        let segment_location = schema
+            .meta()
+            .get(META_KEY_SNAPSHOT_OBJ_LOC)
+            .ok_or_else(|| {
+                ErrorCode::IllegalSchema("metadata of snapshot info location not found")
+            })?;
+
+        let segment_size: u64 = schema
+            .meta()
+            .get(META_KEY_SNAPSHOT_OBJ_SIZE)
+            .ok_or_else(|| ErrorCode::IllegalSchema("metadata of snapshot info size not found"))?
+            .parse()?;
+
+        let (tx, rx) = std::sync::mpsc::channel();
+
+        let da = self.data_accessor.clone();
+        let loc = segment_location.clone();
+        {
+            ctx.execute_task(async move {
+                let input_stream = da.get_input_stream(&loc, Some(segment_size));
+                match input_stream.await {
+                    Ok(mut input) => {
+                        let mut buffer = vec![];
+                        // TODO send this error
+                        input.read_to_end(&mut buffer).await?;
+                        let _ = tx.send(Ok(buffer));
+                    }
+                    Err(e) => {
+                        let _ = tx.send(Err(e));
+                    }
+                }
+                Ok::<(), ErrorCode>(())
+            })?;
+        }
+
+        let res = rx.recv().map_err(ErrorCode::from_std_error)?;
+
+        let snapshot = serde_json::from_slice::<TableSnapshot>(&res?)?;
+
+        let parts = index_util::filter(&snapshot, &scan.push_downs);
+        let statistics = Statistics::default();
+
+        let plan = ReadDataSourcePlan {
+            db: scan.schema_name.clone(),
+            table: self.name().to_string(),
+            table_id: scan.table_id,
+            table_version: scan.table_version,
+            schema: self.schema()?.clone(),
+            parts,
+            statistics,
+            description: "".to_string(),
+            scan_plan: Arc::new(scan.clone()),
+            remote: true,
+        };
+        Ok(plan)
     }
 
     async fn read(
@@ -93,11 +133,11 @@ where T: DataAccessor + Send + Sync
         ctx: DatafuseQueryContextRef,
         source_plan: &ReadDataSourcePlan,
     ) -> Result<SendableDataBlockStream> {
-        let progress_callback = ctx.progress_callback();
-        let plan = source_plan.clone();
+        let _progress_callback = ctx.progress_callback();
+        let _plan = source_plan.clone();
         // TODO config
         let bite = 1;
-        let iter = std::iter::from_fn(move || match ctx.try_get_partitions(bite) {
+        let _iter = std::iter::from_fn(move || match ctx.try_get_partitions(bite) {
             Err(e) => {
                 log::warn!(
                     "error while getting next partitions from context, {}",
@@ -134,11 +174,11 @@ where T: DataAccessor + Send + Sync
 
     async fn append_data(
         &self,
-        ctx: DatafuseQueryContextRef,
+        _ctx: DatafuseQueryContextRef,
         insert_plan: InsertIntoPlan,
     ) -> Result<()> {
         // 1. take out input stream from plan
-        let mut block_stream = {
+        let block_stream = {
             match insert_plan.input_stream.lock().take() {
                 Some(s) => s,
                 None => return Err(ErrorCode::EmptyData("input stream consumed")),
@@ -148,7 +188,7 @@ where T: DataAccessor + Send + Sync
         // 2. Append blocks to storage
         //
         let arrow_schema = insert_plan.schema.to_arrow();
-        let append_results = self.append_blocks(arrow_schema, block_stream).await?;
+        let _append_results = self.append_blocks(arrow_schema, block_stream).await?;
 
         // 3. commit
         // let commit_message = to_commit_msg(append_results);
