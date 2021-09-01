@@ -57,42 +57,30 @@ pub type ChunkLocation = String;
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
 pub struct TableSnapshot {
-    /// id of current snapshot
     pub snapshot_id: SnapshotId,
-    /// id of previous snapshot
     pub prev_snapshot_id: SnapshotId,
-    /// row count
-    pub row_count: u64,
-    /// block count
-    pub block_count: u64,
-
-    /// uncompressed size of this table (pure data & housekeeping data)
-    pub uncompressed_byte_size: u64,
-    /// compressed size of this table (pure data & housekeeping data)
-    pub compressed_byte_size: u64,
-
-    /// table level statistics
-    pub col_stats: HashMap<ColumnId, ColStats>,
-
-    /// segment info location
+    pub summary: Summary,
     pub segment_info_location: String,
-    /// size of the segment info object
-    pub segment_file_byte_size: u64,
+    pub segment_info_byte_size: u64,
 }
 
-pub struct SegmentInfo {
-    pub chunks: Vec<BlockInfo>,
+/// A segment comprised of one or more blocks
+pub struct SegmentMeta {
+    pub chunks: Vec<BlockMeta>,
     pub summary: Summary,
 }
 
 pub struct Summary {
     pub row_count: u64,
+    pub block_count: u64,
     pub uncompressed_byte_size: u64,
     pub compressed_byte_size: u64,
     pub col_stats: HashMap<ColumnId, ColStats>,
 }
 
-pub struct BlockInfo {
+/// Meta information of a block
+/// A block is the basic unit which stored in the object storage as an object
+pub struct BlockMeta {
     pub location: String,
     pub file_byte_size: u64,
     pub compressed_size: u64,

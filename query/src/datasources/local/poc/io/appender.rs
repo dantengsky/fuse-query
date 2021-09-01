@@ -28,7 +28,7 @@ use futures::StreamExt;
 use uuid::Uuid;
 
 use crate::datasources::local::poc::fuse_table::FuseTable;
-use crate::datasources::local::poc::types::statistics::BlockInfo;
+use crate::datasources::local::poc::types::statistics::BlockMeta;
 use crate::datasources::local::poc::types::statistics::ColStats;
 
 pub type BlockStream =
@@ -97,7 +97,7 @@ where T: DataAccessor + Send + Sync
             let part_uuid = Uuid::new_v4().to_simple().to_string() + ".parquet";
             let location = format!("{}/{}", prefix, part_uuid);
 
-            let block_info = BlockInfo {
+            let block_info = BlockMeta {
                 location: location.clone(),
                 file_byte_size,
                 compressed_size,
