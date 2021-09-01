@@ -27,7 +27,7 @@ use common_exception::Result;
 use futures::StreamExt;
 use uuid::Uuid;
 
-use crate::datasources::fuse_table::fuse_table::FuseTable;
+use crate::datasources::fuse_table::table::FuseTable;
 use crate::datasources::fuse_table::types::table_snapshot::BlockMeta;
 use crate::datasources::fuse_table::types::table_snapshot::ColStats;
 

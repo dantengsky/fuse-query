@@ -46,4 +46,11 @@ debug = true
 [profile.dev]
 split-debuginfo = "unpacked"
 
+[patch.crates-io]
+arrow2 = { path = "vendor/arrow2/" }
+
+
+#arrow = { package = "arrow2", git="https://github.com/datafuse-extras/arrow2", rev = "7765067" }
+[patch."https://github.com/datafuse-extras/arrow2"]
+arrow2 = { path = "vendor/arrow2/" }
 

@@ -14,7 +14,9 @@
 //
 
 mod constants;
-mod fuse_table;
 mod io;
+mod table;
 mod types;
 mod util;
+
+pub use table::FuseTable;

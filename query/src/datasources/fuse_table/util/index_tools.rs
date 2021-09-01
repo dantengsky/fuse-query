@@ -25,6 +25,6 @@ pub fn filter(_table_snapshot: &TableSnapshot, _push_down: &Extras) -> Vec<Block
     todo!()
 }
 
-pub fn filter_by_col_stats(_col_statistics: &ColStats, _push_down: &Extras) -> Vec<ChunkLocation> {
-    todo!()
-}
+//pub fn filter_by_col_stats(_col_statistics: &ColStats, _push_down: &Extras) -> Vec<ChunkLocation> {
+//    todo!()
+//}

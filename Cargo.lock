@@ -125,7 +125,6 @@ dependencies = [
 [[package]]
 name = "arrow2"
 version = "0.4.0"
-source = "git+https://github.com/datafuse-extras/arrow2?rev=7765067#77650672233bd7bbb9839a2a616f11ebffa15807"
 dependencies = [
  "ahash 0.7.4",
  "base64",

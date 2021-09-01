@@ -12,5 +12,5 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 //
-const META_KEY_SNAPSHOT_OBJ_LOC: &'static str = "snapshot_location";
-const META_KEY_SNAPSHOT_OBJ_SIZE: &'static str = "snapshot_size";
+pub(crate) const META_KEY_SNAPSHOT_OBJ_LOC: &'static str = "snapshot_location";
+pub(crate) const META_KEY_SNAPSHOT_OBJ_SIZE: &'static str = "snapshot_size";

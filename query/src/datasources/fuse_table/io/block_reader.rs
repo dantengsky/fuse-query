@@ -12,21 +12,20 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 //
-/*
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use common_arrow::parquet::read::get_page_stream;
+use common_arrow::arrow::io::parquet::read::get_page_stream;
 use common_arrow::parquet::read::read_metadata_async;
 use common_dal::DataAccessor;
 use common_datavalues::DataSchema;
 use common_exception::ErrorCode;
 use common_exception::Result;
 
-use crate::datasources::local::poc::fuse_table::FuseTable;
+use crate::datasources::fuse_table::FuseTable;
 
 impl<T> FuseTable<T>
-where T: DataAccessor
+where T: DataAccessor + Clone
 {
     pub(crate) async fn read_partition1(
         &self,
@@ -64,20 +63,57 @@ where T: DataAccessor
         }
 
         // For each parquet file, we arrange EXACTLY ONE row group and ONE page in it,
-        // the "motivation" behind this is :
-        // a parquet file / or a chunk is the basic unit of read, write operation, and tx processing,
-        let row_group = 0;
-
-        let cols = proj_idx
-            .iter()
-            .map(|idx| metadata.row_groups[row_group].column(**idx));
-
-        let page_streams = futures::stream::iter(cols.map(|col| async move {
-            let mut reader = self.data_accessor.get_input_stream(part_loc, None).await?;
-            get_page_stream(col, &mut reader, vec![], Arc::new(|_, _| true))
-                .await
-                .map_err(|pe| ErrorCode::DALTransportError(pe.to_string()))
-        }));
+        // the "motivation" behind this is :...
+        //let row_group = 0;
+        //let cols = proj_idx
+        //    .iter()
+        //    .map(|idx| metadata.row_groups[row_group].column(**idx));
+        //let col = 0;
+        //let meta_ref = &metadata;
+        //let mut streams = vec![];
+        //for col in proj_idx {
+        //    let mut reader = self.data_accessor.get_input_stream(part_loc, None).await?;
+        //    let stream = get_page_stream(meta_ref, row_group, *col, &mut reader, None, vec![])
+        //        .await
+        //        .map_err(|pe| ErrorCode::DALTransportError(pe.to_string()))?;
+        //    streams.push(stream);
+        //}
+        //;        let v = proj_idx.iter().map(|col| {
+        //;            let da = self.data_accessor.clone();
+        //;            //            let meta = metadata.clone();
+        //;            async move {
+        //;                let da = self.data_accessor.clone();
+        //;                let mut reader = da.get_input_stream(part_loc, None).await?;
+        //;                get_page_stream(
+        //;                    meta_ref,
+        //;                    row_group,
+        //;                    **col,
+        //;                    &mut reader,
+        //;                    None,
+        //;                    vec![],
+        //;                )
+        //;                .await
+        //;                .map_err(|pe| ErrorCode::DALTransportError(pe.to_string()))
+        //;            }
+        //;        });
+        //;
+        //        let page_streams = futures::stream::iter(proj_idx.iter().map(|col| {
+        //            let da = self.data_accessor.clone();
+        //            //            let meta = metadata.clone();
+        //            async {
+        //                let mut reader = da.get_input_stream(part_loc, None).await?;
+        //                common_arrow::arrow::io::parquet::read::get_page_stream(
+        //                    &metadata,
+        //                    row_group,
+        //                    **col,
+        //                    &mut reader,
+        //                    None,
+        //                    vec![],
+        //                )
+        //                .await
+        //                .map_err(|pe| ErrorCode::DALTransportError(pe.to_string()))
+        //            }
+        //        }));
 
         //let column = 0;
         //let column_metadata = metadata.row_groups[row_group].column(column);
@@ -101,6 +137,3 @@ where T: DataAccessor
         todo!()
     }
 }
-
-
- */

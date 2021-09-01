@@ -15,5 +15,4 @@
 
 pub(crate) mod block_appender;
 pub(crate) mod block_reader;
-//mod write;
 pub(crate) mod snapshot_reader;

@@ -41,18 +41,24 @@ use crossbeam::channel::bounded;
 use crossbeam::channel::Receiver;
 use crossbeam::channel::Sender;
 use futures::AsyncReadExt;
+use futures::FutureExt;
 use futures::StreamExt;
 
 use crate::catalogs::Table;
+use crate::datasources::fuse_table::constants::META_KEY_SNAPSHOT_OBJ_LOC;
+use crate::datasources::fuse_table::constants::META_KEY_SNAPSHOT_OBJ_SIZE;
 use crate::datasources::fuse_table::io::snapshot_reader::read_table_snapshot;
 use crate::datasources::fuse_table::types::table_snapshot::BlockMeta;
 use crate::datasources::fuse_table::types::table_snapshot::TableSnapshot;
 use crate::datasources::fuse_table::util::index_tools;
-use crate::datasources::local::read_file;
 use crate::sessions::DatafuseQueryContextRef;
 
 pub struct FuseTable<T> {
     pub(crate) data_accessor: T,
+}
+
+pub(crate) async fn read_part(_part: Part) -> SendableDataBlockStream {
+    todo!()
 }
 
 #[async_trait::async_trait]
@@ -85,6 +91,8 @@ where T: DataAccessor + Send + Sync + Clone + 'static
         scan: &ScanPlan,
         _partitions: usize,
     ) -> Result<ReadDataSourcePlan> {
+        // primary func: partition/cluster pruning
+
         let tbl_snapshot = self.table_snapshot(&ctx)?;
         if let Some(snapshot) = tbl_snapshot {
             let block_metas = index_tools::filter(&snapshot, &scan.push_downs);
@@ -112,40 +120,23 @@ where T: DataAccessor + Send + Sync + Clone + 'static
         ctx: DatafuseQueryContextRef,
         source_plan: &ReadDataSourcePlan,
     ) -> Result<SendableDataBlockStream> {
-        let (tx, rx) = common_runtime::tokio::sync::mpsc::channel(100);
+        // primary functionalities:
+        // 1. read part data
+        // 2. col pruning
+        let _projection = source_plan.scan_plan.projected_schema.clone();
 
-        ctx.execute_task(async move {
-            loop {
-                match ctx.try_get_partitions(1) {
-                    Err(e) => tx.send(Err(e)).await?,
-                    Ok(v) => {
-                        if v.len() > 0 {
-                            let part = v[0];
-                            let input = self
-                                .data_accessor
-                                .get_input_stream(&part.name, None)
-                                .await?;
-                            let mut buffer = vec![];
-                            input.read_to_end(&mut buffer).await?;
-                            let reader = Cursor::new(buffer);
-                            let record_reader = RecordReader::try_new(
-                                reader,
-                                //Some(projection.to_vec()),
-                                None,
-                                None,
-                                Arc::new(|_, _| true),
-                                None,
-                            )?;
-                            for item in record_reader {
-                                tx.send(item).await;
-                            }
-                        }
-                    }
-                }
-            }
-        });
-
-        todo!()
+        let progress_callback = ctx.progress_callback();
+        let iter = std::iter::from_fn(move || match ctx.try_get_partitions(1) {
+            Err(_) => None,
+            Ok(parts) if parts.is_empty() => None,
+            Ok(parts) => Some(parts),
+        })
+        .flatten();
+        let parts = futures::stream::iter(iter);
+        let streams = parts.then(read_part);
+        let stream = ProgressStream::try_create(Box::pin(streams.flatten()), progress_callback?)?;
+        Ok(Box::pin(stream))
+        //todo!()
     }
 
     async fn append_data(

@@ -16,6 +16,7 @@
 use std::collections::HashMap;
 
 use common_datavalues::DataSchemaRef;
+use common_exception::ErrorCode;
 use common_exception::Result;
 
 /// Note: assuming table attribute will NOT be renamed.
@@ -26,7 +27,7 @@ fn project_col_idx(schema: &DataSchemaRef, projection: &DataSchemaRef) -> Result
         .iter()
         .enumerate()
         .fold(HashMap::new(), |mut v, (i, item)| {
-            v.insert(item.base_type().name().to_string(), i);
+            v.insert(item.name().to_string(), i);
             v
         });
 
@@ -38,7 +39,7 @@ fn project_col_idx(schema: &DataSchemaRef, projection: &DataSchemaRef) -> Result
             proj_idx.push(*idx)
         } else {
             return Err(ErrorCode::IllegalSchema(format!(
-                "column not exist {}",
+                "column [{}] specified in projection, but does not exist in schema",
                 name
             )));
         }
