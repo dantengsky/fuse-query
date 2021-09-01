@@ -12,18 +12,5 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 //
-
-use common_planners::Extras;
-use common_planners::Partitions;
-
-use crate::datasources::local::poc::types::statistics::ChunkLocation;
-use crate::datasources::local::poc::types::statistics::ColStats;
-use crate::datasources::local::poc::types::statistics::TableSnapshot;
-
-pub fn filter(_table_snapshot: &TableSnapshot, _push_down: &Extras) -> Partitions {
-    todo!()
-}
-
-pub fn filter_by_col_stats(_col_statistics: &ColStats, _push_down: &Extras) -> Vec<ChunkLocation> {
-    todo!()
-}
+const META_KEY_SNAPSHOT_OBJ_LOC: &'static str = "snapshot_location";
+const META_KEY_SNAPSHOT_OBJ_SIZE: &'static str = "snapshot_size";

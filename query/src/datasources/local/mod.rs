@@ -32,7 +32,6 @@ mod memory_table;
 mod memory_table_stream;
 mod null_table;
 mod parquet_table;
-mod poc;
 
 pub use csv_table::CsvTable;
 pub use csv_table_stream::CsvTableStream;

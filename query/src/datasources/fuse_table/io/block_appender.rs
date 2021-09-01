@@ -27,9 +27,9 @@ use common_exception::Result;
 use futures::StreamExt;
 use uuid::Uuid;
 
-use crate::datasources::local::poc::fuse_table::FuseTable;
-use crate::datasources::local::poc::types::statistics::BlockMeta;
-use crate::datasources::local::poc::types::statistics::ColStats;
+use crate::datasources::fuse_table::fuse_table::FuseTable;
+use crate::datasources::fuse_table::types::table_snapshot::BlockMeta;
+use crate::datasources::fuse_table::types::table_snapshot::ColStats;
 
 pub type BlockStream =
     std::pin::Pin<Box<dyn futures::stream::Stream<Item = DataBlock> + Sync + Send + 'static>>;
@@ -83,7 +83,7 @@ where T: DataAccessor + Send + Sync
                     let null_count = s.null_count.unwrap();
                     let min = s.min_value.unwrap();
                     let max = s.max_value.unwrap();
-                    (col_id, ColStats {
+                    (col_id as u32, ColStats {
                         min,
                         max,
                         null_count: null_count as u64,

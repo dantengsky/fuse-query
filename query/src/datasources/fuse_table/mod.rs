@@ -13,7 +13,8 @@
 //  limitations under the License.
 //
 
+mod constants;
 mod fuse_table;
-mod index_util;
 mod io;
 mod types;
+mod util;

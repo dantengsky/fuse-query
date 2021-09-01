@@ -12,9 +12,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 //
-
 /*
-
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -30,16 +28,11 @@ use crate::datasources::local::poc::fuse_table::FuseTable;
 impl<T> FuseTable<T>
 where T: DataAccessor
 {
-    pub(crate) async fn read_partition(
+    pub(crate) async fn read_partition1(
         &self,
         part_loc: &str,
         projection: &DataSchema,
     ) -> Result<()> {
-        //let projection = (0..schema.fields().len()).collect::<Vec<_>>();
-        // TODO (@dantengsky)
-        // 1) we have pre-knowledge of stream_length, use it
-        // 2) we need a wrapper which integrated with cache.
-
         let mut input_stream = self.data_accessor.get_input_stream(part_loc, None).await?;
 
         let metadata = read_metadata_async(&mut input_stream)
@@ -79,12 +72,12 @@ where T: DataAccessor
             .iter()
             .map(|idx| metadata.row_groups[row_group].column(**idx));
 
-        //let page_streams = futures::stream::iter(cols.map(|col| async move {
-        //    let mut reader = self.data_accessor.get_input_stream(part_loc, None).await?;
-        //    get_page_stream(col, &mut reader, vec![], Arc::new(|_, _| true))
-        //        .await
-        //        .map_err(|pe| ErrorCode::DALTransportError(pe.to_string()))
-        //}));
+        let page_streams = futures::stream::iter(cols.map(|col| async move {
+            let mut reader = self.data_accessor.get_input_stream(part_loc, None).await?;
+            get_page_stream(col, &mut reader, vec![], Arc::new(|_, _| true))
+                .await
+                .map_err(|pe| ErrorCode::DALTransportError(pe.to_string()))
+        }));
 
         //let column = 0;
         //let column_metadata = metadata.row_groups[row_group].column(column);
@@ -108,4 +101,6 @@ where T: DataAccessor
         todo!()
     }
 }
-*/
+
+
+ */

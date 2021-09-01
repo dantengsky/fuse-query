@@ -13,4 +13,4 @@
 //  limitations under the License.
 //
 
-pub mod statistics;
+pub mod table_snapshot;

@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub use common::Common;
+pub use meta_backend::MetaBackend;
+
 #[cfg(test)]
 mod common_test;
 #[cfg(test)]
@@ -20,9 +23,7 @@ mod tests;
 mod common;
 mod meta_backend;
 
+mod fuse_table;
 pub(crate) mod local;
 pub(crate) mod remote;
 pub(crate) mod system;
-
-pub use common::Common;
-pub use meta_backend::MetaBackend;

@@ -13,6 +13,7 @@
 // limitations under the License.
 //
 
-pub(crate) mod appender;
-pub(crate) mod reader;
+pub(crate) mod block_appender;
+pub(crate) mod block_reader;
 //mod write;
+pub(crate) mod snapshot_reader;

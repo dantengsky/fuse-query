@@ -52,24 +52,26 @@ use uuid::Uuid;
 
 pub type Bytes = Vec<u8>;
 pub type SnapshotId = Uuid;
-pub type ColumnId = i32;
+pub type ColumnId = u32;
 pub type ChunkLocation = String;
 
+/// A snapshot comprised of one or more segments
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
 pub struct TableSnapshot {
     pub snapshot_id: SnapshotId,
-    pub prev_snapshot_id: SnapshotId,
+    pub prev_snapshot_id: Option<SnapshotId>,
     pub summary: Summary,
     pub segment_info_location: String,
     pub segment_info_byte_size: u64,
 }
 
 /// A segment comprised of one or more blocks
-pub struct SegmentMeta {
+pub struct SegmentInfo {
     pub chunks: Vec<BlockMeta>,
     pub summary: Summary,
 }
 
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
 pub struct Summary {
     pub row_count: u64,
     pub block_count: u64,
@@ -82,10 +84,10 @@ pub struct Summary {
 /// A block is the basic unit which stored in the object storage as an object
 pub struct BlockMeta {
     pub location: String,
+    pub row_count: u64,
     pub file_byte_size: u64,
     pub compressed_size: u64,
     pub total_byte_size: u64,
-    pub row_count: u64,
     pub col_stats: HashMap<ColumnId, ColStats>,
 }
 
@@ -94,7 +96,7 @@ pub struct ColStats {
     pub min: Bytes,
     pub max: Bytes,
     pub null_count: u64,
-    pub distinct_count: Option<u64>,
     pub uncompressed_size: u64,
     pub compressed_size: u64,
+    pub distinct_count: Option<u64>,
 }
