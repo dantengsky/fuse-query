@@ -15,6 +15,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use common_arrow::arrow::array::Array;
 use common_arrow::arrow::array::ArrayRef;
 use common_arrow::arrow::bitmap::Bitmap;
 use common_arrow::arrow::bitmap::MutableBitmap;
@@ -151,21 +152,29 @@ pub trait IntoColumn {
     fn into_nullable_column(self) -> ColumnRef;
 }
 
-impl IntoColumn for &ArrayRef {
-    fn into_column(self) -> ColumnRef {
-        IntoColumn::into_column(self.clone())
-    }
+//impl IntoColumn for &ArrayRef {
+//    impl IntoColumn for &ArrayRef {
+//    fn into_column(self) -> ColumnRef {
+//        IntoColumn::into_column(self.clone())
+//    }
+//
+//    fn into_nullable_column(self) -> ColumnRef {
+//        IntoColumn::into_nullable_column(self.clone())
+//    }
+//}
 
-    fn into_nullable_column(self) -> ColumnRef {
-        IntoColumn::into_nullable_column(self.clone())
-    }
-}
-
+//pub struct Chunk<A: AsRef<dyn Array>> {
+//    arrays: Vec<A>,
+//}
+//pub type ArrayRef = Arc<dyn Array>;
 //impl<A: AsRef<dyn Array>> IntoColumn for A {
-impl IntoColumn for ArrayRef {
+//impl IntoColumn for ArrayRef {
+impl<A> IntoColumn for A
+where A: AsRef<dyn Array>
+{
     fn into_column(self) -> ColumnRef {
         use TypeID::*;
-        let data_type: DataTypePtr = from_arrow_type(self.data_type());
+        let data_type: DataTypePtr = from_arrow_type(self.as_ref().data_type());
         match data_type.data_type_id() {
             // arrow type has no nullable type
             Nullable => unimplemented!(),
@@ -191,9 +200,9 @@ impl IntoColumn for ArrayRef {
     }
 
     fn into_nullable_column(self) -> ColumnRef {
-        let size = self.len();
-        let validity = self.validity().cloned();
-        let column = self.into_column();
+        let size = self.as_ref().len();
+        let validity = self.as_ref().validity().cloned();
+        let column = self.as_ref().into_column();
         Arc::new(NullableColumn::new(
             column,
             validity.unwrap_or_else(|| {

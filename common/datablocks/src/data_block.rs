@@ -176,7 +176,8 @@ impl DataBlock {
         Ok(Self { columns, schema })
     }
 
-    pub fn from_chunk(schema: &DataSchemaRef, chuck: &Chunk<ArrayRef>) -> Result<DataBlock> {
+    pub fn from_chunk<A>(schema: &DataSchemaRef, chuck: &Chunk<A>) -> Result<DataBlock>
+    where A: AsRef<dyn Array> {
         let columns = chuck
             .columns()
             .iter()
