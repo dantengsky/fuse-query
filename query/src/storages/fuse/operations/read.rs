@@ -15,6 +15,7 @@
 
 use std::sync::Arc;
 
+use common_base::tokio::task;
 use common_exception::ErrorCode;
 use common_exception::Result;
 use common_planners::Extras;
@@ -69,7 +70,7 @@ impl FuseTable {
                 let table_schema = table_schema.clone();
                 let projection = projection.clone();
                 let reader = MetaReaders::block_meta_reader(ctx.clone());
-                async move {
+                let fut = async move {
                     let part_info = PartInfo::decode(&part.name)?;
                     let part_location = part_info.location();
                     let part_len = part_info.length();
@@ -88,7 +89,8 @@ impl FuseTable {
                             part_location, e
                         ))
                     })
-                }
+                };
+                task::unconstrained(fut)
             })
             .buffer_unordered(bite_size as usize)
             .instrument(common_tracing::tracing::Span::current());
