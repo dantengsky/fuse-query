@@ -124,8 +124,8 @@ impl SessionManager {
         self.catalog.clone()
     }
 
-    pub fn get_storage_operator(self: &Arc<Self>) -> Operator {
-        self.storage_operator.clone()
+    pub async fn get_storage_operator(self: &Arc<Self>) -> Result<Operator> {
+        Self::init_storage_operator(&self.conf).await
     }
 
     pub fn get_storage_cache_manager(&self) -> &CacheManager {
