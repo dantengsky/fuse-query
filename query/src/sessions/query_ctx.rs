@@ -46,6 +46,7 @@ use crate::catalogs::Catalog;
 use crate::catalogs::DatabaseCatalog;
 use crate::clusters::Cluster;
 use crate::configs::Config;
+use crate::experiment::task::DedicatedExecutor;
 use crate::servers::http::v1::HttpQueryHandle;
 use crate::sessions::ProcessInfo;
 use crate::sessions::QueryContextShared;
@@ -310,6 +311,10 @@ impl QueryContext {
     /// Get the storage cache manager
     pub fn get_storage_cache_manager(&self) -> &CacheManager {
         self.shared.session.session_mgr.get_storage_cache_manager()
+    }
+
+    pub fn get_storage_executor(&self) -> &DedicatedExecutor {
+        self.shared.session.session_mgr.get_storage_executor()
     }
 
     // Get the storage data accessor operator from the session manager.

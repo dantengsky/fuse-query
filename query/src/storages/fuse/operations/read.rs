@@ -69,19 +69,21 @@ impl FuseTable {
                 let table_schema = table_schema.clone();
                 let projection = projection.clone();
                 let reader = MetaReaders::block_meta_reader(ctx.clone());
+                let ctx = ctx.clone();
                 async move {
                     let part_info = PartInfo::decode(&part.name)?;
                     let part_location = part_info.location();
                     let part_len = part_info.length();
-
-                    let mut block_reader = BlockReader::new(
+                    let block_reader = BlockReader::new(
                         da,
                         part_info.location().to_owned(),
                         table_schema,
                         projection,
                         part_len,
                         reader,
+                        ctx,
                     );
+                    let block_reader = Arc::new(block_reader);
                     block_reader.read().await.map_err(|e| {
                         ErrorCode::ParquetError(format!(
                             "fail to read block {}, {}",

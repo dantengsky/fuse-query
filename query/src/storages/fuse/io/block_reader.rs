@@ -30,6 +30,7 @@ use futures::future::BoxFuture;
 use opendal::Operator;
 
 use super::parallel_async_reader::ParallelAsyncReader;
+use crate::sessions::QueryContext;
 use crate::storages::fuse::io::meta_readers::BlockMetaReader;
 
 pub struct BlockReader {
@@ -40,6 +41,7 @@ pub struct BlockReader {
     projection: Vec<usize>,
     file_len: u64,
     metadata_reader: BlockMetaReader,
+    ctx: Arc<QueryContext>,
 }
 
 impl BlockReader {
@@ -50,6 +52,7 @@ impl BlockReader {
         projection: Vec<usize>,
         file_len: u64,
         reader: BlockMetaReader,
+        ctx: Arc<QueryContext>,
     ) -> Self {
         let block_schema = Arc::new(table_schema.project(projection.clone()));
         let arrow_table_schema = table_schema.to_arrow();
@@ -61,11 +64,25 @@ impl BlockReader {
             projection,
             file_len,
             metadata_reader: reader,
+            ctx,
         }
     }
 
+    pub async fn read(self: &Arc<Self>) -> Result<DataBlock> {
+        let exec = self.ctx.get_storage_executor();
+        let reader = self.clone();
+        let r = exec
+            .spawn(async move {
+                let block = reader.do_read().await?;
+                Ok(block)
+            })
+            .await
+            .map_err(|e| ErrorCode::LogicalError(format!("{}", e.to_string())))?;
+        r
+    }
+
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn read(&mut self) -> Result<DataBlock> {
+    pub async fn do_read(&self) -> Result<DataBlock> {
         let block_meta = &self.metadata_reader.read(self.path.as_str()).await?;
         let metadata = block_meta.inner();
 

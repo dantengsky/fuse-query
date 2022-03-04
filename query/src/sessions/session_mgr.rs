@@ -39,6 +39,7 @@ use opendal::Scheme as DalSchema;
 use crate::catalogs::DatabaseCatalog;
 use crate::clusters::ClusterDiscovery;
 use crate::configs::Config;
+use crate::experiment::task::DedicatedExecutor;
 use crate::servers::http::v1::HttpQueryManager;
 use crate::sessions::session::Session;
 use crate::sessions::session_ref::SessionRef;
@@ -61,6 +62,7 @@ pub struct SessionManager {
     pub(in crate::sessions) active_sessions: Arc<RwLock<HashMap<String, Arc<Session>>>>,
     pub(in crate::sessions) storage_cache_manager: Arc<CacheManager>,
     storage_operator: Operator,
+    storage_task_executor: DedicatedExecutor,
 }
 
 impl SessionManager {
@@ -68,6 +70,11 @@ impl SessionManager {
         let catalog = Arc::new(DatabaseCatalog::try_create_with_config(conf.clone()).await?);
         let storage_cache_manager = Arc::new(CacheManager::init(&conf.query));
         let storage_accessor = Self::init_storage_operator(&conf).await?;
+
+        let storage_task_executor = DedicatedExecutor::new(
+            "Storage DedicatedExecutor",
+            std::cmp::max(1, num_cpus::get() / 2),
+        );
 
         // Cluster discovery.
         let discovery = ClusterDiscovery::create_global(conf.clone()).await?;
@@ -92,6 +99,7 @@ impl SessionManager {
             active_sessions,
             storage_cache_manager,
             storage_operator: storage_accessor,
+            storage_task_executor,
         }))
     }
 
@@ -126,6 +134,10 @@ impl SessionManager {
 
     pub fn get_storage_operator(self: &Arc<Self>) -> Operator {
         self.storage_operator.clone()
+    }
+
+    pub fn get_storage_executor<'a>(self: &'a Arc<Self>) -> &'a DedicatedExecutor {
+        &self.storage_task_executor
     }
 
     pub fn get_storage_cache_manager(&self) -> &CacheManager {
