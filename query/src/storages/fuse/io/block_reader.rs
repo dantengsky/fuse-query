@@ -12,13 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use common_arrow::arrow::datatypes::Field;
 use common_arrow::arrow::datatypes::Schema as ArrowSchema;
-use common_arrow::arrow::io::parquet::read::read_columns_many_async;
+use common_arrow::arrow::io::parquet::read::column_iter_to_arrays;
+use common_arrow::arrow::io::parquet::read::ArrayIter;
 use common_arrow::arrow::io::parquet::read::RowGroupDeserializer;
-use common_base::tokio::sync::Semaphore;
+use common_arrow::parquet::metadata::ColumnChunkMetaData;
+use common_arrow::parquet::metadata::RowGroupMetaData;
+use common_arrow::parquet::read::BasicDecompressor;
+use common_arrow::parquet::read::PageIterator;
 use common_datablocks::DataBlock;
 use common_datavalues::prelude::*;
 use common_exception::ErrorCode;
@@ -26,10 +31,10 @@ use common_exception::Result;
 use common_tracing::tracing;
 use common_tracing::tracing::debug_span;
 use common_tracing::tracing::Instrument;
-use futures::future::BoxFuture;
+use futures::future::try_join_all;
+use futures::AsyncReadExt;
 use opendal::Operator;
 
-use super::parallel_async_reader::ParallelAsyncReader;
 use crate::sessions::QueryContext;
 use crate::storages::fuse::io::meta_readers::BlockMetaReader;
 
@@ -68,22 +73,23 @@ impl BlockReader {
         }
     }
 
-    pub async fn read(self: &Arc<Self>) -> Result<DataBlock> {
-        let exec = self.ctx.get_storage_executor();
-        let reader = self.clone();
-        let r = exec
-            .spawn(async move {
-                let block = reader.do_read().await?;
-                Ok(block)
-            })
-            .await
-            .map_err(|e| ErrorCode::LogicalError(format!("{}", e.to_string())))?;
-        r
-    }
+    // pub async fn read(self: &Arc<Self>) -> Result<DataBlock> {
+    //     let exec = self.ctx.get_storage_executor();
+    //     let reader = self.clone();
+    //     exec.spawn(
+    //         async move {
+    //             let block = reader.do_read().await?;
+    //             Ok(block)
+    //         }
+    //         .instrument(debug_span!("do_read_block").or_current()),
+    //     )
+    //     .await
+    //     .map_err(|e| ErrorCode::LogicalError(format!("{}", e.to_string())))?
+    // }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    pub async fn do_read(&self) -> Result<DataBlock> {
-        let block_meta = &self.metadata_reader.read(self.path.as_str()).await?;
+    pub async fn read(&self) -> Result<DataBlock> {
+        let block_meta = self.metadata_reader.read(self.path.as_str()).await?;
         let metadata = block_meta.inner();
 
         // FUSE uses exact one "row group"
@@ -98,7 +104,7 @@ impl BlockReader {
         };
 
         let arrow_fields = &self.arrow_table_schema.fields;
-        let stream_len = self.file_len;
+        //let stream_len = self.file_len;
         let parquet_fields = metadata.schema().fields();
 
         // read_columns_many_async use field name to filter columns
@@ -115,30 +121,20 @@ impl BlockReader {
             })
             .collect();
 
-        // todo(youngsofun): make this a config
-        let semaphore = Arc::new(Semaphore::new(2));
-        let factory = || {
-            let data_accessor = self.data_accessor.clone();
-            let path = self.path.clone();
-            let semaphore = semaphore.clone();
-            Box::pin(async move {
-                let permit = semaphore.clone().acquire_owned().await.unwrap();
-                Ok(ParallelAsyncReader::new(
-                    permit,
-                    data_accessor
-                        .object(path.as_str())
-                        .limited_reader(stream_len),
-                ))
-            }) as BoxFuture<_>
-        };
-
-        let column_chunks = read_columns_many_async(factory, row_group, fields_to_read, None)
+        let num_rows = row_group.num_rows();
+        let column_chunks = self
+            .read_columns(
+                self.data_accessor.clone(),
+                self.path.clone(),
+                //block_meta,
+                &block_meta.inner().row_groups[0],
+                fields_to_read,
+            )
             .instrument(debug_span!("block_reader_read_columns").or_current())
             .await
             .map_err(|e| ErrorCode::ParquetError(e.to_string()))?;
 
-        let mut chunks =
-            RowGroupDeserializer::new(column_chunks, row_group.num_rows() as usize, None);
+        let mut chunks = RowGroupDeserializer::new(column_chunks, num_rows as usize, None);
 
         // expect exact one chunk
         let chunk = match chunks.next() {
@@ -148,5 +144,61 @@ impl BlockReader {
 
         let block = DataBlock::from_chunk(&self.block_schema, &chunk)?;
         Ok(block)
+    }
+
+    pub async fn read_columns<'a>(
+        &self,
+        data_accessor: Operator,
+        path: String,
+        row_group: &RowGroupMetaData,
+        fields: Vec<Field>,
+    ) -> Result<Vec<ArrayIter<'a>>> {
+        let exec = self.ctx.get_storage_executor();
+        let columns = row_group.columns();
+        let col_map = columns
+            .iter()
+            .map(|col| (col.descriptor().path_in_schema()[0].clone(), col))
+            .collect::<HashMap<String, &ColumnChunkMetaData>>();
+        let mut futs = vec![];
+        let mut col_meta = vec![];
+        for field in &fields {
+            if let Some(meta) = col_map.get(field.name.as_str()) {
+                let (start, len) = meta.byte_range();
+                let mut reader = data_accessor.object(path.as_str()).range_reader(start, len);
+                let mut chunk = vec![0; len as usize];
+                let fut = async move {
+                    reader.read_exact(&mut chunk).await?;
+                    Ok::<_, ErrorCode>(chunk)
+                };
+                // spawn io tasks
+                let fut = exec.spawn(fut);
+                futs.push(fut);
+                col_meta.push(meta);
+            }
+        }
+        let res = try_join_all(futs)
+            .await
+            .map_err(|e| ErrorCode::LogicalError(e.to_string()))?;
+        let chunk_size = row_group.num_rows() as usize;
+        let mut result = vec![];
+        for (i, chunk) in res.into_iter().enumerate() {
+            let chunk = chunk?;
+            let col_meta = col_meta[i];
+            let field = fields[i].clone();
+            let pages = PageIterator::new(
+                std::io::Cursor::new(chunk),
+                col_meta.num_values(),
+                col_meta.compression(),
+                col_meta.descriptor().clone(),
+                Arc::new(|_, _| true),
+                vec![],
+            );
+
+            let l = BasicDecompressor::new(pages, vec![]);
+            let r = col_meta.descriptor().type_();
+            let c = column_iter_to_arrays(vec![l], vec![r], field.clone(), chunk_size)?;
+            result.push(c)
+        }
+        Ok(result)
     }
 }

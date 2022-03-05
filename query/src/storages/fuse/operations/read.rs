@@ -83,7 +83,7 @@ impl FuseTable {
                         reader,
                         ctx,
                     );
-                    let block_reader = Arc::new(block_reader);
+                    //let block_reader = Arc::new(block_reader);
                     block_reader.read().await.map_err(|e| {
                         ErrorCode::ParquetError(format!(
                             "fail to read block {}, {}",
