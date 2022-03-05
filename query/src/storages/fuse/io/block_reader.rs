@@ -29,6 +29,7 @@ use common_datavalues::prelude::*;
 use common_exception::ErrorCode;
 use common_exception::Result;
 use common_tracing::tracing;
+use common_tracing::tracing::debug;
 use common_tracing::tracing::debug_span;
 use common_tracing::tracing::Instrument;
 use futures::future::try_join_all;
@@ -72,20 +73,6 @@ impl BlockReader {
             ctx,
         }
     }
-
-    // pub async fn read(self: &Arc<Self>) -> Result<DataBlock> {
-    //     let exec = self.ctx.get_storage_executor();
-    //     let reader = self.clone();
-    //     exec.spawn(
-    //         async move {
-    //             let block = reader.do_read().await?;
-    //             Ok(block)
-    //         }
-    //         .instrument(debug_span!("do_read_block").or_current()),
-    //     )
-    //     .await
-    //     .map_err(|e| ErrorCode::LogicalError(format!("{}", e.to_string())))?
-    // }
 
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn read(&self) -> Result<DataBlock> {
@@ -161,43 +148,55 @@ impl BlockReader {
             .collect::<HashMap<String, &ColumnChunkMetaData>>();
         let mut futs = vec![];
         let mut col_meta = vec![];
-        for field in &fields {
-            if let Some(meta) = col_map.get(field.name.as_str()) {
-                let (start, len) = meta.byte_range();
-                let mut reader = data_accessor.object(path.as_str()).range_reader(start, len);
-                let mut chunk = vec![0; len as usize];
-                let fut = async move {
-                    reader.read_exact(&mut chunk).await?;
-                    Ok::<_, ErrorCode>(chunk)
-                };
-                // spawn io tasks
-                let fut = exec.spawn(fut);
-                futs.push(fut);
-                col_meta.push(meta);
+        let res;
+        {
+            let _span_read_cols = debug_span!("read_cols");
+            for field in &fields {
+                if let Some(meta) = col_map.get(field.name.as_str()) {
+                    let (start, len) = meta.byte_range();
+                    let mut reader = data_accessor.object(path.as_str()).range_reader(start, len);
+                    let mut chunk = vec![0; len as usize];
+                    debug!("read_exact, offset {}, len {}", start, len);
+                    let fut = async move {
+                        reader
+                            .read_exact(&mut chunk)
+                            .instrument(debug_span!("read_exact_col_chunk").or_current())
+                            .await?;
+                        Ok::<_, ErrorCode>(chunk)
+                    };
+                    // spawn io tasks
+                    let fut = exec.spawn(fut);
+                    futs.push(fut);
+                    col_meta.push(meta);
+                }
             }
+            res = try_join_all(futs)
+                .await
+                .map_err(|e| ErrorCode::LogicalError(e.to_string()))?;
         }
-        let res = try_join_all(futs)
-            .await
-            .map_err(|e| ErrorCode::LogicalError(e.to_string()))?;
-        let chunk_size = row_group.num_rows() as usize;
-        let mut result = vec![];
-        for (i, chunk) in res.into_iter().enumerate() {
-            let chunk = chunk?;
-            let col_meta = col_meta[i];
-            let field = fields[i].clone();
-            let pages = PageIterator::new(
-                std::io::Cursor::new(chunk),
-                col_meta.num_values(),
-                col_meta.compression(),
-                col_meta.descriptor().clone(),
-                Arc::new(|_, _| true),
-                vec![],
-            );
 
-            let l = BasicDecompressor::new(pages, vec![]);
-            let r = col_meta.descriptor().type_();
-            let c = column_iter_to_arrays(vec![l], vec![r], field.clone(), chunk_size)?;
-            result.push(c)
+        let mut result = vec![];
+        {
+            let _span_build_array_iter = debug_span!("build_array_iter");
+            let chunk_size = row_group.num_rows() as usize;
+            for (i, chunk) in res.into_iter().enumerate() {
+                let chunk = chunk?;
+                let col_meta = col_meta[i];
+                let field = fields[i].clone();
+                let pages = PageIterator::new(
+                    std::io::Cursor::new(chunk),
+                    col_meta.num_values(),
+                    col_meta.compression(),
+                    col_meta.descriptor().clone(),
+                    Arc::new(|_, _| true),
+                    vec![],
+                );
+
+                let l = BasicDecompressor::new(pages, vec![]);
+                let r = col_meta.descriptor().type_();
+                let c = column_iter_to_arrays(vec![l], vec![r], field.clone(), chunk_size)?;
+                result.push(c)
+            }
         }
         Ok(result)
     }
