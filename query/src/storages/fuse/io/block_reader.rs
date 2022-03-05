@@ -32,6 +32,7 @@ use common_tracing::tracing;
 use common_tracing::tracing::debug;
 use common_tracing::tracing::debug_span;
 use common_tracing::tracing::Instrument;
+use common_tracing::tracing::Span;
 use futures::future::try_join_all;
 use futures::AsyncReadExt;
 use opendal::Operator;
@@ -150,17 +151,21 @@ impl BlockReader {
         let mut col_meta = vec![];
         let res;
         {
-            let _span_read_cols = debug_span!("read_cols");
+            let _span_read_cols = debug_span!("issue_read_cols");
+            debug!("issue readings | Begin");
             for field in &fields {
                 if let Some(meta) = col_map.get(field.name.as_str()) {
                     let (start, len) = meta.byte_range();
                     let mut reader = data_accessor.object(path.as_str()).range_reader(start, len);
                     let mut chunk = vec![0; len as usize];
                     debug!("read_exact, offset {}, len {}", start, len);
+                    let current = Span::current();
                     let fut = async move {
                         reader
                             .read_exact(&mut chunk)
-                            .instrument(debug_span!("read_exact_col_chunk").or_current())
+                            .instrument(
+                                debug_span!(parent: current, "read_exact_col_chunk").or_current(),
+                            )
                             .await?;
                         Ok::<_, ErrorCode>(chunk)
                     };
@@ -170,7 +175,9 @@ impl BlockReader {
                     col_meta.push(meta);
                 }
             }
+            debug!("issue readings | End");
             res = try_join_all(futs)
+                .instrument(debug_span!("join_all_read_cols").or_current())
                 .await
                 .map_err(|e| ErrorCode::LogicalError(e.to_string()))?;
         }
