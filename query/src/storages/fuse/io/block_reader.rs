@@ -122,16 +122,20 @@ impl BlockReader {
             .await
             .map_err(|e| ErrorCode::ParquetError(e.to_string()))?;
 
-        let mut chunks = RowGroupDeserializer::new(column_chunks, num_rows as usize, None);
-
-        // expect exact one chunk
-        let chunk = match chunks.next() {
-            None => return Err(ErrorCode::ParquetError("fail to get a chunk")),
-            Some(chunk) => chunk.map_err(|e| ErrorCode::ParquetError(e.to_string()))?,
+        let chunk = {
+            let _ = debug_span!("extract_chunk");
+            let mut chunks = RowGroupDeserializer::new(column_chunks, num_rows as usize, None);
+            // expect exact one chunk
+            match chunks.next() {
+                None => return Err(ErrorCode::ParquetError("fail to get a chunk")),
+                Some(chunk) => chunk.map_err(|e| ErrorCode::ParquetError(e.to_string()))?,
+            }
         };
 
-        let block = DataBlock::from_chunk(&self.block_schema, &chunk)?;
-        Ok(block)
+        {
+            let _ = debug_span!("datablock_from_chunk");
+            DataBlock::from_chunk(&self.block_schema, &chunk)
+        }
     }
 
     pub async fn read_columns<'a>(
