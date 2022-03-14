@@ -16,7 +16,6 @@
 use std::str::FromStr;
 use std::sync::Arc;
 
-use async_stream::stream;
 use common_base::TrySpawn;
 use common_exception::ErrorCode;
 use common_exception::Result;

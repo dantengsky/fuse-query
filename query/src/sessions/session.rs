@@ -229,7 +229,7 @@ impl Session {
         malloc_size(self)
     }
 
-    pub fn get_storage_operator(self: &Arc<Self>) -> Operator {
-        self.session_mgr.get_storage_operator()
+    pub async fn get_storage_operator(self: &Arc<Self>) -> Result<Operator> {
+        self.session_mgr.get_storage_operator().await
     }
 }
