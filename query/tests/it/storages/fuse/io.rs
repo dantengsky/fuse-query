@@ -35,8 +35,12 @@ use opendal::Operator;
 use tempfile::TempDir;
 use uuid::Uuid;
 
+use super::table_test_fixture::TestFixture;
+
 #[tokio::test]
 async fn test_fuse_table_block_appender() {
+    let fixture = TestFixture::new().await;
+    let ctx = fixture.ctx();
     let tmp_dir = TempDir::new().unwrap();
     let local_fs = Operator::new(
         fs::Backend::build()
@@ -53,6 +57,7 @@ async fn test_fuse_table_block_appender() {
 
     let locs = TableMetaLocationGenerator::with_prefix(".".to_owned());
     let segments = BlockStreamWriter::write_block_stream(
+        ctx.clone(),
         local_fs.clone(),
         Box::pin(block_stream),
         schema.clone(),
@@ -80,6 +85,7 @@ async fn test_fuse_table_block_appender() {
     let block_stream = futures::stream::iter(blocks);
 
     let segments = BlockStreamWriter::write_block_stream(
+        ctx.clone(),
         local_fs.clone(),
         Box::pin(block_stream),
         schema.clone(),
@@ -100,6 +106,7 @@ async fn test_fuse_table_block_appender() {
     // empty blocks
     let block_stream = futures::stream::iter(vec![]);
     let segments = BlockStreamWriter::write_block_stream(
+        ctx.clone(),
         local_fs,
         Box::pin(block_stream),
         schema,
@@ -255,13 +262,16 @@ async fn test_block_stream_writer() -> common_exception::Result<()> {
     let schema = DataSchemaRefExt::create(vec![DataField::new("a", i32::to_data_type())]);
     let gen_rows = |n| std::iter::repeat(1i32).take(n).collect::<Vec<_>>();
     let gen_block = |col| DataBlock::create(schema.clone(), vec![Series::from_data(col)]);
+    let fixture = TestFixture::new().await;
+    let ctx = fixture.ctx();
 
     let test_case = |rows_per_sample_block,
                      max_rows_per_block,
                      max_blocks_per_segment,
                      num_blocks,
                      schema,
-                     case_name: &'static str| async move {
+                     case_name: &'static str,
+                     ctx| async move {
         let sample_block = gen_block(gen_rows(rows_per_sample_block));
         let block_stream =
             futures::stream::iter(std::iter::repeat(Ok(sample_block)).take(num_blocks));
@@ -270,6 +280,7 @@ async fn test_block_stream_writer() -> common_exception::Result<()> {
         let operator = Operator::new(data_accessor.clone());
         let locs = TableMetaLocationGenerator::with_prefix(".".to_owned());
         let stream = BlockStreamWriter::write_block_stream(
+            ctx,
             operator,
             Box::pin(block_stream),
             schema,
@@ -307,6 +318,7 @@ async fn test_block_stream_writer() -> common_exception::Result<()> {
         number_of_blocks,
         schema.clone(),
         "simple regular data",
+        ctx.clone(),
     )
     .await?;
 
@@ -321,6 +333,7 @@ async fn test_block_stream_writer() -> common_exception::Result<()> {
         number_of_blocks,
         schema.clone(),
         "with remainder",
+        ctx,
     )
     .await?;
 

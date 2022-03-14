@@ -17,6 +17,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use async_stream::stream;
+use common_base::TrySpawn;
 use common_exception::ErrorCode;
 use common_exception::Result;
 use common_streams::SendableDataBlockStream;
@@ -48,7 +49,8 @@ impl FuseTable {
 
         let da = ctx.get_storage_operator().await?;
 
-        let mut segment_stream = BlockStreamWriter::write_block_stream(
+        let segment_stream = BlockStreamWriter::write_block_stream(
+            ctx.clone(),
             da.clone(),
             stream,
             self.table_info.schema().clone(),
@@ -59,25 +61,66 @@ impl FuseTable {
         .await;
 
         let locs = self.meta_locations().clone();
-        let log_entries = stream! {
-            while let Some(segment) = segment_stream.next().await {
-                let log_entry_res = match segment {
+        let ctx = ctx.clone();
+        let log_entries = segment_stream.then(move |segment| {
+            let da = da.clone();
+            let ctx = ctx.clone();
+            let locs = locs.clone();
+            async move {
+                match segment {
                     Ok(seg) => {
                         let seg_loc = locs.gen_segment_info_location();
                         let bytes = serde_json::to_vec(&seg)?;
-                        da.object(&seg_loc)
-                        .writer()
-                        .write_bytes(bytes)
-                        .await
-                        .map_err(|e| ErrorCode::DalTransportError(e.to_string()))?;
+                        let loc = seg_loc.clone();
+                        let fut = async move {
+                            da.object(&loc)
+                                .writer()
+                                .write_bytes(bytes)
+                                .await
+                                .map_err(|e| ErrorCode::DalTransportError(e.to_string()))
+                        };
+                        let _ = ctx
+                            .get_storage_runtime()
+                            .try_spawn(fut)?
+                            .await
+                            .map_err(|e| {
+                                ErrorCode::DalTransportError(format!(
+                                    "io task failure. {}",
+                                    e.to_string()
+                                ))
+                            })?;
                         let log_entry = AppendOperationLogEntry::new(seg_loc, seg);
                         Ok(log_entry)
-                    },
+                    }
                     Err(err) => Err(err),
-                };
-                yield(log_entry_res);
+                }
             }
-        };
+        });
+
+        //let log_entries = stream! {
+        //    while let Some(segment) = segment_stream.next().await {
+        //        let log_entry_res = match segment {
+        //            Ok(seg) => {
+        //                let seg_loc = locs.gen_segment_info_location();
+        //                let bytes = serde_json::to_vec(&seg)?;
+        //                let fut = async move {
+        //                    da.clone().object(&seg_loc)
+        //                    .writer()
+        //                    .write_bytes(bytes)
+        //                    .await
+        //                    .map_err(|e| ErrorCode::DalTransportError(e.to_string()))
+        //                };
+        //                ctx.get_storage_runtime().try_spawn(fut)?.await.map_err(|e| {
+        //                    ErrorCode::DalTransportError(format!("io task failure. {}", e.to_string()))
+        //                })?;
+        //                let log_entry = AppendOperationLogEntry::new(seg_loc, seg);
+        //                Ok(log_entry)
+        //            },
+        //            Err(err) => Err(err),
+        //        };
+        //        yield(log_entry_res);
+        //    }
+        //};
         Ok(Box::pin(log_entries))
     }
 

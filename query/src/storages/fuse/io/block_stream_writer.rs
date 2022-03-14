@@ -27,6 +27,7 @@ use futures::TryStreamExt;
 use opendal::Operator;
 use parquet_format_async_temp::FileMetaData;
 
+use crate::sessions::QueryContext;
 use crate::storages::fuse::io::block_writer;
 use crate::storages::fuse::io::TableMetaLocationGenerator;
 use crate::storages::fuse::meta::ColumnId;
@@ -39,6 +40,7 @@ pub type SegmentInfoStream =
     std::pin::Pin<Box<dyn futures::stream::Stream<Item = Result<SegmentInfo>> + Send>>;
 
 pub struct BlockStreamWriter {
+    ctx: Arc<QueryContext>,
     num_block_threshold: usize,
     data_accessor: Operator,
     data_schema: Arc<DataSchema>,
@@ -49,6 +51,7 @@ pub struct BlockStreamWriter {
 
 impl BlockStreamWriter {
     pub async fn write_block_stream(
+        ctx: Arc<QueryContext>,
         data_accessor: Operator,
         block_stream: SendableDataBlockStream,
         data_schema: Arc<DataSchema>,
@@ -71,6 +74,7 @@ impl BlockStreamWriter {
         // Write out the blocks.
         // And transform the stream of DataBlocks into Stream of SegmentInfo at the same time.
         let block_writer = BlockStreamWriter::new(
+            ctx,
             block_per_segment,
             data_accessor,
             data_schema,
@@ -82,12 +86,14 @@ impl BlockStreamWriter {
     }
 
     pub fn new(
+        ctx: Arc<QueryContext>,
         num_block_threshold: usize,
         data_accessor: Operator,
         data_schema: Arc<DataSchema>,
         meta_locations: TableMetaLocationGenerator,
     ) -> Self {
         Self {
+            ctx,
             num_block_threshold,
             data_accessor,
             data_schema,
@@ -130,9 +136,14 @@ impl BlockStreamWriter {
         let partial_acc = acc.begin(&block)?;
         let schema = block.schema().to_arrow();
         let location = self.meta_locations.gen_block_location();
-        let (file_size, file_meta_data) =
-            block_writer::write_block(&schema, block, self.data_accessor.clone(), &location)
-                .await?;
+        let (file_size, file_meta_data) = block_writer::write_block(
+            self.ctx.clone(),
+            &schema,
+            block,
+            self.data_accessor.clone(),
+            &location,
+        )
+        .await?;
         let col_offsets = Self::column_metas(&file_meta_data)?;
         acc = partial_acc.end(file_size, location, col_offsets);
         self.number_of_blocks_accumulated += 1;

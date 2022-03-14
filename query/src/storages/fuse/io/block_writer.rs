@@ -13,19 +13,25 @@
 //  limitations under the License.
 //
 
+use std::sync::Arc;
+
 use common_arrow::arrow::chunk::Chunk;
 use common_arrow::arrow::datatypes::DataType as ArrowDataType;
 use common_arrow::arrow::datatypes::Schema as ArrowSchema;
 use common_arrow::arrow::io::parquet::write::WriteOptions;
 use common_arrow::arrow::io::parquet::write::*;
 use common_arrow::parquet::encoding::Encoding;
+use common_base::TrySpawn;
 use common_datablocks::DataBlock;
 use common_exception::ErrorCode;
 use common_exception::Result;
 use opendal::Operator;
 use parquet_format_async_temp::FileMetaData;
 
+use crate::sessions::QueryContext;
+
 pub async fn write_block(
+    ctx: Arc<QueryContext>,
     arrow_schema: &ArrowSchema,
     block: DataBlock,
     data_accessor: Operator,
@@ -57,12 +63,23 @@ pub async fn write_block(
         common_arrow::write_parquet_file(&mut buf, row_groups, arrow_schema.clone(), options)
             .map_err(|e| ErrorCode::ParquetError(e.to_string()))?;
 
-    data_accessor
-        .object(location)
-        .writer()
-        .write_bytes(buf)
+    // hot fix; use IO thread to do the write
+
+    let loc = location.to_owned();
+    let fut = async move {
+        data_accessor
+            .object(loc.as_str())
+            .writer()
+            .write_bytes(buf)
+            .await
+            .map_err(|e| ErrorCode::DalTransportError(e.to_string()))
+    };
+
+    let _ = ctx
+        .get_storage_runtime()
+        .try_spawn(fut)?
         .await
-        .map_err(|e| ErrorCode::DalTransportError(e.to_string()))?;
+        .map_err(|e| ErrorCode::DalTransportError(format!("io task failure. {}", e.to_string())))?;
 
     Ok(result)
 }

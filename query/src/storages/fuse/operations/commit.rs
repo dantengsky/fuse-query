@@ -20,6 +20,7 @@ use std::time::Instant;
 use backoff::backoff::Backoff;
 use backoff::ExponentialBackoffBuilder;
 use common_base::ProgressValues;
+use common_base::TrySpawn;
 use common_datavalues::DataSchema;
 use common_exception::ErrorCode;
 use common_exception::Result;
@@ -162,14 +163,24 @@ impl FuseTable {
 
         let uuid = new_snapshot.snapshot_id;
         let snapshot_loc = self.meta_locations().snapshot_location_from_uuid(&uuid);
+        let sloc = snapshot_loc.clone();
         let bytes = serde_json::to_vec(&new_snapshot)?;
         let operator = ctx.get_storage_operator().await?;
-        operator
-            .object(&snapshot_loc)
-            .writer()
-            .write_bytes(bytes)
+        let fut = async move {
+            operator
+                .object(&sloc)
+                .writer()
+                .write_bytes(bytes)
+                .await
+                .map_err(|e| ErrorCode::DalTransportError(e.to_string()))
+        };
+        let _ = ctx
+            .get_storage_runtime()
+            .try_spawn(fut)?
             .await
-            .map_err(|e| ErrorCode::DalTransportError(e.to_string()))?;
+            .map_err(|e| {
+                ErrorCode::DalTransportError(format!("io task failure. {}", e.to_string()))
+            })?;
 
         Self::commit_to_meta_server(ctx, &self.get_table_info().ident, snapshot_loc).await?;
         ctx.get_write_progress().incr(&progress_values);
