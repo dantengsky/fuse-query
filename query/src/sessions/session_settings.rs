@@ -166,6 +166,13 @@ impl Settings {
             ret.set_max_threads(cpus)?;
         }
 
+        // Overwrite settings from env.
+        {
+            if let Ok(_val) = std::env::var("enable_new_processor_framework") {
+                ret.enable_new_processor_framework()?;
+            }
+        }
+
         Ok(ret)
     }
 
@@ -185,6 +192,11 @@ impl Settings {
     pub fn set_max_threads(&self, val: u64) -> Result<()> {
         let key = "max_threads";
         self.try_set_u64(key, val, false)
+    }
+
+    fn enable_new_processor_framework(&self) -> Result<()> {
+        let key = "enable_new_processor_framework";
+        self.try_set_u64(key, 1, false)
     }
 
     // Get flight client timeout.
