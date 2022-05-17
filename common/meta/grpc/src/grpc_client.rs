@@ -175,13 +175,16 @@ impl MetaGrpcClient {
         MetaServiceClient<InterceptedService<Channel, AuthInterceptor>>,
         MetaError,
     > {
-        let channel = {
-            let eps = self.endpoints.read().await;
-            if (*eps).is_empty() {
-                return Err(MetaError::InvalidConfig("endpoints is empty".to_string()));
-            }
-            self.conn_pool.get(&*eps).await?
-        };
+        //let channel = {
+        //    let eps = self.endpoints.read().await;
+        //    if (*eps).is_empty() {
+        //        return Err(MetaError::InvalidConfig("endpoints is empty".to_string()));
+        //    }
+        //    self.conn_pool.get(&*eps).await?
+        //};
+        let addr = { self.endpoints.read().await[0].clone() };
+        let channel = common_grpc::ConnectionFactory::create_rpc_channel(addr, None, None).unwrap();
+
         tracing::info!("connecting with channel: {:?}", channel);
 
         let mut client = MetaServiceClient::new(channel.clone());
