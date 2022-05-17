@@ -112,6 +112,8 @@ pub struct MetaGrpcClient {
     username: String,
     password: String,
     token: RwLock<Option<Vec<u8>>>,
+    timeout: Option<Duration>,
+    tls_conf: Option<RpcClientTlsConfig>,
 }
 
 const AUTH_TOKEN_KEY: &str = "auth-token-bin";
@@ -138,6 +140,8 @@ impl MetaGrpcClient {
             username: conf.meta_service_config.username.to_string(),
             password: conf.meta_service_config.password.to_string(),
             token: RwLock::new(None),
+            timeout: Some(Duration::from_secs(conf.client_timeout_in_second)),
+            tls_conf: conf.meta_service_config.tls_conf.clone(),
         });
 
         Ok(client)
@@ -150,11 +154,11 @@ impl MetaGrpcClient {
         username: &str,
         password: &str,
         timeout: Option<Duration>,
-        conf: Option<RpcClientTlsConfig>,
+        tls_conf: Option<RpcClientTlsConfig>,
     ) -> Result<Arc<Self>> {
         let mgr = MetaChannelManager {
             timeout,
-            conf: conf.clone(),
+            conf: tls_conf.clone(),
         };
 
         let client = Arc::new(Self {
@@ -163,6 +167,8 @@ impl MetaGrpcClient {
             username: username.to_string(),
             password: password.to_string(),
             token: RwLock::new(None),
+            timeout,
+            tls_conf,
         });
 
         Ok(client)
@@ -183,7 +189,17 @@ impl MetaGrpcClient {
         //    self.conn_pool.get(&*eps).await?
         //};
         let addr = { self.endpoints.read().await[0].clone() };
-        let channel = common_grpc::ConnectionFactory::create_rpc_channel(addr, None, None).unwrap();
+        let channel = common_grpc::ConnectionFactory::create_rpc_channel(
+            addr,
+            self.timeout.clone(),
+            self.tls_conf.clone(),
+        )
+        .map_err(|e| {
+            MetaError::MetaNetworkError(MetaNetworkError::ConnectionError(ConnectionError::new(
+                e,
+                "Failed to create grpc client channel",
+            )))
+        })?;
 
         tracing::info!("connecting with channel: {:?}", channel);
 
