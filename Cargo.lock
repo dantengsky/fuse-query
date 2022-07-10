@@ -3924,6 +3924,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lz4_flex"
+version = "0.9.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "74141c8af4bb8136dafb5705826bdd9dce823021db897c1129191804140ddf84"
+dependencies = [
+ "twox-hash",
+]
+
+[[package]]
 name = "lzma-sys"
 version = "0.1.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4898,14 +4907,15 @@ dependencies = [
 [[package]]
 name = "parquet2"
 version = "0.14.1"
-source = "git+https://github.com/datafuse-extras/parquet2?rev=3a468fc3c4#3a468fc3c43154b11c22800aff0b83cd22fd4d3c"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33e434af3293ba384075a56d4b400ce659868ca7823142194ef204f01ab35e50"
 dependencies = [
  "async-stream",
  "bitpacking",
  "brotli",
  "flate2",
  "futures",
- "lz4",
+ "lz4_flex",
  "parquet-format-async-temp",
  "snap",
  "streaming-decompression",
