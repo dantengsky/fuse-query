@@ -23,7 +23,7 @@ simd = ["common-arrow/simd"]
 tokio-console = ["common-tracing/console", "common-base/tracing"]
 memory-profiling = ["common-base/memory-profiling", "common-http/memory-profiling", "tempfile"]
 storage-hdfs = ["opendal/services-hdfs", "common-storage/storage-hdfs"]
-hive = ["common-hive-meta-store", "thrift", "storage-hdfs", "common-config/hive"]
+hive = ["common-hive-meta-store", "thrift", "storage-hdfs", "common-config/hive", "common-storages/hive"]
 
 [dependencies]
 # Workspace dependencies
@@ -60,6 +60,7 @@ common-pipeline = { path = "../common/pipeline" }
 common-planners = { path = "../common/planners" }
 common-settings = { path = "../common/settings" }
 common-storage = { path = "../common/storage" }
+common-storages = { path = "../common/storages" }
 common-streams = { path = "../common/streams" }
 common-tracing = { path = "../common/tracing" }
 common-users = { path = "../common/users" }

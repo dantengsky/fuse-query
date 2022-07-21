@@ -39,10 +39,10 @@ use common_tracing::tracing::warn;
 use futures::AsyncReadExt;
 use opendal::Object;
 use opendal::Operator;
+use retry::Retryable;
 
-use crate::catalogs::hive::HivePartInfo;
-use crate::storages::fuse::io::retry;
-use crate::storages::fuse::io::retry::Retryable;
+use crate::hive::hive_partition::HivePartInfo;
+use crate::retry;
 
 #[derive(Clone)]
 pub struct HiveParquetBlockReader {

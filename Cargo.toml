@@ -37,6 +37,7 @@ members = [
     "common/tracing",
     "common/users",
     "common/storage",
+    "common/storages",
     "common/fuse-meta",
     # Query
     "query",

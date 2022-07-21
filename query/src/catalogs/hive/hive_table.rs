@@ -14,6 +14,8 @@
 
 use std::sync::Arc;
 
+use common_catalog::table::Table;
+use common_catalog::table::TableStatistics;
 use common_datablocks::DataBlock;
 use common_datavalues::DataSchemaRef;
 use common_exception::ErrorCode;
@@ -25,6 +27,7 @@ use common_planners::Partitions;
 use common_planners::ReadDataSourcePlan;
 use common_planners::Statistics;
 use common_planners::TruncateTablePlan;
+use common_storages::hive::HiveParquetBlockReader;
 use common_streams::SendableDataBlockStream;
 use futures::TryStreamExt;
 use opendal::ObjectMode;
@@ -39,9 +42,6 @@ use crate::pipelines::processors::SyncSourcer;
 use crate::pipelines::Pipeline;
 use crate::pipelines::SourcePipeBuilder;
 use crate::sessions::TableContext;
-use crate::storages::hive::HiveParquetBlockReader;
-use crate::storages::Table;
-use crate::storages::TableStatistics;
 
 /// ! Dummy implementation for HIVE TABLE
 

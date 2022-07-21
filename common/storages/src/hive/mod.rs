@@ -14,3 +14,6 @@
 
 pub mod hive_parquet_block_reader;
 pub use hive_parquet_block_reader::HiveParquetBlockReader;
+mod hive_partition;
+
+pub use hive_partition::HivePartInfo;

@@ -1684,6 +1684,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "common-storages"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "backoff",
+ "common-arrow",
+ "common-base",
+ "common-datablocks",
+ "common-datavalues",
+ "common-exception",
+ "common-planners",
+ "common-tracing",
+ "futures",
+ "globiter",
+ "opendal",
+ "percent-encoding",
+ "serde",
+ "typetag",
+]
+
+[[package]]
 name = "common-streams"
 version = "0.1.0"
 dependencies = [
@@ -2298,6 +2319,7 @@ dependencies = [
  "common-planners",
  "common-settings",
  "common-storage",
+ "common-storages",
  "common-streams",
  "common-tracing",
  "common-users",

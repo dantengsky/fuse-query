@@ -18,18 +18,18 @@ use std::sync::Arc;
 use common_arrow::parquet::metadata::FileMetaData;
 use common_base::base::Progress;
 use common_base::base::ProgressValues;
+use common_catalog::table_context::TableContext;
 use common_datablocks::DataBlock;
 use common_exception::ErrorCode;
 use common_exception::Result;
 use common_planners::PartInfoPtr;
+use common_storages::hive::HiveParquetBlockReader;
 
 use crate::catalogs::hive::hive_table_source::State::Generated;
 use crate::pipelines::processors::port::OutputPort;
 use crate::pipelines::processors::processor::Event;
 use crate::pipelines::processors::processor::ProcessorPtr;
 use crate::pipelines::processors::Processor;
-use crate::sessions::TableContext;
-use crate::storages::hive::HiveParquetBlockReader;
 
 enum State {
     ReadData(PartInfoPtr),
