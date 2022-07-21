@@ -12,12 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! `common_storage` will provide storage related types and functions.
-//!
-//! This crate will return `std::io::Result`.
-
 #[cfg(feature = "hive")]
 pub mod hive;
 pub mod null;
+pub mod random;
 pub mod retry;
 pub mod storage_context;

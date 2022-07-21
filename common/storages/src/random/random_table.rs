@@ -15,11 +15,18 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use common_catalog::catalog::StorageDescription;
+use common_catalog::table::Table;
+use common_catalog::table_context::TableContext;
 use common_datablocks::DataBlock;
 use common_datavalues::DataSchemaRef;
 use common_datavalues::DataType;
 use common_exception::Result;
 use common_meta_app::schema::TableInfo;
+use common_pipeline::processors::port::OutputPort;
+use common_pipeline::processors::processor::ProcessorPtr;
+use common_pipeline::Pipeline;
+use common_pipeline::SourcePipeBuilder;
 use common_pipeline_sources::sources::sync_source::SyncSource;
 use common_pipeline_sources::sources::sync_source::SyncSourcer;
 use common_planners::Extras;
@@ -28,14 +35,7 @@ use common_planners::ReadDataSourcePlan;
 use common_planners::Statistics;
 
 use super::RandomPartInfo;
-use crate::pipelines::processors::port::OutputPort;
-use crate::pipelines::processors::processor::ProcessorPtr;
-use crate::pipelines::Pipeline;
-use crate::pipelines::SourcePipeBuilder;
-use crate::sessions::TableContext;
-use crate::storages::StorageContext;
-use crate::storages::StorageDescription;
-use crate::storages::Table;
+use crate::storage_context::StorageContext;
 
 pub struct RandomTable {
     table_info: TableInfo,

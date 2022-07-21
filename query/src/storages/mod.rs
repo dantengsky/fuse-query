@@ -19,7 +19,7 @@ pub mod index;
 pub mod information_schema;
 pub mod memory;
 pub use common_storages::null;
-pub mod random;
+pub use common_storages::random;
 pub mod result;
 pub mod stage;
 mod storage_context;
