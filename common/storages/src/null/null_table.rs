@@ -15,11 +15,20 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use common_catalog::catalog::StorageDescription;
+use common_catalog::table::Table;
+use common_catalog::table_context::TableContext;
 use common_datablocks::DataBlock;
 use common_datavalues::DataSchema;
 use common_datavalues::DataSchemaRef;
 use common_exception::Result;
 use common_meta_app::schema::TableInfo;
+use common_pipeline::processors::port::*;
+use common_pipeline::processors::processor::ProcessorPtr;
+use common_pipeline::sinks::EmptySink;
+use common_pipeline::Pipe;
+use common_pipeline::Pipeline;
+use common_pipeline::SinkPipeBuilder;
 use common_pipeline_sources::sources::sync_source::SyncSource;
 use common_pipeline_sources::sources::sync_source::SyncSourcer;
 use common_planners::Extras;
@@ -32,17 +41,7 @@ use common_streams::SendableDataBlockStream;
 use common_tracing::tracing::info;
 use futures::stream::StreamExt;
 
-use crate::pipelines::processors::port::InputPort;
-use crate::pipelines::processors::port::OutputPort;
-use crate::pipelines::processors::processor::ProcessorPtr;
-use crate::pipelines::processors::EmptySink;
-use crate::pipelines::Pipe;
-use crate::pipelines::Pipeline;
-use crate::pipelines::SinkPipeBuilder;
-use crate::sessions::TableContext;
-use crate::storages::StorageContext;
-use crate::storages::StorageDescription;
-use crate::storages::Table;
+use crate::storage_context::StorageContext;
 
 pub struct NullTable {
     table_info: TableInfo,

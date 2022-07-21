@@ -20,10 +20,10 @@ use common_datavalues::DataSchemaRef;
 use common_datavalues::DataValue;
 use common_exception::Result;
 
-use crate::pipelines::processors::port::InputPort;
-use crate::pipelines::processors::processor::ProcessorPtr;
-use crate::pipelines::processors::Sink;
-use crate::pipelines::processors::Sinker;
+use crate::processors::port::InputPort;
+use crate::processors::processor::ProcessorPtr;
+use crate::sinks::Sink;
+use crate::sinks::Sinker;
 
 pub struct SubqueryReceiveSink {
     input_columns: Vec<Vec<DataValue>>,

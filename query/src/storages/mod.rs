@@ -18,7 +18,7 @@ pub mod github;
 pub mod index;
 pub mod information_schema;
 pub mod memory;
-pub mod null;
+pub use common_storages::null;
 pub mod random;
 pub mod result;
 pub mod stage;

@@ -13,7 +13,8 @@
 // limitations under the License.
 
 pub use common_pipeline::processors::*;
-mod sinks;
+use common_pipeline::sinks;
+
 mod sources;
 pub(crate) mod transforms;
 

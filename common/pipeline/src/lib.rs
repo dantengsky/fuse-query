@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![feature(generic_associated_types)]
 pub mod processors;
 
 pub mod pipe;
 pub mod pipeline;
 pub mod pipeline_display;
+pub mod sinks;
 pub mod unsafe_cell_wrap;
 
 pub use pipe::Pipe;

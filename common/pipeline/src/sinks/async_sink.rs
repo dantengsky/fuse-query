@@ -15,29 +15,33 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use async_trait::async_trait;
+use async_trait::unboxed_simple;
 use common_datablocks::DataBlock;
 use common_exception::Result;
 
-use crate::pipelines::processors::port::InputPort;
-use crate::pipelines::processors::processor::Event;
-use crate::pipelines::processors::processor::ProcessorPtr;
-use crate::pipelines::processors::Processor;
+use crate::processors::port::InputPort;
+use crate::processors::processor::Event;
+use crate::processors::processor::ProcessorPtr;
+use crate::processors::Processor;
 
-pub trait Sink: Send {
+#[async_trait]
+pub trait AsyncSink: Send {
     const NAME: &'static str;
 
-    fn on_start(&mut self) -> Result<()> {
+    async fn on_start(&mut self) -> Result<()> {
         Ok(())
     }
 
-    fn on_finish(&mut self) -> Result<()> {
+    async fn on_finish(&mut self) -> Result<()> {
         Ok(())
     }
 
-    fn consume(&mut self, data_block: DataBlock) -> Result<()>;
+    #[unboxed_simple]
+    async fn consume(&mut self, data_block: DataBlock) -> Result<()>;
 }
 
-pub struct Sinker<T: Sink + 'static> {
+pub struct AsyncSinker<T: AsyncSink + 'static> {
     inner: T,
     input: Arc<InputPort>,
     input_data: Option<DataBlock>,
@@ -45,9 +49,9 @@ pub struct Sinker<T: Sink + 'static> {
     called_on_finish: bool,
 }
 
-impl<T: Sink + 'static> Sinker<T> {
+impl<T: AsyncSink + 'static> AsyncSinker<T> {
     pub fn create(input: Arc<InputPort>, inner: T) -> ProcessorPtr {
-        ProcessorPtr::create(Box::new(Sinker {
+        ProcessorPtr::create(Box::new(AsyncSinker {
             inner,
             input,
             input_data: None,
@@ -58,7 +62,7 @@ impl<T: Sink + 'static> Sinker<T> {
 }
 
 #[async_trait::async_trait]
-impl<T: Sink + 'static> Processor for Sinker<T> {
+impl<T: AsyncSink + 'static> Processor for AsyncSinker<T> {
     fn name(&self) -> &'static str {
         T::NAME
     }
@@ -69,16 +73,16 @@ impl<T: Sink + 'static> Processor for Sinker<T> {
 
     fn event(&mut self) -> Result<Event> {
         if !self.called_on_start {
-            return Ok(Event::Sync);
+            return Ok(Event::Async);
         }
 
         if self.input_data.is_some() {
-            return Ok(Event::Sync);
+            return Ok(Event::Async);
         }
 
         if self.input.is_finished() {
             return match !self.called_on_finish {
-                true => Ok(Event::Sync),
+                true => Ok(Event::Async),
                 false => Ok(Event::Finished),
             };
         }
@@ -86,7 +90,7 @@ impl<T: Sink + 'static> Processor for Sinker<T> {
         match self.input.has_data() {
             true => {
                 self.input_data = Some(self.input.pull_data().unwrap()?);
-                Ok(Event::Sync)
+                Ok(Event::Async)
             }
             false => {
                 self.input.set_need_data();
@@ -95,15 +99,15 @@ impl<T: Sink + 'static> Processor for Sinker<T> {
         }
     }
 
-    fn process(&mut self) -> Result<()> {
+    async fn async_process(&mut self) -> Result<()> {
         if !self.called_on_start {
             self.called_on_start = true;
-            self.inner.on_start()?;
+            self.inner.on_start().await?;
         } else if let Some(data_block) = self.input_data.take() {
-            self.inner.consume(data_block)?;
+            self.inner.consume(data_block).await?;
         } else if !self.called_on_finish {
             self.called_on_finish = true;
-            self.inner.on_finish()?;
+            self.inner.on_finish().await?;
         }
 
         Ok(())

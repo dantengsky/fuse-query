@@ -19,8 +19,8 @@ use common_exception::Result;
 
 use super::Sink;
 use super::Sinker;
-use crate::pipelines::processors::port::InputPort;
-use crate::pipelines::processors::processor::ProcessorPtr;
+use crate::processors::port::InputPort;
+use crate::processors::processor::ProcessorPtr;
 
 pub struct EmptySink;
 

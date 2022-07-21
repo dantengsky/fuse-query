@@ -1,4 +1,4 @@
-// Copyright 2022 Datafuse Labs.
+// Copyright 2021 Datafuse Labs.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,12 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! `common_storage` will provide storage related types and functions.
-//!
-//! This crate will return `std::io::Result`.
+use std::sync::Arc;
 
-#[cfg(feature = "hive")]
-pub mod hive;
-pub mod null;
-pub mod retry;
-pub mod storage_context;
+use common_datablocks::InMemoryData;
+use common_meta_api::SchemaApi;
+use parking_lot::RwLock;
+
+/// Storage Context.
+#[derive(Clone)]
+pub struct StorageContext {
+    pub meta: Arc<dyn SchemaApi>,
+    // For shared data in memory.
+    pub in_memory_data: Arc<RwLock<InMemoryData<u64>>>,
+}

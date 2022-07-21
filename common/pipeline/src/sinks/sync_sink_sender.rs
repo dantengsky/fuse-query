@@ -18,10 +18,10 @@ use common_base::base::tokio::sync::mpsc::Sender;
 use common_datablocks::DataBlock;
 use common_exception::Result;
 
-use crate::pipelines::processors::port::InputPort;
-use crate::pipelines::processors::processor::ProcessorPtr;
-use crate::pipelines::processors::sinks::sync_sink::Sink;
-use crate::pipelines::processors::sinks::sync_sink::Sinker;
+use crate::processors::port::InputPort;
+use crate::processors::processor::ProcessorPtr;
+use crate::sinks::Sink;
+use crate::sinks::Sinker;
 
 pub struct SyncSenderSink {
     sender: Sender<Result<DataBlock>>,
