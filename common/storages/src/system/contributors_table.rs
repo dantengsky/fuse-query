@@ -14,6 +14,8 @@
 
 use std::sync::Arc;
 
+use common_catalog::table::Table;
+use common_catalog::table_context::TableContext;
 use common_datablocks::DataBlock;
 use common_datavalues::prelude::*;
 use common_exception::Result;
@@ -21,62 +23,46 @@ use common_meta_app::schema::TableIdent;
 use common_meta_app::schema::TableInfo;
 use common_meta_app::schema::TableMeta;
 
-use crate::sessions::TableContext;
-use crate::storages::system::table::SyncOneBlockSystemTable;
-use crate::storages::system::table::SyncSystemTable;
-use crate::storages::Table;
+use crate::system::table::SyncOneBlockSystemTable;
+use crate::system::table::SyncSystemTable;
 
-pub struct CreditsTable {
+pub struct ContributorsTable {
     table_info: TableInfo,
 }
 
-impl SyncSystemTable for CreditsTable {
-    const NAME: &'static str = "system.credits";
+impl SyncSystemTable for ContributorsTable {
+    const NAME: &'static str = "system.contributors";
 
     fn get_table_info(&self) -> &TableInfo {
         &self.table_info
     }
 
     fn get_full_data(&self, _: Arc<dyn TableContext>) -> Result<DataBlock> {
-        let names: Vec<&[u8]> = env!("DATABEND_CREDITS_NAMES")
-            .split_terminator(',')
-            .map(|x| x.trim().as_bytes())
-            .collect();
-        let versions: Vec<&[u8]> = env!("DATABEND_CREDITS_VERSIONS")
-            .split_terminator(',')
-            .map(|x| x.trim().as_bytes())
-            .collect();
-        let licenses: Vec<&[u8]> = env!("DATABEND_CREDITS_LICENSES")
+        let contributors: Vec<&[u8]> = env!("DATABEND_COMMIT_AUTHORS")
             .split_terminator(',')
             .map(|x| x.trim().as_bytes())
             .collect();
         Ok(DataBlock::create(self.table_info.schema(), vec![
-            Series::from_data(names),
-            Series::from_data(versions),
-            Series::from_data(licenses),
+            Series::from_data(contributors),
         ]))
     }
 }
 
-impl CreditsTable {
+impl ContributorsTable {
     pub fn create(table_id: u64) -> Arc<dyn Table> {
-        let schema = DataSchemaRefExt::create(vec![
-            DataField::new("name", Vu8::to_data_type()),
-            DataField::new("version", Vu8::to_data_type()),
-            DataField::new("license", Vu8::to_data_type()),
-        ]);
+        let schema = DataSchemaRefExt::create(vec![DataField::new("name", Vu8::to_data_type())]);
 
         let table_info = TableInfo {
-            desc: "'system'.'credits'".to_string(),
-            name: "credits".to_string(),
+            desc: "'system'.'contributors'".to_string(),
+            name: "contributors".to_string(),
             ident: TableIdent::new(table_id, 0),
             meta: TableMeta {
                 schema,
-                engine: "SystemCredits".to_string(),
+                engine: "SystemContributors".to_string(),
                 ..Default::default()
             },
         };
 
-        SyncOneBlockSystemTable::create(CreditsTable { table_info })
+        SyncOneBlockSystemTable::create(ContributorsTable { table_info })
     }
 }

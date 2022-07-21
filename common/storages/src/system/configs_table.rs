@@ -15,6 +15,8 @@
 use std::sync::Arc;
 
 use common_base::base::mask_string;
+use common_catalog::table::Table;
+use common_catalog::table_context::TableContext;
 use common_datablocks::DataBlock;
 use common_datavalues::prelude::*;
 use common_exception::Result;
@@ -24,10 +26,8 @@ use common_meta_app::schema::TableMeta;
 use itertools::Itertools;
 use serde_json::Value;
 
-use crate::sessions::TableContext;
-use crate::storages::system::table::SyncOneBlockSystemTable;
-use crate::storages::system::table::SyncSystemTable;
-use crate::storages::Table;
+use crate::system::table::SyncOneBlockSystemTable;
+use crate::system::table::SyncSystemTable;
 
 pub struct ConfigsTable {
     table_info: TableInfo,

@@ -14,6 +14,8 @@
 
 use std::sync::Arc;
 
+use common_catalog::table::Table;
+use common_catalog::table_context::TableContext;
 use common_datablocks::DataBlock;
 use common_datavalues::prelude::*;
 use common_exception::Result;
@@ -21,59 +23,52 @@ use common_meta_app::schema::TableIdent;
 use common_meta_app::schema::TableInfo;
 use common_meta_app::schema::TableMeta;
 
-use crate::catalogs::CATALOG_DEFAULT;
-use crate::sessions::TableContext;
-use crate::storages::system::table::AsyncOneBlockSystemTable;
-use crate::storages::system::table::AsyncSystemTable;
-use crate::storages::Table;
+use crate::system::table::AsyncOneBlockSystemTable;
+use crate::system::table::AsyncSystemTable;
 
-pub struct EnginesTable {
+pub struct DatabasesTable {
     table_info: TableInfo,
 }
 
 #[async_trait::async_trait]
-impl AsyncSystemTable for EnginesTable {
-    const NAME: &'static str = "system.engines";
+impl AsyncSystemTable for DatabasesTable {
+    const NAME: &'static str = "system.databases";
 
     fn get_table_info(&self) -> &TableInfo {
         &self.table_info
     }
 
     async fn get_full_data(&self, ctx: Arc<dyn TableContext>) -> Result<DataBlock> {
-        // TODO passin catalog name
-        let table_engine_descriptors = ctx.get_catalog(CATALOG_DEFAULT)?.get_table_engines();
-        let mut engine_name = Vec::with_capacity(table_engine_descriptors.len());
-        let mut engine_comment = Vec::with_capacity(table_engine_descriptors.len());
-        for descriptor in &table_engine_descriptors {
-            engine_name.push(descriptor.engine_name.clone());
-            engine_comment.push(descriptor.comment.clone());
-        }
+        let tenant = ctx.get_tenant();
+        let catalog = ctx.get_catalog(ctx.get_current_catalog().as_str())?;
+        let databases = catalog.list_databases(tenant.as_str()).await?;
+
+        let db_names: Vec<&[u8]> = databases
+            .iter()
+            .map(|database| database.name().as_bytes())
+            .collect();
 
         Ok(DataBlock::create(self.table_info.schema(), vec![
-            Series::from_data(engine_name),
-            Series::from_data(engine_comment),
+            Series::from_data(db_names),
         ]))
     }
 }
 
-impl EnginesTable {
+impl DatabasesTable {
     pub fn create(table_id: u64) -> Arc<dyn Table> {
-        let schema = DataSchemaRefExt::create(vec![
-            DataField::new("Engine", Vu8::to_data_type()),
-            DataField::new("Comment", Vu8::to_data_type()),
-        ]);
+        let schema = DataSchemaRefExt::create(vec![DataField::new("name", Vu8::to_data_type())]);
 
         let table_info = TableInfo {
-            desc: "'system'.'engines'".to_string(),
-            name: "engines".to_string(),
+            desc: "'system'.'databases'".to_string(),
+            name: "databases".to_string(),
             ident: TableIdent::new(table_id, 0),
             meta: TableMeta {
                 schema,
-                engine: "SystemEngines".to_string(),
+                engine: "SystemDatabases".to_string(),
                 ..Default::default()
             },
         };
 
-        AsyncOneBlockSystemTable::create(EnginesTable { table_info })
+        AsyncOneBlockSystemTable::create(DatabasesTable { table_info })
     }
 }

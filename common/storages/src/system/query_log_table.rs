@@ -16,12 +16,18 @@ use std::any::Any;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
+use common_catalog::table::Table;
+use common_catalog::table_context::TableContext;
 use common_datablocks::DataBlock;
 use common_datavalues::prelude::*;
 use common_exception::Result;
 use common_meta_app::schema::TableIdent;
 use common_meta_app::schema::TableInfo;
 use common_meta_app::schema::TableMeta;
+use common_pipeline::processors::port::OutputPort;
+use common_pipeline::processors::processor::ProcessorPtr;
+use common_pipeline::Pipeline;
+use common_pipeline::SourcePipeBuilder;
 use common_pipeline_sources::sources::sync_source::SyncSource;
 use common_pipeline_sources::sources::sync_source::SyncSourcer;
 use common_planners::Extras;
@@ -33,13 +39,6 @@ use common_streams::DataBlockStream;
 use common_streams::SendableDataBlockStream;
 use futures::StreamExt;
 use parking_lot::RwLock;
-
-use crate::pipelines::processors::port::OutputPort;
-use crate::pipelines::processors::processor::ProcessorPtr;
-use crate::pipelines::Pipeline;
-use crate::pipelines::SourcePipeBuilder;
-use crate::sessions::TableContext;
-use crate::storages::Table;
 
 pub struct QueryLogTable {
     table_info: TableInfo,

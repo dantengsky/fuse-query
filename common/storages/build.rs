@@ -1,4 +1,4 @@
-// Copyright 2022 Datafuse Labs.
+// Copyright 2021 Datafuse Labs.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,15 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![feature(generic_associated_types)]
-#![feature(type_alias_impl_trait)]
-
-#[cfg(feature = "hive")]
-pub mod hive;
-pub mod information_schema;
-pub mod null;
-pub mod random;
-pub mod retry;
-pub mod storage_context;
-pub mod system;
-pub mod view;
+fn main() {
+    common_building::setup();
+}

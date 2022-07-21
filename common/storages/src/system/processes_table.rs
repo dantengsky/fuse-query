@@ -16,6 +16,8 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use common_base::base::ProgressValues;
+use common_catalog::table::Table;
+use common_catalog::table_context::TableContext;
 use common_contexts::DalMetrics;
 use common_datablocks::DataBlock;
 use common_datavalues::prelude::*;
@@ -25,10 +27,8 @@ use common_meta_app::schema::TableInfo;
 use common_meta_app::schema::TableMeta;
 use common_meta_types::UserInfo;
 
-use crate::sessions::TableContext;
-use crate::storages::system::table::AsyncOneBlockSystemTable;
-use crate::storages::system::table::AsyncSystemTable;
-use crate::storages::Table;
+use crate::system::table::AsyncOneBlockSystemTable;
+use crate::system::table::AsyncSystemTable;
 
 pub struct ProcessesTable {
     table_info: TableInfo,

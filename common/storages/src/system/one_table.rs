@@ -14,61 +14,62 @@
 
 use std::sync::Arc;
 
+use common_catalog::table::Table;
+use common_catalog::table_context::TableContext;
 use common_datablocks::DataBlock;
 use common_datavalues::prelude::*;
 use common_exception::Result;
 use common_meta_app::schema::TableIdent;
 use common_meta_app::schema::TableInfo;
 use common_meta_app::schema::TableMeta;
+use common_planners::Extras;
+use common_planners::Partitions;
+use common_planners::Statistics;
 
-use crate::sessions::TableContext;
-use crate::storages::system::table::AsyncOneBlockSystemTable;
-use crate::storages::system::table::AsyncSystemTable;
-use crate::storages::Table;
+use crate::system::table::SyncOneBlockSystemTable;
+use crate::system::table::SyncSystemTable;
 
-pub struct DatabasesTable {
+pub struct OneTable {
     table_info: TableInfo,
 }
 
-#[async_trait::async_trait]
-impl AsyncSystemTable for DatabasesTable {
-    const NAME: &'static str = "system.databases";
+impl SyncSystemTable for OneTable {
+    const NAME: &'static str = "system.one";
 
     fn get_table_info(&self) -> &TableInfo {
         &self.table_info
     }
 
-    async fn get_full_data(&self, ctx: Arc<dyn TableContext>) -> Result<DataBlock> {
-        let tenant = ctx.get_tenant();
-        let catalog = ctx.get_catalog(ctx.get_current_catalog().as_str())?;
-        let databases = catalog.list_databases(tenant.as_str()).await?;
-
-        let db_names: Vec<&[u8]> = databases
-            .iter()
-            .map(|database| database.name().as_bytes())
-            .collect();
-
+    fn get_full_data(&self, _ctx: Arc<dyn TableContext>) -> Result<DataBlock> {
         Ok(DataBlock::create(self.table_info.schema(), vec![
-            Series::from_data(db_names),
+            Series::from_data(vec![1u8]),
         ]))
+    }
+
+    fn get_partitions(
+        &self,
+        _ctx: Arc<dyn TableContext>,
+        _push_downs: Option<Extras>,
+    ) -> Result<(Statistics, Partitions)> {
+        Ok((Statistics::new_exact(1, 1, 1, 1), vec![]))
     }
 }
 
-impl DatabasesTable {
+impl OneTable {
     pub fn create(table_id: u64) -> Arc<dyn Table> {
-        let schema = DataSchemaRefExt::create(vec![DataField::new("name", Vu8::to_data_type())]);
+        let schema = DataSchemaRefExt::create(vec![DataField::new("dummy", u8::to_data_type())]);
 
         let table_info = TableInfo {
-            desc: "'system'.'databases'".to_string(),
-            name: "databases".to_string(),
+            desc: "'system'.'one'".to_string(),
+            name: "one".to_string(),
             ident: TableIdent::new(table_id, 0),
             meta: TableMeta {
                 schema,
-                engine: "SystemDatabases".to_string(),
+                engine: "SystemOne".to_string(),
                 ..Default::default()
             },
         };
 
-        AsyncOneBlockSystemTable::create(DatabasesTable { table_info })
+        SyncOneBlockSystemTable::create(OneTable { table_info })
     }
 }

@@ -15,6 +15,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use common_catalog::table::Table;
+use common_catalog::table_context::TableContext;
 use common_datablocks::DataBlock;
 use common_datavalues::prelude::*;
 use common_exception::ErrorCode;
@@ -25,10 +27,8 @@ use common_meta_app::schema::TableMeta;
 use common_metrics::MetricValue;
 use serde_json;
 
-use crate::sessions::TableContext;
-use crate::storages::system::table::SyncOneBlockSystemTable;
-use crate::storages::system::table::SyncSystemTable;
-use crate::storages::Table;
+use crate::system::table::SyncOneBlockSystemTable;
+use crate::system::table::SyncSystemTable;
 
 pub struct MetricsTable {
     table_info: TableInfo,

@@ -48,6 +48,11 @@ use crate::table::Table;
 use crate::table_args::TableArgs;
 use crate::table_function::TableFunction;
 
+// TODO catalogs are hard coded
+pub const CATALOG_DEFAULT: &str = "default";
+#[cfg(feature = "hive")]
+pub const CATALOG_HIVE: &str = "hive";
+
 pub struct CatalogManager {
     pub catalogs: HashMap<String, Arc<dyn Catalog>>,
 }

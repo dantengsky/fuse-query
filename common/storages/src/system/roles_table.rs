@@ -17,6 +17,8 @@
 
 use std::sync::Arc;
 
+use common_catalog::table::Table;
+use common_catalog::table_context::TableContext;
 use common_datablocks::DataBlock;
 use common_datavalues::prelude::*;
 use common_datavalues::DataField;
@@ -29,8 +31,6 @@ use common_meta_app::schema::TableMeta;
 
 use super::table::AsyncOneBlockSystemTable;
 use super::table::AsyncSystemTable;
-use crate::sessions::TableContext;
-use crate::storages::Table;
 
 pub struct RolesTable {
     table_info: TableInfo,

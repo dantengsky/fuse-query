@@ -13,13 +13,11 @@
 // limitations under the License.
 
 pub mod cache;
+mod clusters;
 pub mod fuse;
 pub mod github;
 pub mod index;
-pub use common_storages::information_schema;
 pub mod memory;
-pub use common_storages::null;
-pub use common_storages::random;
 pub mod result;
 pub mod stage;
 mod storage_context;
@@ -27,9 +25,14 @@ mod storage_factory;
 mod storage_table;
 mod storage_table_read_plan;
 mod storage_table_read_wrap;
-pub mod system;
+
+pub use clusters::ClustersTable;
 pub use common_catalog::table::NavigationPoint;
 pub use common_catalog::table::TableStatistics;
+pub use common_storages::information_schema;
+pub use common_storages::null;
+pub use common_storages::random;
+pub use common_storages::system;
 pub use common_storages::view;
 pub use storage_context::StorageContext;
 pub use storage_factory::StorageCreator;

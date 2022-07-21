@@ -41,7 +41,7 @@ impl SystemDatabase {
             system::SettingsTable::create(sys_db_meta.next_table_id()),
             system::TablesTableWithoutHistory::create(sys_db_meta.next_table_id()),
             system::TablesTableWithHistory::create(sys_db_meta.next_table_id()),
-            system::ClustersTable::create(sys_db_meta.next_table_id()),
+            crate::storages::ClustersTable::create(sys_db_meta.next_table_id()),
             system::DatabasesTable::create(sys_db_meta.next_table_id()),
             Arc::new(system::TracingTable::create(sys_db_meta.next_table_id())),
             system::ProcessesTable::create(sys_db_meta.next_table_id()),

@@ -19,6 +19,8 @@ use std::io::BufRead;
 use std::io::BufReader;
 use std::sync::Arc;
 
+use common_catalog::table::Table;
+use common_catalog::table_context::TableContext;
 use common_datablocks::DataBlock;
 use common_datavalues::prelude::*;
 use common_exception::ErrorCode;
@@ -26,6 +28,10 @@ use common_exception::Result;
 use common_meta_app::schema::TableIdent;
 use common_meta_app::schema::TableInfo;
 use common_meta_app::schema::TableMeta;
+use common_pipeline::processors::port::OutputPort;
+use common_pipeline::processors::processor::ProcessorPtr;
+use common_pipeline::Pipe;
+use common_pipeline::Pipeline;
 use common_pipeline_sources::sources::sync_source::SyncSource;
 use common_pipeline_sources::sources::sync_source::SyncSourcer;
 use common_planners::Extras;
@@ -34,13 +40,7 @@ use common_planners::ReadDataSourcePlan;
 use common_planners::Statistics;
 use walkdir::WalkDir;
 
-use crate::pipelines::processors::port::OutputPort;
-use crate::pipelines::processors::processor::ProcessorPtr;
-use crate::pipelines::Pipe;
-use crate::pipelines::Pipeline;
-use crate::sessions::TableContext;
-use crate::storages::system::tracing_table_stream::LogEntry;
-use crate::storages::Table;
+use crate::system::tracing_table_stream::LogEntry;
 
 pub struct TracingTable {
     table_info: TableInfo,

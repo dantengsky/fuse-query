@@ -15,24 +15,23 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use common_catalog::table::Table;
+use common_catalog::table_context::TableContext;
 use common_datablocks::DataBlock;
 use common_exception::Result;
 use common_meta_app::schema::TableInfo;
+use common_pipeline::processors::port::OutputPort;
+use common_pipeline::processors::processor::ProcessorPtr;
+use common_pipeline::Pipe;
+use common_pipeline::Pipeline;
+use common_pipeline_sources::sources::async_source::AsyncSource;
+use common_pipeline_sources::sources::async_source::AsyncSourcer;
 use common_pipeline_sources::sources::sync_source::SyncSource;
 use common_pipeline_sources::sources::sync_source::SyncSourcer;
 use common_planners::Extras;
 use common_planners::Partitions;
 use common_planners::ReadDataSourcePlan;
 use common_planners::Statistics;
-
-use crate::pipelines::processors::port::OutputPort;
-use crate::pipelines::processors::processor::ProcessorPtr;
-use crate::pipelines::processors::AsyncSource;
-use crate::pipelines::processors::AsyncSourcer;
-use crate::pipelines::Pipe;
-use crate::pipelines::Pipeline;
-use crate::sessions::TableContext;
-use crate::storages::Table;
 
 pub trait SyncSystemTable: Send + Sync {
     const NAME: &'static str;

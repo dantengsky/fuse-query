@@ -14,6 +14,10 @@
 
 use std::sync::Arc;
 
+use common_catalog::catalog::Catalog;
+use common_catalog::catalog::CATALOG_DEFAULT;
+use common_catalog::table::Table;
+use common_catalog::table_context::TableContext;
 use common_datablocks::DataBlock;
 use common_datavalues::prelude::*;
 use common_exception::Result;
@@ -21,12 +25,8 @@ use common_meta_app::schema::TableIdent;
 use common_meta_app::schema::TableInfo;
 use common_meta_app::schema::TableMeta;
 
-use crate::catalogs::Catalog;
-use crate::catalogs::CATALOG_DEFAULT;
-use crate::sessions::TableContext;
-use crate::storages::system::table::AsyncOneBlockSystemTable;
-use crate::storages::system::table::AsyncSystemTable;
-use crate::storages::Table;
+use crate::system::table::AsyncOneBlockSystemTable;
+use crate::system::table::AsyncSystemTable;
 
 pub struct TablesTable<const WITH_HISTROY: bool> {
     table_info: TableInfo,

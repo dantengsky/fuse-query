@@ -16,16 +16,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use common_catalog::catalog::Catalog;
-pub use common_catalog::catalog::CatalogManager;
+pub use common_catalog::catalog::*;
 use common_config::Config;
 use common_exception::Result;
 
 use crate::catalogs::DatabaseCatalog;
-
-// TODO catalogs are hard coded
-pub const CATALOG_DEFAULT: &str = "default";
-#[cfg(feature = "hive")]
-pub const CATALOG_HIVE: &str = "hive";
 
 #[async_trait::async_trait]
 pub trait CatalogManagerHelper {

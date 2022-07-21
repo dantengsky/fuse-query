@@ -15,6 +15,8 @@
 use std::sync::Arc;
 use std::vec;
 
+use common_catalog::table::Table;
+use common_catalog::table_context::TableContext;
 use common_datablocks::DataBlock;
 use common_datavalues::prelude::*;
 use common_datavalues::DataSchemaRefExt;
@@ -26,8 +28,6 @@ use common_meta_types::StageType;
 
 use super::table::AsyncOneBlockSystemTable;
 use super::table::AsyncSystemTable;
-use crate::sessions::TableContext;
-use crate::storages::Table;
 
 pub struct StagesTable {
     table_info: TableInfo,

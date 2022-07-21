@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod clusters_table;
 mod columns_table;
 mod configs_table;
 mod contributors_table;
@@ -33,7 +32,6 @@ mod tracing_table;
 mod tracing_table_stream;
 mod users_table;
 
-pub use clusters_table::ClustersTable;
 pub use columns_table::ColumnsTable;
 pub use configs_table::ConfigsTable;
 pub use contributors_table::ContributorsTable;
@@ -48,6 +46,10 @@ pub use query_log_table::QueryLogTable;
 pub use roles_table::RolesTable;
 pub use settings_table::SettingsTable;
 pub use stages_table::StagesTable;
+pub use table::AsyncOneBlockSystemTable;
+pub use table::AsyncSystemTable;
+pub use table::SyncOneBlockSystemTable;
+pub use table::SyncSystemTable;
 pub use tables_table::TablesTable;
 pub use tables_table::TablesTableWithHistory;
 pub use tables_table::TablesTableWithoutHistory;
