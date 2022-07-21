@@ -14,6 +14,7 @@
 
 #[cfg(feature = "hive")]
 pub mod hive;
+pub mod information_schema;
 pub mod null;
 pub mod random;
 pub mod retry;

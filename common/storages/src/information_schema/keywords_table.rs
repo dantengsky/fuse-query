@@ -15,37 +15,26 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use common_catalog::table::Table;
 use common_meta_app::schema::TableIdent;
 use common_meta_app::schema::TableInfo;
 use common_meta_app::schema::TableMeta;
 
-use crate::storages::view::view_table::QUERY;
-use crate::storages::view::ViewTable;
-use crate::storages::Table;
+use crate::view::view_table::QUERY;
+use crate::view::ViewTable;
 
-pub struct ViewsTable {}
+pub struct KeywordsTable {}
 
-impl ViewsTable {
+impl KeywordsTable {
     pub fn create(table_id: u64) -> Arc<dyn Table> {
-        let query = "SELECT
-            database AS table_catalog,
-            database AS table_schema,
-            name AS table_name,
-            NULL AS view_definition,
-            'NONE' AS check_option,
-            0 AS is_updatable,
-            engine = 'MaterializedView' AS is_insertable_into,
-            0 AS is_trigger_updatable,
-            0 AS is_trigger_deletable,
-            0 AS is_trigger_insertable_into
-        FROM system.tables
-        WHERE engine LIKE '%View';";
+        // TODO(veeupup): add more keywords in keywords table
+        let query = "SELECT 'CREATE' AS WORD, 1 AS RESERVED";
 
         let mut options = BTreeMap::new();
         options.insert(QUERY.to_string(), query.to_string());
         let table_info = TableInfo {
-            desc: "'INFORMATION_SCHEMA'.'VIEWS'".to_string(),
-            name: "VIEWS".to_string(),
+            desc: "'INFORMATION_SCHEMA'.'KEYWORDS'".to_string(),
+            name: "KEYWORDS".to_string(),
             ident: TableIdent::new(table_id, 0),
             meta: TableMeta {
                 options,

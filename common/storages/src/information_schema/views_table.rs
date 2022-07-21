@@ -15,49 +15,37 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use common_catalog::table::Table;
 use common_meta_app::schema::TableIdent;
 use common_meta_app::schema::TableInfo;
 use common_meta_app::schema::TableMeta;
 
-use crate::storages::view::view_table::QUERY;
-use crate::storages::view::ViewTable;
-use crate::storages::Table;
+use crate::view::view_table::QUERY;
+use crate::view::ViewTable;
 
-pub struct ColumnsTable {}
+pub struct ViewsTable {}
 
-impl ColumnsTable {
+impl ViewsTable {
     pub fn create(table_id: u64) -> Arc<dyn Table> {
         let query = "SELECT
             database AS table_catalog,
             database AS table_schema,
-            table AS table_name,
-            name AS column_name,
-            1 AS ordinal_position,
-            NULL AS column_default,
-            is_nullable AS is_nullable,
-            type AS data_type,
-            NULL AS character_maximum_length,
-            NULL AS character_octet_length,
-            NULL AS numeric_precision,
-            NULL AS numeric_precision_radix,
-            NULL AS numeric_scale,
-            NULL AS datetime_precision,
-            NULL AS character_set_catalog,
-            NULL AS character_set_schema,
-            NULL AS character_set_name,
-            NULL AS collation_catalog,
-            NULL AS collation_schema,
-            NULL AS collation_name,
-            NULL AS domain_catalog,
-            NULL AS domain_schema,
-            NULL AS domain_name
-        FROM system.columns;";
+            name AS table_name,
+            NULL AS view_definition,
+            'NONE' AS check_option,
+            0 AS is_updatable,
+            engine = 'MaterializedView' AS is_insertable_into,
+            0 AS is_trigger_updatable,
+            0 AS is_trigger_deletable,
+            0 AS is_trigger_insertable_into
+        FROM system.tables
+        WHERE engine LIKE '%View';";
 
         let mut options = BTreeMap::new();
         options.insert(QUERY.to_string(), query.to_string());
         let table_info = TableInfo {
-            desc: "'INFORMATION_SCHEMA'.'COLUMNS'".to_string(),
-            name: "COLUMNS".to_string(),
+            desc: "'INFORMATION_SCHEMA'.'VIEWS'".to_string(),
+            name: "VIEWS".to_string(),
             ident: TableIdent::new(table_id, 0),
             meta: TableMeta {
                 options,

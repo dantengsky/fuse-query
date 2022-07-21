@@ -15,26 +15,40 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use common_catalog::table::Table;
 use common_meta_app::schema::TableIdent;
 use common_meta_app::schema::TableInfo;
 use common_meta_app::schema::TableMeta;
 
-use crate::storages::view::view_table::QUERY;
-use crate::storages::view::ViewTable;
-use crate::storages::Table;
+use crate::view::view_table::QUERY;
+use crate::view::ViewTable;
 
-pub struct KeywordsTable {}
+pub struct TablesTable {}
 
-impl KeywordsTable {
+impl TablesTable {
     pub fn create(table_id: u64) -> Arc<dyn Table> {
-        // TODO(veeupup): add more keywords in keywords table
-        let query = "SELECT 'CREATE' AS WORD, 1 AS RESERVED";
+        let query = "SELECT
+            database AS table_catalog,
+            database AS table_schema,
+            name AS table_name,
+            'BASE TABLE' AS table_type,
+            engine AS engine,
+            created_on AS create_time,
+            dropped_on AS drop_time,
+            0 AS data_length,
+            0 AS index_length,
+            '' AS table_comment,
+            num_rows,
+            data_size,
+            data_compressed_size,
+            index_size
+        FROM system.tables;";
 
         let mut options = BTreeMap::new();
         options.insert(QUERY.to_string(), query.to_string());
         let table_info = TableInfo {
-            desc: "'INFORMATION_SCHEMA'.'KEYWORDS'".to_string(),
-            name: "KEYWORDS".to_string(),
+            desc: "'INFORMATION_SCHEMA'.'TABLES'".to_string(),
+            name: "TABLES".to_string(),
             ident: TableIdent::new(table_id, 0),
             meta: TableMeta {
                 options,

@@ -16,7 +16,7 @@ pub mod cache;
 pub mod fuse;
 pub mod github;
 pub mod index;
-pub mod information_schema;
+pub use common_storages::information_schema;
 pub mod memory;
 pub use common_storages::null;
 pub use common_storages::random;
