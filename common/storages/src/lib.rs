@@ -18,3 +18,4 @@ pub mod null;
 pub mod random;
 pub mod retry;
 pub mod storage_context;
+pub mod view;

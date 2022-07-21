@@ -15,13 +15,13 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use common_catalog::catalog::StorageDescription;
+use common_catalog::table::Table;
 use common_exception::ErrorCode;
 use common_exception::Result;
 use common_meta_app::schema::TableInfo;
 
-use crate::storages::StorageContext;
-use crate::storages::StorageDescription;
-use crate::storages::Table;
+use crate::storage_context::StorageContext;
 
 pub struct ViewTable {
     table_info: TableInfo,
