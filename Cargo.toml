@@ -16,6 +16,7 @@ members = [
     "common/expression",
     "common/formats",
     "common/functions",
+    "common/fuse-meta",
     "common/grpc",
     "common/hashtable",
     "common/hive-meta-store",
@@ -39,7 +40,7 @@ members = [
     "common/users",
     "common/storage",
     "common/storages",
-    "common/fuse-meta",
+    "common/table-functions",
     # Query
     "query",
     # Meta

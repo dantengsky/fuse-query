@@ -11,7 +11,6 @@
 //  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
-//
 
 use std::any::Any;
 use std::pin::Pin;
@@ -20,6 +19,10 @@ use std::task::Context;
 use std::task::Poll;
 
 use chrono::NaiveDateTime;
+use common_catalog::table::Table;
+use common_catalog::table_args::TableArgs;
+use common_catalog::table_context::TableContext;
+use common_catalog::table_function::TableFunction;
 use common_datablocks::DataBlock;
 use common_datavalues::chrono::TimeZone;
 use common_datavalues::chrono::Utc;
@@ -28,23 +31,18 @@ use common_exception::Result;
 use common_meta_app::schema::TableIdent;
 use common_meta_app::schema::TableInfo;
 use common_meta_app::schema::TableMeta;
+use common_pipeline::processors::port::OutputPort;
+use common_pipeline::processors::processor::ProcessorPtr;
+use common_pipeline::Pipe;
+use common_pipeline::Pipeline;
+use common_pipeline_sources::sources::async_source::AsyncSource;
+use common_pipeline_sources::sources::async_source::AsyncSourcer;
 use common_planners::Expression;
 use common_planners::Extras;
 use common_planners::Partitions;
 use common_planners::ReadDataSourcePlan;
 use common_planners::Statistics;
 use futures::Stream;
-
-use crate::pipelines::processors::port::OutputPort;
-use crate::pipelines::processors::processor::ProcessorPtr;
-use crate::pipelines::processors::AsyncSource;
-use crate::pipelines::processors::AsyncSourcer;
-use crate::pipelines::Pipe;
-use crate::pipelines::Pipeline;
-use crate::sessions::TableContext;
-use crate::storages::Table;
-use crate::table_functions::table_function_factory::TableArgs;
-use crate::table_functions::TableFunction;
 
 pub struct AsyncCrashMeTable {
     table_info: TableInfo,

@@ -71,6 +71,7 @@ common-settings = { path = "../common/settings" }
 common-storage = { path = "../common/storage" }
 common-storages = { path = "../common/storages" }
 common-streams = { path = "../common/streams" }
+common-table-functions = { path = "../common/table-functions" }
 common-tracing = { path = "../common/tracing" }
 common-users = { path = "../common/users" }
 

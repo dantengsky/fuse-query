@@ -1,5 +1,5 @@
 [package]
-name = "common-pipeline-sources"
+name = "common-table-functions"
 version = "0.1.0"
 edition = "2021"
 
@@ -11,19 +11,32 @@ test = false
 [dependencies]
 common-base = { path = "../base" }
 common-catalog = { path = "../catalog" }
+common-config = { path = "../config" }
 common-datablocks = { path = "../datablocks" }
 common-datavalues = { path = "../datavalues" }
 common-exception = { path = "../exception" }
+common-grpc = { path = "../grpc" }
+common-meta-app = { path = "../meta/app" }
+common-meta-types = { path = "../meta/types" }
 common-pipeline = { path = "../pipeline" }
+common-pipeline-sources = { path = "../pipeline-sources" }
+common-planners = { path = "../planners" }
+common-storage = { path = "../storage" }
 common-tracing = { path = "../tracing" }
+common-users = { path = "../users" }
 
 async-trait = { git = "https://github.com/datafuse-extras/async-trait", rev = "f0b0fd5" }
+chrono = "0.4.19"
+clap = { version = "3.2.5", features = ["derive", "env"] }
 futures = "0.3.21"
 futures-util = "0.3.21"
 itertools = "0.10.3"
 num_cpus = "1.13.1"
 once_cell = "1.12.0"
+opendal = { version = "0.11.2", features = ["retry"] }
 parking_lot = "0.12.1"
-petgraph = "0.6.2"
+semver = "1.0.10"
 serde = { version = "1.0.137", features = ["derive"] }
+serfig = "0.0.2"
 time = "0.3.10"
+typetag = "0.1.8"

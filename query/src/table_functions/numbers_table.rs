@@ -1,4 +1,4 @@
-//  Copyright 2021 Datafuse Labs.
+//  Copyright 2022 Datafuse Labs.
 //
 //  Licensed under the Apache License, Version 2.0 (the "License");
 //  you may not use this file except in compliance with the License.
@@ -11,13 +11,16 @@
 //  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
-//
 
 use std::any::Any;
 use std::mem::size_of;
 use std::sync::Arc;
 
 use chrono::NaiveDateTime;
+use common_catalog::table::Table;
+use common_catalog::table_args::TableArgs;
+use common_catalog::table_context::TableContext;
+use common_catalog::table_function::TableFunction;
 use common_datablocks::DataBlock;
 use common_datavalues::chrono::TimeZone;
 use common_datavalues::chrono::Utc;
@@ -27,6 +30,11 @@ use common_exception::Result;
 use common_meta_app::schema::TableIdent;
 use common_meta_app::schema::TableInfo;
 use common_meta_app::schema::TableMeta;
+use common_pipeline::processors::port::OutputPort;
+use common_pipeline::processors::processor::ProcessorPtr;
+use common_pipeline::Pipe;
+use common_pipeline::Pipeline;
+use common_pipeline::SourcePipeBuilder;
 use common_pipeline_sources::sources::sync_source::SyncSource;
 use common_pipeline_sources::sources::sync_source::SyncSourcer;
 use common_planners::Expression;
@@ -36,19 +44,10 @@ use common_planners::Partitions;
 use common_planners::ReadDataSourcePlan;
 use common_planners::Statistics;
 
-use crate::pipelines::processors::port::OutputPort;
-use crate::pipelines::processors::processor::ProcessorPtr;
 use crate::pipelines::processors::transforms::get_sort_descriptions;
 use crate::pipelines::processors::EmptySource;
-use crate::pipelines::Pipe;
-use crate::pipelines::Pipeline;
-use crate::pipelines::SourcePipeBuilder;
-use crate::sessions::TableContext;
-use crate::storages::Table;
-use crate::table_functions::generate_numbers_parts;
-use crate::table_functions::numbers_part::NumbersPartInfo;
-use crate::table_functions::table_function_factory::TableArgs;
-use crate::table_functions::TableFunction;
+use crate::table_functions::memory_block_part::generate_numbers_parts;
+use crate::table_functions::NumbersPartInfo;
 
 pub struct NumbersTable {
     table_info: TableInfo,

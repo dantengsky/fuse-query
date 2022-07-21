@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod async_source;
+use common_pipeline_sources::sources::async_source;
 mod blocks_source;
 mod deserializer;
 mod empty_source;

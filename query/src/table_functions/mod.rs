@@ -13,12 +13,13 @@
 //  limitations under the License.
 //
 
-mod async_crash_me;
+use common_table_functions::async_crash_me;
+use common_table_functions::sync_crash_me;
+use common_table_functions::table_function;
+
 mod memory_block_part;
 mod numbers_part;
 mod numbers_table;
-mod sync_crash_me;
-mod table_function;
 mod table_function_factory;
 
 pub use memory_block_part::generate_numbers_parts;
