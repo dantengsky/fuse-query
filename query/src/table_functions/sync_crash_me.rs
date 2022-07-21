@@ -28,6 +28,8 @@ use common_exception::Result;
 use common_meta_app::schema::TableIdent;
 use common_meta_app::schema::TableInfo;
 use common_meta_app::schema::TableMeta;
+use common_pipeline_sources::sources::sync_source::SyncSource;
+use common_pipeline_sources::sources::sync_source::SyncSourcer;
 use common_planners::Expression;
 use common_planners::Extras;
 use common_planners::Partitions;
@@ -37,8 +39,6 @@ use futures::Stream;
 
 use crate::pipelines::processors::port::OutputPort;
 use crate::pipelines::processors::processor::ProcessorPtr;
-use crate::pipelines::processors::SyncSource;
-use crate::pipelines::processors::SyncSourcer;
 use crate::pipelines::Pipe;
 use crate::pipelines::Pipeline;
 use crate::sessions::TableContext;

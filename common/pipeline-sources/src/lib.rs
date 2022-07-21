@@ -12,15 +12,4 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod processors;
-
-pub mod pipe;
-pub mod pipeline;
-pub mod pipeline_display;
-pub mod unsafe_cell_wrap;
-
-pub use pipe::Pipe;
-pub use pipe::SinkPipeBuilder;
-pub use pipe::SourcePipeBuilder;
-pub use pipe::TransformPipeBuilder;
-pub use pipeline::Pipeline;
+pub mod sources;

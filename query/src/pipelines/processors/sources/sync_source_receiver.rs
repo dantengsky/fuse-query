@@ -17,11 +17,11 @@ use std::sync::Arc;
 use common_base::base::tokio::sync::mpsc::Receiver;
 use common_datablocks::DataBlock;
 use common_exception::Result;
+use common_pipeline_sources::sources::sync_source::SyncSource;
+use common_pipeline_sources::sources::sync_source::SyncSourcer;
 
 use crate::pipelines::processors::port::OutputPort;
 use crate::pipelines::processors::processor::ProcessorPtr;
-use crate::pipelines::processors::sources::sync_source::SyncSource;
-use crate::pipelines::processors::sources::SyncSourcer;
 use crate::sessions::QueryContext;
 
 pub struct SyncReceiverSource {

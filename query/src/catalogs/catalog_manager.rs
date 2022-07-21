@@ -63,7 +63,7 @@ impl CatalogManagerHelper for CatalogManager {
 
     #[cfg(feature = "hive")]
     fn register_external_catalogs(&mut self, conf: &Config) -> Result<()> {
-        use crate::catalogs::hive::HiveCatalog;
+        use common_catalogs::hive::HiveCatalog;
         let hms_address = &conf.catalog.meta_store_address;
         if !hms_address.is_empty() {
             // register hive catalog

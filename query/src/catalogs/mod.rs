@@ -16,13 +16,12 @@ mod catalog;
 
 mod catalog_manager;
 pub mod default;
-#[cfg(feature = "hive")]
-pub mod hive;
-
 pub use catalog::Catalog;
 pub use catalog_manager::CatalogManager;
 pub use catalog_manager::CatalogManagerHelper;
 pub use catalog_manager::CATALOG_DEFAULT;
+#[cfg(feature = "hive")]
+pub use common_catalogs::hive;
 pub use default::table_id_ranges::*;
 pub use default::table_memory_meta::InMemoryMetas;
 pub use default::DatabaseCatalog;

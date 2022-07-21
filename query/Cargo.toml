@@ -23,7 +23,14 @@ simd = ["common-arrow/simd"]
 tokio-console = ["common-tracing/console", "common-base/tracing"]
 memory-profiling = ["common-base/memory-profiling", "common-http/memory-profiling", "tempfile"]
 storage-hdfs = ["opendal/services-hdfs", "common-storage/storage-hdfs"]
-hive = ["common-hive-meta-store", "thrift", "storage-hdfs", "common-config/hive", "common-storages/hive"]
+hive = [
+    "common-hive-meta-store",
+    "thrift",
+    "storage-hdfs",
+    "common-config/hive",
+    "common-storages/hive",
+    "common-catalogs/hive",
+]
 
 [dependencies]
 # Workspace dependencies
@@ -32,6 +39,7 @@ common-ast = { path = "../common/ast" }
 common-base = { path = "../common/base" }
 common-cache = { path = "../common/cache" }
 common-catalog = { path = "../common/catalog" }
+common-catalogs = { path = "../common/catalogs", optional = true }
 common-config = { path = "../common/config" }
 common-contexts = { path = "../common/contexts" }
 common-datablocks = { path = "../common/datablocks" }
@@ -57,6 +65,7 @@ common-meta-store = { path = "../common/meta/store" }
 common-meta-types = { path = "../common/meta/types" }
 common-metrics = { path = "../common/metrics" }
 common-pipeline = { path = "../common/pipeline" }
+common-pipeline-sources = { path = "../common/pipeline-sources" }
 common-planners = { path = "../common/planners" }
 common-settings = { path = "../common/settings" }
 common-storage = { path = "../common/storage" }

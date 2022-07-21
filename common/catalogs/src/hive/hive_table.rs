@@ -16,11 +16,18 @@ use std::sync::Arc;
 
 use common_catalog::table::Table;
 use common_catalog::table::TableStatistics;
+use common_catalog::table_context::TableContext;
 use common_datablocks::DataBlock;
 use common_datavalues::DataSchemaRef;
 use common_exception::ErrorCode;
 use common_exception::Result;
 use common_meta_app::schema::TableInfo;
+use common_pipeline::processors::port::OutputPort;
+use common_pipeline::processors::processor::ProcessorPtr;
+use common_pipeline::Pipeline;
+use common_pipeline::SourcePipeBuilder;
+use common_pipeline_sources::sources::sync_source::SyncSource;
+use common_pipeline_sources::sources::sync_source::SyncSourcer;
 use common_planners::Expression;
 use common_planners::Extras;
 use common_planners::Partitions;
@@ -28,20 +35,13 @@ use common_planners::ReadDataSourcePlan;
 use common_planners::Statistics;
 use common_planners::TruncateTablePlan;
 use common_storages::hive::HiveParquetBlockReader;
+use common_storages::hive::HivePartInfo;
 use common_streams::SendableDataBlockStream;
 use futures::TryStreamExt;
 use opendal::ObjectMode;
 
 use super::hive_table_options::HiveTableOptions;
-use crate::catalogs::hive::hive_table_source::HiveTableSource;
-use crate::catalogs::hive::HivePartInfo;
-use crate::pipelines::processors::port::OutputPort;
-use crate::pipelines::processors::processor::ProcessorPtr;
-use crate::pipelines::processors::SyncSource;
-use crate::pipelines::processors::SyncSourcer;
-use crate::pipelines::Pipeline;
-use crate::pipelines::SourcePipeBuilder;
-use crate::sessions::TableContext;
+use crate::hive::hive_table_source::HiveTableSource;
 
 /// ! Dummy implementation for HIVE TABLE
 

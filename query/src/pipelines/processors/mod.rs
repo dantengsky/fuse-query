@@ -35,8 +35,6 @@ pub use sources::StreamSource;
 pub use sources::StreamSourceV2;
 pub use sources::SyncReceiverCkSource;
 pub use sources::SyncReceiverSource;
-pub use sources::SyncSource;
-pub use sources::SyncSourcer;
 pub use transforms::AggregatorParams;
 pub use transforms::AggregatorTransformParams;
 pub use transforms::BlockCompactor;

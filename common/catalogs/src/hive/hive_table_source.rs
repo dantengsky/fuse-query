@@ -22,14 +22,14 @@ use common_catalog::table_context::TableContext;
 use common_datablocks::DataBlock;
 use common_exception::ErrorCode;
 use common_exception::Result;
+use common_pipeline::processors::port::OutputPort;
+use common_pipeline::processors::processor::Event;
+use common_pipeline::processors::processor::ProcessorPtr;
+use common_pipeline::processors::Processor;
 use common_planners::PartInfoPtr;
 use common_storages::hive::HiveParquetBlockReader;
 
-use crate::catalogs::hive::hive_table_source::State::Generated;
-use crate::pipelines::processors::port::OutputPort;
-use crate::pipelines::processors::processor::Event;
-use crate::pipelines::processors::processor::ProcessorPtr;
-use crate::pipelines::processors::Processor;
+use crate::hive::hive_table_source::State::Generated;
 
 enum State {
     ReadData(PartInfoPtr),

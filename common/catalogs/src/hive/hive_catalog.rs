@@ -14,6 +14,12 @@
 
 use std::sync::Arc;
 
+use common_catalog::catalog::Catalog;
+use common_catalog::catalog::StorageDescription;
+use common_catalog::database::Database;
+use common_catalog::table::Table;
+use common_catalog::table_args::TableArgs;
+use common_catalog::table_function::TableFunction;
 use common_exception::ErrorCode;
 use common_exception::Result;
 use common_hive_meta_store::TThriftHiveMetastoreSyncClient;
@@ -46,13 +52,7 @@ use thrift::protocol::*;
 use thrift::transport::*;
 
 use super::hive_database::HiveDatabase;
-use crate::catalogs::hive::HiveTable;
-use crate::catalogs::Catalog;
-use crate::databases::Database;
-use crate::storages::StorageDescription;
-use crate::storages::Table;
-use crate::table_functions::TableArgs;
-use crate::table_functions::TableFunction;
+use crate::hive::HiveTable;
 
 #[derive(Clone)]
 pub struct HiveCatalog {

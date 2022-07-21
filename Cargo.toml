@@ -6,6 +6,7 @@ members = [
     "common/building",
     "common/cache",
     "common/catalog",
+    "common/catalogs",
     "common/codegen",
     "common/config",
     "common/contexts",

@@ -21,12 +21,13 @@ mod multi_file_splitter;
 mod stream_source;
 mod stream_source_v2;
 mod sync_ck_source_receiver;
-mod sync_source;
 mod sync_source_receiver;
 
 pub use async_source::AsyncSource;
 pub use async_source::AsyncSourcer;
 pub use blocks_source::BlocksSource;
+pub use common_pipeline_sources::sources::sync_source::SyncSource;
+pub use common_pipeline_sources::sources::sync_source::SyncSourcer;
 pub use deserializer::Deserializer;
 pub use empty_source::EmptySource;
 pub use multi_file_splitter::MultiFileSplitter;
@@ -34,8 +35,6 @@ pub use multi_file_splitter::OperatorInfo;
 pub use stream_source::StreamSource;
 pub use stream_source_v2::StreamSourceV2;
 pub use sync_ck_source_receiver::SyncReceiverCkSource;
-pub use sync_source::SyncSource;
-pub use sync_source::SyncSourcer;
 pub use sync_source_receiver::SyncReceiverSource;
 
 #[allow(dead_code)]
@@ -44,13 +43,13 @@ mod source_example {
 
     use common_datablocks::DataBlock;
     use common_exception::Result;
+    use common_pipeline_sources::sources::sync_source::SyncSource;
+    use common_pipeline_sources::sources::sync_source::SyncSourcer;
 
     use crate::pipelines::processors::port::OutputPort;
     use crate::pipelines::processors::processor::ProcessorPtr;
     use crate::pipelines::processors::sources::async_source::AsyncSource;
-    use crate::pipelines::processors::sources::sync_source::SyncSource;
-    use crate::pipelines::processors::sources::AsyncSourcer;
-    use crate::pipelines::processors::sources::SyncSourcer;
+    use crate::pipelines::processors::AsyncSourcer;
     use crate::sessions::QueryContext;
 
     struct ExampleSyncSource {

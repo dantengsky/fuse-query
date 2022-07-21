@@ -1,5 +1,5 @@
 [package]
-name = "common-storages"
+name = "common-catalogs"
 version = "0.1.0"
 authors = ["Databend Authors <opensource@datafuselabs.com>"]
 license = "Apache-2.0"
@@ -12,17 +12,27 @@ hive = ["opendal/services-hdfs"]
 [dependencies]
 common-arrow = { path = "../arrow" }
 common-base = { path = "../base" }
-common-datablocks= { path = "../datablocks" }
+common-catalog = { path = "../catalog" }
+common-datablocks = { path = "../datablocks" }
 common-datavalues = { path = "../datavalues" }
 common-exception = { path = "../exception" }
+common-hive-meta-store = { path = "../hive-meta-store" }
+common-meta-app = { path = "../meta/app" }
+common-meta-types = { path = "../meta/types" }
+common-pipeline = { path = "../pipeline" }
+common-pipeline-sources = { path = "../pipeline-sources" }
 common-planners = { path = "../planners" }
+common-storages = { path = "../storages" }
+common-streams = { path = "../streams" }
 common-tracing = { path = "../tracing" }
 
 anyhow = "1.0.58"
+async-trait = { git = "https://github.com/datafuse-extras/async-trait", rev = "f0b0fd5" }
 backoff = { version = "0.4.0", features = ["futures", "tokio"] }
 futures = "0.3.21"
 globiter = "0.1.0"
 opendal = { version = "0.11.2", features = ["retry", "services-http"] }
 percent-encoding = "2.1.0"
 serde = { version = "1.0.137", features = ["derive"] }
+thrift = "0.15.0"
 typetag = "0.1.8"

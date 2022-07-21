@@ -17,12 +17,12 @@ use std::sync::Arc;
 
 use common_datablocks::DataBlock;
 use common_exception::Result;
+use common_pipeline_sources::sources::sync_source::SyncSource;
+use common_pipeline_sources::sources::sync_source::SyncSourcer;
 use parking_lot::Mutex;
 
 use crate::pipelines::processors::port::OutputPort;
 use crate::pipelines::processors::processor::ProcessorPtr;
-use crate::pipelines::processors::SyncSource;
-use crate::pipelines::processors::SyncSourcer;
 use crate::sessions::QueryContext;
 
 pub struct BlocksSource {

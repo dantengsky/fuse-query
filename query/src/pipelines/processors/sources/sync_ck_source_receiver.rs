@@ -18,12 +18,12 @@ use common_base::base::tokio::sync::mpsc::Receiver;
 use common_datablocks::DataBlock;
 use common_datavalues::DataSchemaRef;
 use common_exception::Result;
+use common_pipeline_sources::sources::sync_source::SyncSource;
+use common_pipeline_sources::sources::sync_source::SyncSourcer;
 use opensrv_clickhouse::types::Block;
 
 use crate::pipelines::processors::port::OutputPort;
 use crate::pipelines::processors::processor::ProcessorPtr;
-use crate::pipelines::processors::sources::sync_source::SyncSource;
-use crate::pipelines::processors::sources::SyncSourcer;
 use crate::servers::clickhouse::from_clickhouse_block;
 use crate::sessions::QueryContext;
 
