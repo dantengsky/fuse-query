@@ -16,12 +16,12 @@ use std::sync::Arc;
 
 use common_base::base::tokio;
 use common_exception::Result;
-use databend_query::pipelines::processors::connect;
-use databend_query::pipelines::processors::port::InputPort;
-use databend_query::pipelines::processors::port::OutputPort;
-use databend_query::pipelines::processors::processor::Event;
-use databend_query::pipelines::processors::Processor;
-use databend_query::pipelines::processors::ResizeProcessor;
+use common_pipeline::processors::connect;
+use common_pipeline::processors::port::InputPort;
+use common_pipeline::processors::port::OutputPort;
+use common_pipeline::processors::processor::Event;
+use common_pipeline::processors::Processor;
+use common_pipeline::processors::ResizeProcessor;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_resize_output_not_need() -> Result<()> {
