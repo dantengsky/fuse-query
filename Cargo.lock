@@ -1616,6 +1616,7 @@ dependencies = [
  "common-datablocks",
  "common-datavalues",
  "common-exception",
+ "common-planners",
  "common-tracing",
  "futures",
  "futures-util",

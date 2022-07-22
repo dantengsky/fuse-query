@@ -16,10 +16,8 @@ use std::sync::Arc;
 
 use common_datablocks::DataBlock;
 use common_datablocks::SortColumnDescription;
-use common_datavalues::DataSchemaRef;
-use common_exception::ErrorCode;
 use common_exception::Result;
-use common_planners::Expression;
+pub use common_pipeline::sort_util::get_sort_descriptions;
 
 use crate::pipelines::processors::port::InputPort;
 use crate::pipelines::processors::port::OutputPort;
@@ -53,35 +51,4 @@ impl Transform for TransformSortPartial {
     fn transform(&mut self, block: DataBlock) -> Result<DataBlock> {
         DataBlock::sort_block(&block, &self.sort_columns_descriptions, self.limit)
     }
-}
-
-pub fn get_sort_descriptions(
-    schema: &DataSchemaRef,
-    exprs: &[Expression],
-) -> Result<Vec<SortColumnDescription>> {
-    let mut sort_columns_descriptions = vec![];
-    for x in exprs {
-        match *x {
-            Expression::Sort {
-                ref expr,
-                asc,
-                nulls_first,
-                ..
-            } => {
-                let column_name = expr.to_data_field(schema)?.name().clone();
-                sort_columns_descriptions.push(SortColumnDescription {
-                    column_name,
-                    asc,
-                    nulls_first,
-                });
-            }
-            _ => {
-                return Result::Err(ErrorCode::BadTransformType(format!(
-                    "Sort expression must be ExpressionPlan::Sort, but got: {:?}",
-                    x
-                )));
-            }
-        }
-    }
-    Ok(sort_columns_descriptions)
 }

@@ -19,6 +19,7 @@ pub mod pipe;
 pub mod pipeline;
 pub mod pipeline_display;
 pub mod sinks;
+pub mod sort_util;
 pub mod unsafe_cell_wrap;
 
 pub use pipe::Pipe;

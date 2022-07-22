@@ -13,6 +13,7 @@ common-base = { path = "../base" }
 common-datablocks = { path = "../datablocks" }
 common-datavalues = { path = "../datavalues" }
 common-exception = { path = "../exception" }
+common-planners = { path = "../planners" }
 common-tracing = { path = "../tracing" }
 
 async-trait = { git = "https://github.com/datafuse-extras/async-trait", rev = "f0b0fd5" }
