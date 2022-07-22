@@ -16,5 +16,8 @@
 #![feature(type_alias_impl_trait)]
 
 pub mod async_crash_me;
+pub mod memory_block_part;
+pub mod numbers_part;
+pub mod numbers_table;
 pub mod sync_crash_me;
 pub mod table_function;

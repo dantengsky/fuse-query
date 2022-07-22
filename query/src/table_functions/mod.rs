@@ -14,12 +14,12 @@
 //
 
 use common_table_functions::async_crash_me;
+use common_table_functions::memory_block_part;
+use common_table_functions::numbers_part;
+use common_table_functions::numbers_table;
 use common_table_functions::sync_crash_me;
 use common_table_functions::table_function;
 
-mod memory_block_part;
-mod numbers_part;
-mod numbers_table;
 mod table_function_factory;
 
 pub use memory_block_part::generate_numbers_parts;

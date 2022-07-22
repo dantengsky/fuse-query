@@ -13,4 +13,5 @@
 //  limitations under the License.
 
 pub mod async_source;
+pub mod empty_source;
 pub mod sync_source;

@@ -32,9 +32,11 @@ use common_meta_app::schema::TableInfo;
 use common_meta_app::schema::TableMeta;
 use common_pipeline::processors::port::OutputPort;
 use common_pipeline::processors::processor::ProcessorPtr;
+use common_pipeline::sort_util::get_sort_descriptions;
 use common_pipeline::Pipe;
 use common_pipeline::Pipeline;
 use common_pipeline::SourcePipeBuilder;
+use common_pipeline_sources::sources::empty_source::EmptySource;
 use common_pipeline_sources::sources::sync_source::SyncSource;
 use common_pipeline_sources::sources::sync_source::SyncSourcer;
 use common_planners::Expression;
@@ -44,10 +46,8 @@ use common_planners::Partitions;
 use common_planners::ReadDataSourcePlan;
 use common_planners::Statistics;
 
-use crate::pipelines::processors::transforms::get_sort_descriptions;
-use crate::pipelines::processors::EmptySource;
-use crate::table_functions::memory_block_part::generate_numbers_parts;
-use crate::table_functions::NumbersPartInfo;
+use crate::memory_block_part::generate_numbers_parts;
+use crate::numbers_part::NumbersPartInfo;
 
 pub struct NumbersTable {
     table_info: TableInfo,

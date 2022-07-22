@@ -15,7 +15,6 @@
 use common_pipeline_sources::sources::async_source;
 mod blocks_source;
 mod deserializer;
-mod empty_source;
 mod file_splitter;
 mod multi_file_splitter;
 mod stream_source;
@@ -26,6 +25,7 @@ mod sync_source_receiver;
 pub use async_source::AsyncSource;
 pub use async_source::AsyncSourcer;
 pub use blocks_source::BlocksSource;
+use common_pipeline_sources::sources::empty_source;
 pub use common_pipeline_sources::sources::sync_source::SyncSource;
 pub use common_pipeline_sources::sources::sync_source::SyncSourcer;
 pub use deserializer::Deserializer;
