@@ -16,7 +16,14 @@ use std::any::Any;
 use std::sync::Arc;
 
 use common_datablocks::DataBlock;
+use common_datavalues::ColumnRef;
+use common_datavalues::DataField;
+use common_datavalues::DataSchema;
 use common_datavalues::DataSchemaRef;
+use common_datavalues::DataTypeImpl;
+use common_datavalues::DataTypeImpl::Nullable;
+use common_datavalues::NullableType;
+use common_datavalues::StringType;
 use common_datavalues::TypeDeserializer;
 use common_datavalues::TypeDeserializerImpl;
 use common_exception::ErrorCode;
@@ -196,6 +203,72 @@ impl CsvInputFormat {
 
         index + 1
     }
+
+    fn read_row_free_style(
+        &self,
+        checkpoint_reader: &mut NestedCheckpointReader<MemoryReader>,
+        deserializers: &mut impl Iterator<Item = TypeDeserializerImpl>,
+        row_index: usize,
+    ) -> Result<Vec<TypeDeserializerImpl>> {
+        let mut col_idx = 0;
+        let mut cols = vec![];
+        while !checkpoint_reader.ignore_white_spaces_and_byte(b'\n')? {
+            let mut de = deserializers.next().unwrap();
+            if checkpoint_reader.ignore_white_spaces_and_byte(self.field_delimiter)? {
+                de.de_default(&self.settings);
+            } else {
+                de.de_text_csv(checkpoint_reader, &self.settings)?;
+                eprintln!("col idx {}", col_idx);
+                checkpoint_reader.ignore_white_spaces_and_byte(self.field_delimiter)?;
+                eprintln!("after col idx {}", col_idx);
+            }
+            cols.push(de);
+            col_idx += 1;
+        }
+
+        // for column_index in 0..deserializers.len() {
+        //    if checkpoint_reader.ignore_white_spaces_and_byte(self.field_delimiter)? {
+        //        deserializers[column_index].de_default(&self.settings);
+        //    } else {
+        //        deserializers[column_index].de_text_csv(checkpoint_reader, &self.settings)?;
+
+        //        // TODO as format settings;
+        //        // if column_index + 1 != deserializers.len() {
+        //        //    checkpoint_reader.must_ignore_white_spaces_and_byte(self.field_delimiter)?;
+        //        //}
+        //    }
+        //}
+
+        // checkpoint_reader.ignore_white_spaces_and_byte(self.field_delimiter)?;
+
+        if let Some(delimiter) = &self.record_delimiter {
+            eprintln!("checking record delimiter");
+            if !checkpoint_reader.ignore_white_spaces_and_byte(*delimiter)?
+                && !checkpoint_reader.eof()?
+            {
+                return Err(ErrorCode::BadBytes(format!(
+                    "Parse csv error at line {}",
+                    row_index
+                )));
+            }
+        } else {
+            // if (!checkpoint_reader.ignore_white_spaces_and_byte(b'\n')?
+            //    && !checkpoint_reader.ignore_white_spaces_and_byte(b'\r')?)
+            //    && !checkpoint_reader.eof()?
+            //{
+            //    eprintln!("checking predefined record delimiter");
+            //    return Err(ErrorCode::BadBytes(format!(
+            //        "Parse csv error at line {}",
+            //        row_index
+            //    )));
+            //}
+
+            // \r\n
+            checkpoint_reader.ignore_white_spaces_and_byte(b'\n')?;
+        }
+
+        Ok(cols)
+    }
 }
 
 impl InputFormat for CsvInputFormat {
@@ -240,38 +313,103 @@ impl InputFormat for CsvInputFormat {
         })
     }
 
-    fn deserialize_complete_split(&self, split: FileSplit) -> Result<Vec<DataBlock>> {
-        let mut deserializers = self.schema.create_deserializers(self.min_accepted_rows);
+    // fn deserialize_complete_split(&self, split: FileSplit) -> Result<Vec<DataBlock>> {
+    //    let mut deserializers = self.schema.create_deserializers(self.min_accepted_rows);
 
+    //    let memory_reader = MemoryReader::new(split.buf);
+    //    let mut checkpoint_reader = NestedCheckpointReader::new(memory_reader);
+
+    //    let mut row_index = 0;
+    //    while !checkpoint_reader.eof()? {
+    //        checkpoint_reader.push_checkpoint();
+    //        if let Err(err) = self.read_row(&mut checkpoint_reader, &mut deserializers, row_index) {
+    //            let checkpoint_buffer = checkpoint_reader.get_checkpoint_buffer_end();
+    //            let msg = self.get_diagnostic_info(
+    //                checkpoint_buffer,
+    //                &split.path,
+    //                row_index + split.start_row,
+    //                self.schema.clone(),
+    //                self.min_accepted_rows,
+    //                self.settings.clone(),
+    //            )?;
+    //            let err = err.add_message_back(msg);
+    //            return Err(err);
+    //        }
+    //        checkpoint_reader.pop_checkpoint();
+    //        row_index += 1;
+    //    }
+
+    //    let mut columns = Vec::with_capacity(deserializers.len());
+    //    for deserializer in &mut deserializers {
+    //        columns.push(deserializer.finish_to_column());
+    //    }
+
+    //    Ok(vec![DataBlock::create(self.schema.clone(), columns)])
+    //}
+
+    fn deserialize_complete_split(&self, split: FileSplit) -> Result<Vec<DataBlock>> {
+        // let mut deserializers = self.schema.create_deserializers(self.min_accepted_rows);
+
+        eprintln!("USING ME");
         let memory_reader = MemoryReader::new(split.buf);
         let mut checkpoint_reader = NestedCheckpointReader::new(memory_reader);
 
+        let mut deserializer_iter = std::iter::from_fn(|| {
+            let t = StringType::new_impl();
+            let nullable = NullableType::new_impl(t);
+            Some(nullable.create_deserializer(self.min_accepted_rows))
+        });
+
+        let mut deserializers = vec![];
+        use common_datavalues::DataType;
         let mut row_index = 0;
         while !checkpoint_reader.eof()? {
             checkpoint_reader.push_checkpoint();
-            if let Err(err) = self.read_row(&mut checkpoint_reader, &mut deserializers, row_index) {
-                let checkpoint_buffer = checkpoint_reader.get_checkpoint_buffer_end();
-                let msg = self.get_diagnostic_info(
-                    checkpoint_buffer,
-                    &split.path,
-                    row_index + split.start_row,
-                    self.schema.clone(),
-                    self.min_accepted_rows,
-                    self.settings.clone(),
-                )?;
-                let err = err.add_message_back(msg);
-                return Err(err);
+            let res = if row_index == 0 {
+                self.read_row_free_style(&mut checkpoint_reader, &mut deserializer_iter, row_index)
+            } else {
+                self.read_row_free_style(
+                    &mut checkpoint_reader,
+                    &mut deserializers.into_iter(),
+                    row_index,
+                )
+            };
+            match res {
+                Err(err) => {
+                    let checkpoint_buffer = checkpoint_reader.get_checkpoint_buffer_end();
+                    let msg = self.get_diagnostic_info(
+                        checkpoint_buffer,
+                        &split.path,
+                        row_index + split.start_row,
+                        self.schema.clone(),
+                        self.min_accepted_rows,
+                        self.settings.clone(),
+                    )?;
+                    let err = err.add_message_back(msg);
+                    return Err(err);
+                }
+                Ok(v) => {
+                    deserializers = v;
+                    checkpoint_reader.pop_checkpoint();
+                    row_index += 1;
+                }
             }
-            checkpoint_reader.pop_checkpoint();
-            row_index += 1;
         }
+
+        let mut fields = vec![];
 
         let mut columns = Vec::with_capacity(deserializers.len());
         for deserializer in &mut deserializers {
             columns.push(deserializer.finish_to_column());
+            fields.push(DataField::new_nullable(
+                format!("_").as_str(),
+                DataTypeImpl::String(StringType {}),
+            ));
         }
+        let schema = DataSchema::new(fields);
 
-        Ok(vec![DataBlock::create(self.schema.clone(), columns)])
+        // Ok(vec![DataBlock::create(self.schema.clone(), columns)])
+        Ok(vec![DataBlock::create(Arc::new(schema), columns)])
     }
 
     fn read_row(
@@ -286,9 +424,10 @@ impl InputFormat for CsvInputFormat {
             } else {
                 deserializers[column_index].de_text_csv(checkpoint_reader, &self.settings)?;
 
-                if column_index + 1 != deserializers.len() {
-                    checkpoint_reader.must_ignore_white_spaces_and_byte(self.field_delimiter)?;
-                }
+                // TODO as format settings;
+                // if column_index + 1 != deserializers.len() {
+                //    checkpoint_reader.must_ignore_white_spaces_and_byte(self.field_delimiter)?;
+                //}
             }
         }
 

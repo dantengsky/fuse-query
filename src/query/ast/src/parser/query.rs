@@ -208,6 +208,12 @@ pub enum TableReferenceElement<'a> {
         params: Vec<Expr<'a>>,
         alias: Option<TableAlias<'a>>,
     },
+
+    // stage
+    Stage {
+        stage: (String, String),
+        alias: Option<TableAlias<'a>>,
+    },
     // Derived table, which can be a subquery or joined tables or combination of them
     Subquery {
         subquery: Box<Query<'a>>,
@@ -224,6 +230,24 @@ pub enum TableReferenceElement<'a> {
 }
 
 pub fn table_reference_element(i: Input) -> IResult<WithSpan<TableReferenceElement>> {
+    let stage = |i| {
+        map(at_string, |location| {
+            let parsed = location.splitn(2, '/').collect::<Vec<_>>();
+            if parsed.len() == 1 {
+                (parsed[0].to_string(), "/".to_string())
+            } else {
+                (parsed[0].to_string(), format!("/{}", parsed[1]))
+            }
+        })(i)
+    };
+
+    let aliased_stage = map(
+        rule! {
+            #stage ~ #table_alias?
+        },
+        |(stage, alias)| TableReferenceElement::Stage { stage, alias },
+    );
+
     let aliased_table = map(
         rule! {
             #peroid_separated_idents_1_to_3 ~ #travel_point? ~ #table_alias?
@@ -236,6 +260,7 @@ pub fn table_reference_element(i: Input) -> IResult<WithSpan<TableReferenceEleme
             travel_point,
         },
     );
+
     let table_function = map(
         rule! {
             #ident ~ "(" ~ #comma_separated_list0(expr) ~ ")" ~ #table_alias?
@@ -285,6 +310,7 @@ pub fn table_reference_element(i: Input) -> IResult<WithSpan<TableReferenceEleme
 
     let (rest, (span, elem)) = consumed(rule! {
         #subquery
+        | #aliased_stage
         | #table_function
         | #aliased_table
         | #group
@@ -329,6 +355,12 @@ impl<'a, I: Iterator<Item = WithSpan<'a, TableReferenceElement<'a>>>> PrattParse
                 table,
                 alias,
                 travel_point,
+            },
+            TableReferenceElement::Stage { stage, alias } => TableReference::Stage {
+                span: input.span.0,
+                name: stage.0,
+                path: stage.1,
+                alias,
             },
             TableReferenceElement::TableFunction {
                 name,

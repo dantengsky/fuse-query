@@ -1,20 +1,21 @@
-// Copyright 2022 Datafuse Labs.
+//  Copyright 2022 Datafuse Labs.
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
+//  Licensed under the Apache License, Version 2.0 (the "License");
+//  you may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//      http://www.apache.org/licenses/LICENSE-2.0
 //
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+//  Unless required by applicable law or agreed to in writing, software
+//  distributed under the License is distributed on an "AS IS" BASIS,
+//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//  See the License for the specific language governing permissions and
+//  limitations under the License.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
 
+use common_catalog::table_context::TableContext;
 use common_datavalues::DataSchemaRef;
 use common_exception::ErrorCode;
 use common_exception::Result;
@@ -24,18 +25,16 @@ use common_io::prelude::FormatSettings;
 use common_meta_types::StageFileFormatType;
 use common_meta_types::StageType;
 use common_meta_types::UserStageInfo;
+use common_pipeline_core::processors::port::InputPort;
+use common_pipeline_core::processors::port::OutputPort;
+use common_pipeline_core::processors::processor::ProcessorPtr;
+use common_pipeline_sources::processors::sources::Deserializer;
+use common_pipeline_sources::processors::sources::MultiFileSplitter;
+use common_pipeline_sources::processors::sources::OperatorInfo;
 use common_planners::StageTableInfo;
 use common_storage::init_operator;
 use opendal::Operator;
 use parking_lot::Mutex;
-
-use crate::pipelines::processors::port::InputPort;
-use crate::pipelines::processors::port::OutputPort;
-use crate::pipelines::processors::processor::ProcessorPtr;
-use crate::pipelines::processors::Deserializer;
-use crate::pipelines::processors::MultiFileSplitter;
-use crate::pipelines::processors::OperatorInfo;
-use crate::sessions::TableContext;
 
 pub struct StageSourceHelper {
     ctx: Arc<dyn TableContext>,

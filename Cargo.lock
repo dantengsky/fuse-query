@@ -1872,6 +1872,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "common-storages-stage"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "common-catalog",
+ "common-datablocks",
+ "common-datavalues",
+ "common-exception",
+ "common-formats",
+ "common-io",
+ "common-meta-app",
+ "common-meta-types",
+ "common-pipeline-core",
+ "common-pipeline-sinks",
+ "common-pipeline-sources",
+ "common-pipeline-transforms",
+ "common-planners",
+ "common-storage",
+ "common-storages-util",
+ "opendal",
+ "parking_lot 0.12.1",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "common-storages-util"
 version = "0.1.0"
 dependencies = [
@@ -2510,6 +2536,7 @@ dependencies = [
  "common-storages-hive",
  "common-storages-index",
  "common-storages-preludes",
+ "common-storages-stage",
  "common-storages-util",
  "common-streams",
  "common-tracing",

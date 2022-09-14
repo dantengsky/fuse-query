@@ -34,6 +34,16 @@ use crate::sql::optimizer::SExpr;
 use crate::sql::plans::Scalar;
 use crate::sql::NameResolutionContext;
 
+pub trait ColumnMatcher {
+    fn matches(&self, name: &str) -> bool;
+}
+
+impl ColumnMatcher for String {
+    fn matches(&self, name: &str) -> bool {
+        self.as_str() == name
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ColumnBinding {
     /// Database name of this `ColumnBinding` in current context
@@ -283,12 +293,12 @@ impl BindContext {
     ///
     /// This method is used to retrieve the physical representation of result set of
     /// a query.
-    pub fn result_columns(&self) -> Vec<(IndexType, String)> {
-        self.columns
-            .iter()
-            .map(|col| (col.index, col.column_name.clone()))
-            .collect()
-    }
+    //    pub fn result_columns(&self) -> Vec<(IndexType, String)> {
+    //        self.columns
+    //            .iter()
+    //            .map(|col| (col.index, col.column_name.clone()))
+    //            .collect()
+    //    }
 
     /// Return data scheme.
     pub fn output_schema(&self) -> DataSchemaRef {

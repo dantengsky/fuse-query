@@ -17,30 +17,33 @@ use std::collections::VecDeque;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use common_catalog::catalog::StorageDescription;
+use common_catalog::table::Table;
+use common_catalog::table_context::TableContext;
 use common_datablocks::DataBlock;
 use common_exception::ErrorCode;
 use common_exception::Result;
 use common_formats::output_format::OutputFormatType;
 use common_meta_app::schema::TableInfo;
 use common_pipeline_core::processors::port::InputPort;
+use common_pipeline_core::processors::port::OutputPort;
+use common_pipeline_core::Pipeline;
 use common_pipeline_core::SinkPipeBuilder;
+use common_pipeline_core::SourcePipeBuilder;
+use common_pipeline_sinks::processors::sinks::ContextSink;
+use common_pipeline_transforms::processors::transforms::TransformLimit;
 use common_planners::Extras;
 use common_planners::Partitions;
+use common_planners::Projection;
 use common_planners::ReadDataSourcePlan;
 use common_planners::StageTableInfo;
 use common_planners::Statistics;
 use common_planners::TruncateTablePlan;
+use common_storages_util::storage_context::StorageContext;
 use parking_lot::Mutex;
 use tracing::info;
 
 use super::StageSourceHelper;
-use crate::pipelines::processors::port::OutputPort;
-use crate::pipelines::processors::ContextSink;
-use crate::pipelines::processors::TransformLimit;
-use crate::pipelines::Pipeline;
-use crate::pipelines::SourcePipeBuilder;
-use crate::sessions::TableContext;
-use crate::storages::Table;
 
 pub struct StageTable {
     table_info: StageTableInfo,
@@ -52,12 +55,34 @@ pub struct StageTable {
 
 impl StageTable {
     pub fn try_create(table_info: StageTableInfo) -> Result<Arc<dyn Table>> {
-        let table_info_placeholder = TableInfo::default().set_schema(table_info.schema());
+        let mut table_info_placeholder = TableInfo::default().set_schema(table_info.schema());
+        table_info_placeholder.meta.engine = "STAGE".to_owned();
 
         Ok(Arc::new(Self {
             table_info,
             table_info_placeholder,
         }))
+    }
+
+    pub fn try_create_new(_ctx: StorageContext, table_info: TableInfo) -> Result<Box<dyn Table>> {
+        let stage_table_info = StageTableInfo {
+            schema: table_info.schema(),
+            stage_info: Default::default(),
+            path: "".to_string(),
+            files: vec![],
+        };
+        Ok(Box::new(Self {
+            table_info: stage_table_info,
+            table_info_placeholder: table_info,
+        }))
+    }
+
+    pub fn description() -> StorageDescription {
+        StorageDescription {
+            engine_name: "STAGE".to_string(),
+            comment: "Stage Storage Engine".to_string(),
+            ..Default::default()
+        }
     }
 }
 
@@ -77,25 +102,83 @@ impl Table for StageTable {
         _ctx: Arc<dyn TableContext>,
         _push_downs: Option<Extras>,
     ) -> Result<(Statistics, Partitions)> {
+        // let path = &table_info.path;
+        //// Here we add the path to the file: /path/to/path/file1.
+        // let files_with_path = if !files.is_empty() {
+        //    let mut files_with_path = vec![];
+        //    for file in files {
+        //        let new_path = Path::new(path).join(file);
+        //        files_with_path.push(new_path.to_string_lossy().to_string());
+        //    }
+        //    files_with_path
+        //} else if !path.ends_with('/') {
+        //    let rename_me: Arc<dyn TableContext> = self.ctx.clone();
+        //    let op = StageSourceHelper::get_op(&rename_me, &table_info.stage_info).await?;
+        //    if op.object(path).is_exist().await? {
+        //        vec![path.to_string()]
+        //    } else {
+        //        vec![]
+        //    }
+        //} else {
+        //    let rename_me: Arc<dyn TableContext> = self.ctx.clone();
+        //    let op = StageSourceHelper::get_op(&rename_me, &table_info.stage_info).await?;
+        //    let mut list = vec![];
+
+        //    // TODO: we could rewrite into try_collect.
+        //    let mut objects = op.batch().walk_top_down(path)?;
+        //    while let Some(de) = objects.try_next().await? {
+        //        if de.mode().is_dir() {
+        //            continue;
+        //        }
+        //        list.push(de.path().to_string());
+        //    }
+
+        //    list
+        //};
+
         Ok((Statistics::default(), vec![]))
     }
 
     fn read2(
         &self,
         ctx: Arc<dyn TableContext>,
-        _plan: &ReadDataSourcePlan,
+        plan: &ReadDataSourcePlan,
         pipeline: &mut Pipeline,
     ) -> Result<()> {
         let settings = ctx.get_settings();
         let mut builder = SourcePipeBuilder::create();
         let table_info = &self.table_info;
         let schema = table_info.schema.clone();
+
+        eprintln!("files are {:?}", table_info.files);
+        eprintln!(
+            "plan projection {:?}",
+            plan.push_downs.as_ref().map(|e| &e.projection)
+        );
+
+        let projection = plan
+            .push_downs
+            .as_ref()
+            .and_then(|e| e.projection.as_ref())
+            .and_then(|p| match p {
+                Projection::Columns(cols) => Some(cols),
+                Projection::InnerColumns(_) => None,
+            })
+            .ok_or_else(|| ErrorCode::StorageOther("invalid projection"))?;
+
         let mut files_deque = VecDeque::with_capacity(table_info.files.len());
         for f in &table_info.files {
             files_deque.push_back(f.to_string());
         }
+
+        files_deque.push_back("stage/test_stage/books.csv".to_owned());
+
         let files = Arc::new(Mutex::new(files_deque));
 
+        let stage_source_schema = Arc::new(schema.project(projection));
+
+        // let stage_source =
+        //    StageSourceHelper::try_create(ctx, stage_source_schema, table_info.clone(), files)?;
         let stage_source = StageSourceHelper::try_create(ctx, schema, table_info.clone(), files)?;
 
         for _index in 0..settings.get_max_threads()? {

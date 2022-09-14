@@ -31,6 +31,7 @@ use common_datavalues::prelude::*;
 use common_exception::ErrorCode;
 use common_exception::Result;
 use common_planners::Expression;
+use common_planners::StageTableInfo;
 
 use crate::sessions::TableContext;
 use crate::sql::binder::scalar::ScalarBinder;
@@ -45,6 +46,7 @@ use crate::sql::plans::LogicalGet;
 use crate::sql::plans::Scalar;
 use crate::sql::BindContext;
 use crate::sql::IndexType;
+use crate::storages::stage::StageTable;
 use crate::storages::view::view_table::QUERY;
 use crate::storages::NavigationPoint;
 use crate::storages::Table;
@@ -238,6 +240,28 @@ impl<'a> Binder {
                 }
                 Ok((s_expr, bind_context))
             }
+            TableReference::Stage {
+                span: _,
+                name,
+                path,
+                alias,
+            } => {
+                let stage_table: Arc<dyn Table> =
+                    self.resolve_stage(name.as_str(), path.as_str()).await?;
+
+                let table_index = self.metadata.write().add_table(
+                    CATALOG_DEFAULT.to_owned(),
+                    "".to_owned(),
+                    stage_table,
+                );
+
+                let (s_expr, mut bind_context) =
+                    self.bind_base_table(bind_context, "", table_index).await?;
+                if let Some(alias) = alias {
+                    bind_context.apply_table_alias(alias, &self.name_resolution_ctx)?;
+                }
+                Ok((s_expr, bind_context))
+            }
         }
     }
 
@@ -337,6 +361,32 @@ impl<'a> Binder {
             table_meta = table_meta.navigate_to(self.ctx.clone(), tp).await?;
         }
         Ok(table_meta)
+    }
+
+    async fn resolve_stage(&self, name: &str, path: &str) -> Result<Arc<dyn Table>> {
+        let tenant = self.ctx.get_tenant();
+        let stage_info = self
+            .ctx
+            .get_user_manager()
+            .get_stage(tenant.as_str(), name)
+            .await?;
+        let schema = (1..=10)
+            .into_iter()
+            .map(|i| {
+                DataField::new_nullable(
+                    format!("${i}").as_str(),
+                    DataTypeImpl::String(StringType {}),
+                )
+            })
+            .collect::<Vec<_>>();
+        let table_info = StageTableInfo {
+            schema: DataSchemaRefExt::create(schema),
+            stage_info,
+            path: path.to_string(),
+            files: vec![],
+        };
+        let table = StageTable::try_create(table_info)?;
+        Ok(table)
     }
 
     async fn resolve_data_travel_point(

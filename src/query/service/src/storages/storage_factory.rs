@@ -19,6 +19,7 @@ pub use common_catalog::catalog::StorageDescription;
 use common_exception::ErrorCode;
 use common_exception::Result;
 use common_meta_app::schema::TableInfo;
+use common_storages_stage::StageTable;
 use parking_lot::RwLock;
 
 use super::random::RandomTable;
@@ -104,6 +105,11 @@ impl StorageFactory {
             descriptor: Arc::new(RandomTable::description),
         });
 
+        // Register STORAGE engine
+        creators.insert("STAGE".to_string(), Storage {
+            creator: Arc::new(StageTable::try_create_new),
+            descriptor: Arc::new(StageTable::description),
+        });
         StorageFactory {
             storages: RwLock::new(creators),
         }

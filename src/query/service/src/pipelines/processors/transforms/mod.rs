@@ -29,12 +29,13 @@ mod transform_expression_v2;
 mod transform_filter;
 mod transform_filter_v2;
 mod transform_hash_join;
-mod transform_limit;
 mod transform_limit_by;
 mod transform_mark_join;
 mod transform_project;
 mod transform_rename;
 mod transform_window_func;
+
+use common_pipeline_transforms::processors::transforms::transform_limit;
 
 pub mod group_by;
 mod transform_merge_block;
