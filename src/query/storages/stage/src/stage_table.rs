@@ -21,6 +21,7 @@ use common_catalog::catalog::StorageDescription;
 use common_catalog::table::Table;
 use common_catalog::table_context::TableContext;
 use common_datablocks::DataBlock;
+use common_datavalues::DataSchemaRef;
 use common_exception::ErrorCode;
 use common_exception::Result;
 use common_formats::output_format::OutputFormatType;
@@ -31,7 +32,9 @@ use common_pipeline_core::Pipeline;
 use common_pipeline_core::SinkPipeBuilder;
 use common_pipeline_core::SourcePipeBuilder;
 use common_pipeline_sinks::processors::sinks::ContextSink;
+use common_pipeline_transforms::processors::transforms::Transform;
 use common_pipeline_transforms::processors::transforms::TransformLimit;
+use common_pipeline_transforms::processors::transforms::Transformer;
 use common_planners::Extras;
 use common_planners::Partitions;
 use common_planners::Projection;
@@ -97,45 +100,19 @@ impl Table for StageTable {
         &self.table_info_placeholder
     }
 
+    fn adhoc_schema(&self) -> bool {
+        true
+    }
+
+    fn benefit_column_prune(&self) -> bool {
+        true
+    }
+
     async fn read_partitions(
         &self,
         _ctx: Arc<dyn TableContext>,
         _push_downs: Option<Extras>,
     ) -> Result<(Statistics, Partitions)> {
-        // let path = &table_info.path;
-        //// Here we add the path to the file: /path/to/path/file1.
-        // let files_with_path = if !files.is_empty() {
-        //    let mut files_with_path = vec![];
-        //    for file in files {
-        //        let new_path = Path::new(path).join(file);
-        //        files_with_path.push(new_path.to_string_lossy().to_string());
-        //    }
-        //    files_with_path
-        //} else if !path.ends_with('/') {
-        //    let rename_me: Arc<dyn TableContext> = self.ctx.clone();
-        //    let op = StageSourceHelper::get_op(&rename_me, &table_info.stage_info).await?;
-        //    if op.object(path).is_exist().await? {
-        //        vec![path.to_string()]
-        //    } else {
-        //        vec![]
-        //    }
-        //} else {
-        //    let rename_me: Arc<dyn TableContext> = self.ctx.clone();
-        //    let op = StageSourceHelper::get_op(&rename_me, &table_info.stage_info).await?;
-        //    let mut list = vec![];
-
-        //    // TODO: we could rewrite into try_collect.
-        //    let mut objects = op.batch().walk_top_down(path)?;
-        //    while let Some(de) = objects.try_next().await? {
-        //        if de.mode().is_dir() {
-        //            continue;
-        //        }
-        //        list.push(de.path().to_string());
-        //    }
-
-        //    list
-        //};
-
         Ok((Statistics::default(), vec![]))
     }
 
@@ -175,7 +152,7 @@ impl Table for StageTable {
 
         let files = Arc::new(Mutex::new(files_deque));
 
-        let stage_source_schema = Arc::new(schema.project(projection));
+        let output_schema = Arc::new(schema.project(projection));
 
         // let stage_source =
         //    StageSourceHelper::try_create(ctx, stage_source_schema, table_info.clone(), files)?;
@@ -189,6 +166,16 @@ impl Table for StageTable {
 
         pipeline.add_transform(|transform_input_port, transform_output_port| {
             stage_source.get_deserializer(transform_input_port, transform_output_port)
+        })?;
+
+        pipeline.add_transform(move |transform_input_port, transform_output_port| {
+            Ok(Transformer::create(
+                transform_input_port,
+                transform_output_port,
+                Appender {
+                    output_schema: output_schema.clone(),
+                },
+            ))
         })?;
 
         let limit = self.table_info.stage_info.copy_options.size_limit;
@@ -292,5 +279,42 @@ impl Table for StageTable {
         Err(ErrorCode::UnImplement(
             "S3 external table truncate() unimplemented yet!",
         ))
+    }
+}
+
+struct Appender {
+    output_schema: DataSchemaRef,
+}
+
+impl Transform for Appender {
+    const NAME: &'static str = "Appender";
+
+    fn transform(&mut self, block: DataBlock) -> Result<DataBlock> {
+        let num_rows = block.num_rows();
+        let input_schema = block.schema().clone();
+
+        eprintln!("input schema {:?}, rows {}", input_schema, num_rows);
+        eprintln!("output schema {:?}", self.output_schema);
+        use common_datavalues::DataType;
+        let mut new_block = DataBlock::empty();
+
+        for (i, f) in self.output_schema.fields().iter().enumerate() {
+            if !input_schema.has_field(f.name()) {
+                let default_value = f.data_type().default_value();
+                let column = f
+                    .data_type()
+                    .create_constant_column(&default_value, num_rows)?;
+                new_block = new_block.add_column(column, f.clone())?;
+            } else {
+                eprintln!("adding col from input block, len {}", block.column(i).len());
+                new_block = new_block.add_column(block.column(i).clone(), f.clone())?;
+            }
+        }
+        eprintln!("row of new_block is {}", new_block.num_rows());
+
+        new_block.resort(self.output_schema.clone())
+        //        eprintln!("row of r is {}", r.num_rows());
+        //
+        //        Ok(block)
     }
 }

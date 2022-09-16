@@ -16,12 +16,10 @@ use std::any::Any;
 use std::sync::Arc;
 
 use common_datablocks::DataBlock;
-use common_datavalues::ColumnRef;
 use common_datavalues::DataField;
 use common_datavalues::DataSchema;
 use common_datavalues::DataSchemaRef;
 use common_datavalues::DataTypeImpl;
-use common_datavalues::DataTypeImpl::Nullable;
 use common_datavalues::NullableType;
 use common_datavalues::StringType;
 use common_datavalues::TypeDeserializer;
@@ -402,7 +400,7 @@ impl InputFormat for CsvInputFormat {
         for deserializer in &mut deserializers {
             columns.push(deserializer.finish_to_column());
             fields.push(DataField::new_nullable(
-                format!("_").as_str(),
+                format!("${}", columns.len()).as_str(),
                 DataTypeImpl::String(StringType {}),
             ));
         }

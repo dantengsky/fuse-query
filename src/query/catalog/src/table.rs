@@ -71,6 +71,10 @@ pub trait Table: Sync + Send {
 
     fn get_table_info(&self) -> &TableInfo;
 
+    fn adhoc_schema(&self) -> bool {
+        false
+    }
+
     /// whether column prune(projection) can help in table read
     fn benefit_column_prune(&self) -> bool {
         false

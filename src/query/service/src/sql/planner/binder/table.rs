@@ -315,8 +315,9 @@ impl<'a> Binder {
         let mut bind_context = BindContext::with_parent(Box::new(bind_context.clone()));
         let columns = self.metadata.read().columns_by_table_index(table_index);
         let table = self.metadata.read().table(table_index).clone();
+        let adhoc_schema = table.table.adhoc_schema();
         for column in columns.iter() {
-            let visible_in_unqualified_wildcard = column.path_indices.is_none();
+            let visible_in_unqualified_wildcard = column.path_indices.is_none() && !adhoc_schema;
             let column_binding = ColumnBinding {
                 database_name: Some(database_name.to_string()),
                 table_name: Some(table.name.clone()),
@@ -365,11 +366,17 @@ impl<'a> Binder {
 
     async fn resolve_stage(&self, name: &str, path: &str) -> Result<Arc<dyn Table>> {
         let tenant = self.ctx.get_tenant();
+        eprintln!("getting tenant {}, stage {}", tenant, name);
         let stage_info = self
             .ctx
             .get_user_manager()
             .get_stage(tenant.as_str(), name)
             .await?;
+
+        // TODO add ad-hoc schema according to the format
+        // - json alike. one variant column
+        // - parquet / csv. multiple (but limited) nullable string columns
+        // - ...
         let schema = (1..=10)
             .into_iter()
             .map(|i| {

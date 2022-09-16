@@ -210,11 +210,16 @@ impl PipelineBuilder {
         self.ctx.try_set_partitions(scan.source.parts.clone())?;
         table.read2(self.ctx.clone(), &scan.source, &mut self.main_pipeline)?;
         let schema = scan.source.schema();
+        eprintln!("scan source schema {:?}", schema);
         let projections = scan
             .name_mapping
             .iter()
             .map(|(name, _)| schema.index_of(name.as_str()))
             .collect::<Result<Vec<usize>>>()?;
+        eprintln!(
+            "name mapping {:?}, projections {:?}",
+            scan.name_mapping, projections
+        );
 
         self.main_pipeline.add_transform(|input, output| {
             Ok(TransformProject::create(input, output, projections.clone()))

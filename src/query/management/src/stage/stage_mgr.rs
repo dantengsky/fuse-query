@@ -97,6 +97,7 @@ impl StageApi for StageMgr {
     async fn get_stage(&self, name: &str, seq: Option<u64>) -> Result<SeqV<UserStageInfo>> {
         let key = format!("{}/{}", self.stage_prefix, escape_for_key(name)?);
         let kv_api = self.kv_api.clone();
+        eprintln!("key is {}", key);
         let get_kv = async move { kv_api.get_kv(&key).await };
         let res = get_kv.await?;
         let seq_value =

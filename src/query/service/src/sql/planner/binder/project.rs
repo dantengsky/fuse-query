@@ -230,6 +230,10 @@ impl<'a> Binder {
                 }
             }
         }
-        Ok(output)
+        if output.items.is_empty() {
+            Err(ErrorCode::SemanticError("SELECT with no columns"))
+        } else {
+            Ok(output)
+        }
     }
 }
