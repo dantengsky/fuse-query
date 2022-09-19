@@ -125,7 +125,7 @@ impl QueryContext {
         table_info: &StageTableInfo,
         _table_args: Option<Vec<Expression>>,
     ) -> Result<Arc<dyn Table>> {
-        StageTable::try_create(table_info.clone())
+        StageTable::with_stage_table_info(table_info.clone())
     }
 
     /// Fetch a Table by db and table name.

@@ -26,6 +26,7 @@ use common_exception::ErrorCode;
 use common_exception::Result;
 use common_formats::output_format::OutputFormatType;
 use common_meta_app::schema::TableInfo;
+use common_meta_types::StageFileFormatType;
 use common_pipeline_core::processors::port::InputPort;
 use common_pipeline_core::processors::port::OutputPort;
 use common_pipeline_core::Pipeline;
@@ -48,6 +49,8 @@ use tracing::info;
 
 use super::StageSourceHelper;
 
+pub const ENGINE_STAGE: &str = "STAGE";
+
 pub struct StageTable {
     table_info: StageTableInfo,
     // This is no used but a placeholder.
@@ -57,17 +60,29 @@ pub struct StageTable {
 }
 
 impl StageTable {
-    pub fn try_create(table_info: StageTableInfo) -> Result<Arc<dyn Table>> {
-        let mut table_info_placeholder = TableInfo::default().set_schema(table_info.schema());
-        table_info_placeholder.meta.engine = "STAGE".to_owned();
-
+    pub fn with_stage_table_info(stage_info: StageTableInfo) -> Result<Arc<dyn Table>> {
+        eprintln!("using with_stage_table_info");
+        let mut table_info_placeholder = TableInfo::default().set_schema(stage_info.schema());
+        table_info_placeholder.meta.engine = ENGINE_STAGE.to_owned();
         Ok(Arc::new(Self {
-            table_info,
+            table_info: stage_info,
             table_info_placeholder,
         }))
     }
 
-    pub fn try_create_new(_ctx: StorageContext, table_info: TableInfo) -> Result<Box<dyn Table>> {
+    // called by resolve_stage, indicates that the schema is artificial
+    pub fn with_stage_info(stage_info: StageInfo, path: &str) -> Result<Arc<dyn Table>> {
+        let mut table_info_placeholder = TableInfo::default().set_schema(stage_info.schema());
+        table_info_placeholder.meta.engine = ENGINE_STAGE.to_owned();
+        Ok(Arc::new(Self {
+            table_info: stage_info,
+            table_info_placeholder,
+        }))
+    }
+
+    // used by StorageFactory
+    pub fn try_create(_ctx: StorageContext, table_info: TableInfo) -> Result<Box<dyn Table>> {
+        eprintln!("using try_create");
         let stage_table_info = StageTableInfo {
             schema: table_info.schema(),
             stage_info: Default::default(),

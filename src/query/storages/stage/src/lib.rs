@@ -19,3 +19,4 @@ mod stage_table;
 
 pub use stage_source::StageSourceHelper;
 pub use stage_table::StageTable;
+pub use stage_table::ENGINE_STAGE;

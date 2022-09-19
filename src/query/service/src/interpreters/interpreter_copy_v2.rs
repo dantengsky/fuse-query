@@ -217,7 +217,7 @@ impl CopyInterpreterV2 {
         };
 
         let build_res = select_interpreter.create_new_pipeline().await?;
-        let table = StageTable::try_create(stage_table_info)?;
+        let table = StageTable::with_stage_table_info(stage_table_info)?;
 
         append2table(
             self.ctx.clone(),
