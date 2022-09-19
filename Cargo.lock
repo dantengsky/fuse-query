@@ -1196,6 +1196,7 @@ dependencies = [
  "common-datablocks",
  "common-datavalues",
  "common-exception",
+ "common-functions",
  "common-io",
  "once_cell",
  "pretty_assertions",

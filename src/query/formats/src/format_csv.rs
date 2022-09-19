@@ -16,12 +16,8 @@ use std::any::Any;
 use std::sync::Arc;
 
 use common_datablocks::DataBlock;
-use common_datavalues::DataField;
-use common_datavalues::DataSchema;
 use common_datavalues::DataSchemaRef;
-use common_datavalues::DataTypeImpl;
-use common_datavalues::NullableType;
-use common_datavalues::StringType;
+use common_datavalues::DataSchemaRefExt;
 use common_datavalues::TypeDeserializer;
 use common_datavalues::TypeDeserializerImpl;
 use common_exception::ErrorCode;
@@ -58,36 +54,9 @@ impl InputState for CsvInputState {
     }
 }
 
-pub enum SchemaDeducer {
-    WithSchema(DataSchemaRef),
-}
-
-impl SchemaDeducer {
-    fn schema(&self) -> DataSchemaRef {
-        match self {
-            SchemaDeducer::WithSchema(s) => s.clone(),
-        }
-    }
-
-    fn trailer(&self) -> Box<dyn Iterator<Item = TypeDeserializerImpl>> {
-        match self {
-            SchemaDeducer::WithSchema(s) => {
-                // TODO capacity
-                Box::new(s.create_deserializers(1).into_iter())
-            }
-        }
-    }
-}
-
-impl From<DataSchemaRef> for SchemaDeducer {
-    fn from(v: DataSchemaRef) -> Self {
-        SchemaDeducer::WithSchema(v)
-    }
-}
-
 pub struct CsvInputFormat {
-    // schema: DataSchemaRef,
-    schema_deducer: SchemaDeducer,
+    schema: DataSchemaRef,
+    is_artificial: bool,
     field_delimiter: u8,
     skip_rows: usize,
     record_delimiter: Option<u8>,
@@ -103,10 +72,14 @@ impl CsvInputFormat {
                 factory.register_input(
                     $name,
                     Box::new(
-                        |name: &str, schema: DataSchemaRef, settings: FormatSettings| {
+                        |name: &str,
+                         schema: DataSchemaRef,
+                         is_artificial_schema: bool,
+                         settings: FormatSettings| {
                             CsvInputFormat::try_create(
                                 name,
                                 schema,
+                                is_artificial_schema,
                                 settings,
                                 $skip_rows,
                                 8192,
@@ -127,6 +100,7 @@ impl CsvInputFormat {
     pub fn try_create(
         _name: &str,
         schema: DataSchemaRef,
+        is_artificial_schema: bool,
         mut settings: FormatSettings,
         skip_rows: usize,
         min_accepted_rows: usize,
@@ -149,7 +123,8 @@ impl CsvInputFormat {
         settings.null_bytes = settings.csv_null_bytes.clone();
 
         Ok(Arc::new(CsvInputFormat {
-            schema_deducer: schema.into(),
+            schema,
+            is_artificial: is_artificial_schema,
             settings,
             skip_rows,
             field_delimiter,
@@ -236,20 +211,17 @@ impl CsvInputFormat {
         deserializers: &mut impl Iterator<Item = TypeDeserializerImpl>,
         row_index: usize,
     ) -> Result<Vec<TypeDeserializerImpl>> {
-        let mut col_idx = 0;
         let mut cols = vec![];
         while !checkpoint_reader.ignore_white_spaces_and_byte(b'\n')? {
+            // TODO no unwrap please
             let mut de = deserializers.next().unwrap();
             if checkpoint_reader.ignore_white_spaces_and_byte(self.field_delimiter)? {
                 de.de_default(&self.settings);
             } else {
                 de.de_text_csv(checkpoint_reader, &self.settings)?;
-                eprintln!("col idx {}", col_idx);
                 checkpoint_reader.ignore_white_spaces_and_byte(self.field_delimiter)?;
-                eprintln!("after col idx {}", col_idx);
             }
             cols.push(de);
-            col_idx += 1;
         }
 
         // for column_index in 0..deserializers.len() {
@@ -339,57 +311,27 @@ impl InputFormat for CsvInputFormat {
         })
     }
 
-    // fn deserialize_complete_split(&self, split: FileSplit) -> Result<Vec<DataBlock>> {
-    //    let mut deserializers = self.schema.create_deserializers(self.min_accepted_rows);
-
-    //    let memory_reader = MemoryReader::new(split.buf);
-    //    let mut checkpoint_reader = NestedCheckpointReader::new(memory_reader);
-
-    //    let mut row_index = 0;
-    //    while !checkpoint_reader.eof()? {
-    //        checkpoint_reader.push_checkpoint();
-    //        if let Err(err) = self.read_row(&mut checkpoint_reader, &mut deserializers, row_index) {
-    //            let checkpoint_buffer = checkpoint_reader.get_checkpoint_buffer_end();
-    //            let msg = self.get_diagnostic_info(
-    //                checkpoint_buffer,
-    //                &split.path,
-    //                row_index + split.start_row,
-    //                self.schema.clone(),
-    //                self.min_accepted_rows,
-    //                self.settings.clone(),
-    //            )?;
-    //            let err = err.add_message_back(msg);
-    //            return Err(err);
-    //        }
-    //        checkpoint_reader.pop_checkpoint();
-    //        row_index += 1;
-    //    }
-
-    //    let mut columns = Vec::with_capacity(deserializers.len());
-    //    for deserializer in &mut deserializers {
-    //        columns.push(deserializer.finish_to_column());
-    //    }
-
-    //    Ok(vec![DataBlock::create(self.schema.clone(), columns)])
-    //}
-
     fn deserialize_complete_split(&self, split: FileSplit) -> Result<Vec<DataBlock>> {
-        // let mut deserializers = self.schema.create_deserializers(self.min_accepted_rows);
-
         eprintln!("USING ME");
         let memory_reader = MemoryReader::new(split.buf);
         let mut checkpoint_reader = NestedCheckpointReader::new(memory_reader);
+        let mut deserializer_iter: Box<dyn Iterator<Item = TypeDeserializerImpl>> =
+            if self.is_artificial {
+                Box::new(self.schema.fields().iter().map(|field| {
+                    let data_type = field.data_type();
+                    data_type.create_deserializer(self.min_accepted_rows)
+                }))
+            } else {
+                Box::new(
+                    self.schema
+                        .create_deserializers(self.min_accepted_rows)
+                        .into_iter(),
+                )
+            };
 
-        let mut deserializer_iter = self.schema_deducer.trailer();
-        // let mut deserializer_iter = std::iter::from_fn(|| {
-        //    let t = StringType::new_impl();
-        //    let nullable = NullableType::new_impl(t);
-        //    Some(nullable.create_deserializer(self.min_accepted_rows))
-        //});
-
-        let mut deserializers = vec![];
         use common_datavalues::DataType;
         let mut row_index = 0;
+        let mut deserializers = vec![];
         while !checkpoint_reader.eof()? {
             checkpoint_reader.push_checkpoint();
             let res = if row_index == 0 {
@@ -408,7 +350,7 @@ impl InputFormat for CsvInputFormat {
                         checkpoint_buffer,
                         &split.path,
                         row_index + split.start_row,
-                        self.schema_deducer.schema(),
+                        self.schema.clone(),
                         self.min_accepted_rows,
                         self.settings.clone(),
                     )?;
@@ -423,20 +365,20 @@ impl InputFormat for CsvInputFormat {
             }
         }
 
-        let mut fields = vec![];
-
         let mut columns = Vec::with_capacity(deserializers.len());
-        for deserializer in &mut deserializers {
-            columns.push(deserializer.finish_to_column());
-            fields.push(DataField::new_nullable(
-                format!("${}", columns.len()).as_str(),
-                DataTypeImpl::String(StringType {}),
-            ));
-        }
-        let schema = DataSchema::new(fields);
+        let schema = if self.is_artificial {
+            let mut fields = vec![];
+            for (i, deserializer) in &mut deserializers.iter_mut().enumerate() {
+                columns.push(deserializer.finish_to_column());
+                let field = self.schema.field(i);
+                fields.push(field.clone());
+            }
+            DataSchemaRefExt::create(fields)
+        } else {
+            self.schema.clone()
+        };
 
-        // Ok(vec![DataBlock::create(self.schema.clone(), columns)])
-        Ok(vec![DataBlock::create(Arc::new(schema), columns)])
+        Ok(vec![DataBlock::create(schema, columns)])
     }
 
     fn read_row(

@@ -26,12 +26,13 @@ use strum::IntoEnumIterator;
 use super::format_tsv::TsvInputFormat;
 use crate::format::InputFormat;
 use crate::format_csv::CsvInputFormat;
-use crate::format_ndjson::NDJsonInputFormat;
+// use crate::format_ndjson::NDJsonInputFormat;
 use crate::format_parquet::ParquetInputFormat;
 use crate::output_format::OutputFormatType;
 
-pub type InputFormatFactoryCreator =
-    Box<dyn Fn(&str, DataSchemaRef, FormatSettings) -> Result<Arc<dyn InputFormat>> + Send + Sync>;
+pub type InputFormatFactoryCreator = Box<
+    dyn Fn(&str, DataSchemaRef, bool, FormatSettings) -> Result<Arc<dyn InputFormat>> + Send + Sync,
+>;
 
 pub struct FormatFactory {
     case_insensitive_desc: HashMap<String, InputFormatFactoryCreator>,
@@ -44,7 +45,8 @@ static FORMAT_FACTORY: Lazy<Arc<FormatFactory>> = Lazy::new(|| {
     CsvInputFormat::register(&mut format_factory);
     TsvInputFormat::register(&mut format_factory);
     ParquetInputFormat::register(&mut format_factory);
-    NDJsonInputFormat::register(&mut format_factory);
+    // TODO
+    // NDJsonInputFormat::register(&mut format_factory);
 
     format_factory.register_outputs();
     Arc::new(format_factory)
@@ -77,6 +79,7 @@ impl FormatFactory {
         &self,
         name: impl AsRef<str>,
         schema: DataSchemaRef,
+        is_artificial_schema: bool,
         settings: FormatSettings,
     ) -> Result<Arc<dyn InputFormat>> {
         let origin_name = name.as_ref();
@@ -89,7 +92,7 @@ impl FormatFactory {
                 ErrorCode::UnknownFormat(format!("Unsupported formats: {}", origin_name))
             })?;
 
-        creator(origin_name, schema, settings)
+        creator(origin_name, schema, is_artificial_schema, settings)
     }
 
     pub fn get_output(&self, name: &str) -> Result<OutputFormatType> {

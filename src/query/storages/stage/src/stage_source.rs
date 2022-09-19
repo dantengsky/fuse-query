@@ -48,7 +48,8 @@ pub struct StageSourceHelper {
 impl StageSourceHelper {
     pub fn try_create(
         ctx: Arc<dyn TableContext>,
-        schema: Option<DataSchemaRef>,
+        schema: DataSchemaRef,
+        artificial_schema: bool,
         table_info: StageTableInfo,
         files: Arc<Mutex<VecDeque<String>>>,
     ) -> Result<StageSourceHelper> {
@@ -73,12 +74,12 @@ impl StageSourceHelper {
             .as_bytes()
             .to_vec();
 
-        let file_format = if let Some(schema) = schema {
-            Self::get_input_format(&file_format_options.format, schema, format_settings.clone())?
-        } else {
-            todo!()
-            // Self::get_input_format(&file_format_options.format, schema, format_settings.clone())?;
-        };
+        let file_format = Self::get_input_format(
+            &file_format_options.format,
+            schema,
+            artificial_schema,
+            format_settings.clone(),
+        )?;
 
         let operator_info = if stage_info.stage_type == StageType::Internal {
             OperatorInfo::Op(ctx.get_storage_operator()?)
@@ -127,9 +128,14 @@ impl StageSourceHelper {
         }
     }
 
+    pub fn input_format(&self) -> &Arc<dyn InputFormat> {
+        &self.file_format
+    }
+
     fn get_input_format(
         format: &StageFileFormatType,
         schema: DataSchemaRef,
+        is_artificial_schema: bool,
         format_settings: FormatSettings,
     ) -> Result<Arc<dyn InputFormat>> {
         let name = match format {
@@ -144,7 +150,12 @@ impl StageSourceHelper {
                 )));
             }
         };
-        let input_format = FormatFactory::instance().get_input(name, schema, format_settings)?;
+        let input_format = FormatFactory::instance().get_input(
+            name,
+            schema,
+            is_artificial_schema,
+            format_settings,
+        )?;
         Ok(input_format)
     }
 }

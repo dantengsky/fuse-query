@@ -50,7 +50,7 @@ impl MultipartFormat {
     ) -> Result<(Box<dyn MultipartWorker>, SourcePipeBuilder)> {
         let mut source_pipe_builder = SourcePipeBuilder::create();
         let input_format =
-            FormatFactory::instance().get_input(name, schema.clone(), settings.clone())?;
+            FormatFactory::instance().get_input(name, schema.clone(), false, settings.clone())?;
 
         let query_settings = ctx.get_settings();
         if query_settings.get_max_threads()? != 1
@@ -72,7 +72,7 @@ impl MultipartFormat {
                     ParallelInputFormatSource::create(
                         output_port,
                         scan_progress,
-                        FormatFactory::instance().get_input(name, schema, settings)?,
+                        FormatFactory::instance().get_input(name, schema, false, settings)?,
                         rx.clone(),
                     )?,
                 );

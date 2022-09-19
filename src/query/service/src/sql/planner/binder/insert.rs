@@ -211,8 +211,13 @@ impl<'a> Binder {
             }
             // format factory
             Some(name) => {
-                let input_format =
-                    FormatFactory::instance().get_input(name, schema.clone(), settings)?;
+                let is_artificial_schema = false;
+                let input_format = FormatFactory::instance().get_input(
+                    name,
+                    schema.clone(),
+                    is_artificial_schema,
+                    settings,
+                )?;
 
                 let data_slice = stream_str.as_bytes();
                 let mut input_state = input_format.create_state();

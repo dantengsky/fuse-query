@@ -174,40 +174,51 @@ impl Table for StageTable {
         let table_info = &self.table_info;
         let schema = table_info.schema.clone();
 
-        eprintln!("files are {:?}", table_info.files);
-        eprintln!(
-            "plan projection {:?}",
-            plan.push_downs.as_ref().map(|e| &e.projection)
-        );
-
-        let projection = plan
-            .push_downs
-            .as_ref()
-            .and_then(|e| e.projection.as_ref())
-            .and_then(|p| match p {
-                Projection::Columns(cols) => Some(cols),
-                Projection::InnerColumns(_) => None,
-            })
-            .ok_or_else(|| ErrorCode::StorageOther("invalid projection"))?;
-        let output_schema = Arc::new(schema.project(projection));
-
         let mut files_deque = VecDeque::with_capacity(table_info.files.len());
         for f in &table_info.files {
             files_deque.push_back(f.to_string());
         }
 
-        files_deque.push_back("stage/test_stage/books.csv".to_owned());
+        let transform_projection = if self.artificial_schema {
+            let projection = plan
+                .push_downs
+                .as_ref()
+                .and_then(|e| e.projection.as_ref())
+                .and_then(|p| match p {
+                    Projection::Columns(cols) => Some(cols),
+                    Projection::InnerColumns(_) => None,
+                })
+                .ok_or_else(|| ErrorCode::StorageOther("invalid projection"))?;
+            let output_schema = Arc::new(schema.project(projection));
+
+            // TODO add another stage, to list all the files
+            files_deque.push_back("stage/test_stage/books.csv".to_owned());
+            let reshape_artificial_schema = move |transform_input_port, transform_output_port| {
+                Ok(Transformer::create(
+                    transform_input_port,
+                    transform_output_port,
+                    ReshapeArtificialSchema {
+                        output_schema: output_schema.clone(),
+                    },
+                ))
+            };
+            Some(reshape_artificial_schema)
+        } else {
+            None
+        };
 
         let files = Arc::new(Mutex::new(files_deque));
 
         // let stage_source =
         //    StageSourceHelper::try_create(ctx, stage_source_schema, table_info.clone(), files)?;
-        let stage_source = if self.artificial_schema {
-            todo!()
-            // StageSourceHelper::try_create_new(ctx, table_info.clone(), files)?;
-        } else {
-            StageSourceHelper::try_create(ctx, Some(schema), table_info.clone(), files)?
-        };
+        let artificial_schema = self.artificial_schema;
+        let stage_source = StageSourceHelper::try_create(
+            ctx,
+            schema,
+            artificial_schema,
+            table_info.clone(),
+            files,
+        )?;
 
         for _index in 0..settings.get_max_threads()? {
             let output = OutputPort::create();
@@ -219,15 +230,9 @@ impl Table for StageTable {
             stage_source.get_deserializer(transform_input_port, transform_output_port)
         })?;
 
-        pipeline.add_transform(move |transform_input_port, transform_output_port| {
-            Ok(Transformer::create(
-                transform_input_port,
-                transform_output_port,
-                ReshapeArtificialSchema {
-                    output_schema: output_schema.clone(),
-                },
-            ))
-        })?;
+        if let Some(transform) = transform_projection {
+            pipeline.add_transform(transform)?;
+        };
 
         let limit = self.table_info.stage_info.copy_options.size_limit;
         if limit > 0 {
