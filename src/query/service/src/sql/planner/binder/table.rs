@@ -31,7 +31,6 @@ use common_datavalues::prelude::*;
 use common_exception::ErrorCode;
 use common_exception::Result;
 use common_planners::Expression;
-use common_planners::StageTableInfo;
 
 use crate::sessions::TableContext;
 use crate::sql::binder::scalar::ScalarBinder;
@@ -374,26 +373,6 @@ impl<'a> Binder {
             .get_stage(tenant.as_str(), name)
             .await?;
 
-        // TODO add ad-hoc schema according to the format
-        // - json alike. one variant column
-        // - parquet / csv. multiple (but limited) nullable string columns
-        // - ...
-        let schema = (1..=10)
-            .into_iter()
-            .map(|i| {
-                DataField::new_nullable(
-                    format!("${i}").as_str(),
-                    DataTypeImpl::String(StringType {}),
-                )
-            })
-            .collect::<Vec<_>>();
-        let table_info = StageTableInfo {
-            schema: DataSchemaRefExt::create(schema),
-            stage_info,
-            path: path.to_string(),
-            files: vec![],
-        };
-        // let table = StageTable::with_stage_table_info(table_info)?;
         let table = StageTable::with_stage_info(stage_info, path)?;
         Ok(table)
     }

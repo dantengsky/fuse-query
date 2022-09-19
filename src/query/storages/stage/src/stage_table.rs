@@ -21,12 +21,17 @@ use common_catalog::catalog::StorageDescription;
 use common_catalog::table::Table;
 use common_catalog::table_context::TableContext;
 use common_datablocks::DataBlock;
+use common_datavalues::DataField;
 use common_datavalues::DataSchemaRef;
+use common_datavalues::DataSchemaRefExt;
+use common_datavalues::DataTypeImpl;
+use common_datavalues::StringType;
 use common_exception::ErrorCode;
 use common_exception::Result;
 use common_formats::output_format::OutputFormatType;
 use common_meta_app::schema::TableInfo;
 use common_meta_types::StageFileFormatType;
+use common_meta_types::UserStageInfo;
 use common_pipeline_core::processors::port::InputPort;
 use common_pipeline_core::processors::port::OutputPort;
 use common_pipeline_core::Pipeline;
@@ -57,32 +62,58 @@ pub struct StageTable {
     // But the Table trait need it:
     // fn get_table_info(&self) -> &TableInfo).
     table_info_placeholder: TableInfo,
+    artificial_schema: bool,
 }
 
 impl StageTable {
+    // with real schema
     pub fn with_stage_table_info(stage_info: StageTableInfo) -> Result<Arc<dyn Table>> {
         eprintln!("using with_stage_table_info");
         let mut table_info_placeholder = TableInfo::default().set_schema(stage_info.schema());
         table_info_placeholder.meta.engine = ENGINE_STAGE.to_owned();
+
         Ok(Arc::new(Self {
             table_info: stage_info,
             table_info_placeholder,
+            artificial_schema: false,
         }))
     }
 
-    // called by resolve_stage, indicates that the schema is artificial
-    pub fn with_stage_info(stage_info: StageInfo, path: &str) -> Result<Arc<dyn Table>> {
-        let mut table_info_placeholder = TableInfo::default().set_schema(stage_info.schema());
+    // called by resolve_stage, indicates that the schema should be created artificially
+    pub fn with_stage_info(stage_info: UserStageInfo, path: &str) -> Result<Arc<dyn Table>> {
+        // generate artificial schema
+        let schema = stage_info.file_format_options.format.artificial_schema();
+        let mut table_info_placeholder = TableInfo::default();
         table_info_placeholder.meta.engine = ENGINE_STAGE.to_owned();
+        table_info_placeholder = table_info_placeholder.set_schema(schema.clone());
+
+        // table_info is supported to be serialized and passed to other nodes in distributed mode
+        table_info_placeholder
+            .meta
+            .engine_options
+            .insert("ARTIFICIAL_SCHEMA".to_owned(), "".to_owned());
+
+        let stage_table_info = StageTableInfo {
+            schema,
+            stage_info,
+            path: path.to_owned(),
+            files: vec![],
+        };
+
         Ok(Arc::new(Self {
-            table_info: stage_info,
+            table_info: stage_table_info,
             table_info_placeholder,
+            artificial_schema: true,
         }))
     }
 
     // used by StorageFactory
     pub fn try_create(_ctx: StorageContext, table_info: TableInfo) -> Result<Box<dyn Table>> {
         eprintln!("using try_create");
+        let artificial_schema = table_info
+            .meta
+            .engine_options
+            .contains_key("ARTIFICIAL_SCHEMA");
         let stage_table_info = StageTableInfo {
             schema: table_info.schema(),
             stage_info: Default::default(),
@@ -92,6 +123,7 @@ impl StageTable {
         Ok(Box::new(Self {
             table_info: stage_table_info,
             table_info_placeholder: table_info,
+            artificial_schema,
         }))
     }
 
@@ -157,6 +189,7 @@ impl Table for StageTable {
                 Projection::InnerColumns(_) => None,
             })
             .ok_or_else(|| ErrorCode::StorageOther("invalid projection"))?;
+        let output_schema = Arc::new(schema.project(projection));
 
         let mut files_deque = VecDeque::with_capacity(table_info.files.len());
         for f in &table_info.files {
@@ -167,11 +200,14 @@ impl Table for StageTable {
 
         let files = Arc::new(Mutex::new(files_deque));
 
-        let output_schema = Arc::new(schema.project(projection));
-
         // let stage_source =
         //    StageSourceHelper::try_create(ctx, stage_source_schema, table_info.clone(), files)?;
-        let stage_source = StageSourceHelper::try_create(ctx, schema, table_info.clone(), files)?;
+        let stage_source = if self.artificial_schema {
+            todo!()
+            // StageSourceHelper::try_create_new(ctx, table_info.clone(), files)?;
+        } else {
+            StageSourceHelper::try_create(ctx, Some(schema), table_info.clone(), files)?
+        };
 
         for _index in 0..settings.get_max_threads()? {
             let output = OutputPort::create();
@@ -187,7 +223,7 @@ impl Table for StageTable {
             Ok(Transformer::create(
                 transform_input_port,
                 transform_output_port,
-                Appender {
+                ReshapeArtificialSchema {
                     output_schema: output_schema.clone(),
                 },
             ))
@@ -297,11 +333,11 @@ impl Table for StageTable {
     }
 }
 
-struct Appender {
+struct ReshapeArtificialSchema {
     output_schema: DataSchemaRef,
 }
 
-impl Transform for Appender {
+impl Transform for ReshapeArtificialSchema {
     const NAME: &'static str = "Appender";
 
     fn transform(&mut self, block: DataBlock) -> Result<DataBlock> {
@@ -331,5 +367,33 @@ impl Transform for Appender {
         //        eprintln!("row of r is {}", r.num_rows());
         //
         //        Ok(block)
+    }
+}
+
+trait ArtificialSchema {
+    fn artificial_schema(&self) -> DataSchemaRef;
+}
+
+impl ArtificialSchema for StageFileFormatType {
+    fn artificial_schema(&self) -> DataSchemaRef {
+        match self {
+            StageFileFormatType::Csv | StageFileFormatType::Tsv => {
+                let schema = (1..=10)
+                    .into_iter()
+                    .map(|i| {
+                        DataField::new_nullable(
+                            format!("${i}").as_str(),
+                            DataTypeImpl::String(StringType {}),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                DataSchemaRefExt::create(schema)
+            }
+            StageFileFormatType::Json | StageFileFormatType::NdJson => todo!(),
+            StageFileFormatType::Parquet => {
+                todo!()
+            }
+            _ => todo!(),
+        }
     }
 }

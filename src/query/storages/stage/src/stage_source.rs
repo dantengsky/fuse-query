@@ -48,7 +48,7 @@ pub struct StageSourceHelper {
 impl StageSourceHelper {
     pub fn try_create(
         ctx: Arc<dyn TableContext>,
-        schema: DataSchemaRef,
+        schema: Option<DataSchemaRef>,
         table_info: StageTableInfo,
         files: Arc<Mutex<VecDeque<String>>>,
     ) -> Result<StageSourceHelper> {
@@ -73,8 +73,12 @@ impl StageSourceHelper {
             .as_bytes()
             .to_vec();
 
-        let file_format =
-            Self::get_input_format(&file_format_options.format, schema, format_settings.clone())?;
+        let file_format = if let Some(schema) = schema {
+            Self::get_input_format(&file_format_options.format, schema, format_settings.clone())?
+        } else {
+            todo!()
+            // Self::get_input_format(&file_format_options.format, schema, format_settings.clone())?;
+        };
 
         let operator_info = if stage_info.stage_type == StageType::Internal {
             OperatorInfo::Op(ctx.get_storage_operator()?)

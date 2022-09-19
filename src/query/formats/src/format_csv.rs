@@ -58,8 +58,36 @@ impl InputState for CsvInputState {
     }
 }
 
+pub enum SchemaDeducer {
+    WithSchema(DataSchemaRef),
+}
+
+impl SchemaDeducer {
+    fn schema(&self) -> DataSchemaRef {
+        match self {
+            SchemaDeducer::WithSchema(s) => s.clone(),
+        }
+    }
+
+    fn trailer(&self) -> Box<dyn Iterator<Item = TypeDeserializerImpl>> {
+        match self {
+            SchemaDeducer::WithSchema(s) => {
+                // TODO capacity
+                Box::new(s.create_deserializers(1).into_iter())
+            }
+        }
+    }
+}
+
+impl From<DataSchemaRef> for SchemaDeducer {
+    fn from(v: DataSchemaRef) -> Self {
+        SchemaDeducer::WithSchema(v)
+    }
+}
+
 pub struct CsvInputFormat {
-    schema: DataSchemaRef,
+    // schema: DataSchemaRef,
+    schema_deducer: SchemaDeducer,
     field_delimiter: u8,
     skip_rows: usize,
     record_delimiter: Option<u8>,
@@ -121,7 +149,7 @@ impl CsvInputFormat {
         settings.null_bytes = settings.csv_null_bytes.clone();
 
         Ok(Arc::new(CsvInputFormat {
-            schema,
+            schema_deducer: schema.into(),
             settings,
             skip_rows,
             field_delimiter,
@@ -352,11 +380,12 @@ impl InputFormat for CsvInputFormat {
         let memory_reader = MemoryReader::new(split.buf);
         let mut checkpoint_reader = NestedCheckpointReader::new(memory_reader);
 
-        let mut deserializer_iter = std::iter::from_fn(|| {
-            let t = StringType::new_impl();
-            let nullable = NullableType::new_impl(t);
-            Some(nullable.create_deserializer(self.min_accepted_rows))
-        });
+        let mut deserializer_iter = self.schema_deducer.trailer();
+        // let mut deserializer_iter = std::iter::from_fn(|| {
+        //    let t = StringType::new_impl();
+        //    let nullable = NullableType::new_impl(t);
+        //    Some(nullable.create_deserializer(self.min_accepted_rows))
+        //});
 
         let mut deserializers = vec![];
         use common_datavalues::DataType;
@@ -379,7 +408,7 @@ impl InputFormat for CsvInputFormat {
                         checkpoint_buffer,
                         &split.path,
                         row_index + split.start_row,
-                        self.schema.clone(),
+                        self.schema_deducer.schema(),
                         self.min_accepted_rows,
                         self.settings.clone(),
                     )?;
