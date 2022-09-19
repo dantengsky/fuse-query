@@ -208,7 +208,6 @@ pub enum TableReferenceElement<'a> {
         params: Vec<Expr<'a>>,
         alias: Option<TableAlias<'a>>,
     },
-
     // stage
     Stage {
         stage: (String, String),
@@ -232,6 +231,7 @@ pub enum TableReferenceElement<'a> {
 pub fn table_reference_element(i: Input) -> IResult<WithSpan<TableReferenceElement>> {
     let stage = |i| {
         map(at_string, |location| {
+            eprintln!("location is {location}");
             let parsed = location.splitn(2, '/').collect::<Vec<_>>();
             if parsed.len() == 1 {
                 (parsed[0].to_string(), "/".to_string())
