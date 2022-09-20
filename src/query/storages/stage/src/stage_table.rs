@@ -14,6 +14,7 @@
 
 use std::any::Any;
 use std::collections::VecDeque;
+use std::io;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -21,6 +22,8 @@ use common_catalog::catalog::StorageDescription;
 use common_catalog::table::Table;
 use common_catalog::table_context::TableContext;
 use common_datablocks::DataBlock;
+use common_datavalues::chrono::TimeZone;
+use common_datavalues::chrono::Utc;
 use common_datavalues::DataField;
 use common_datavalues::DataSchemaRef;
 use common_datavalues::DataSchemaRefExt;
@@ -30,6 +33,7 @@ use common_exception::ErrorCode;
 use common_exception::Result;
 use common_formats::output_format::OutputFormatType;
 use common_meta_app::schema::TableInfo;
+use common_meta_types::StageFile;
 use common_meta_types::StageFileFormatType;
 use common_meta_types::UserStageInfo;
 use common_pipeline_core::processors::port::InputPort;
@@ -42,23 +46,36 @@ use common_pipeline_transforms::processors::transforms::Transform;
 use common_pipeline_transforms::processors::transforms::TransformLimit;
 use common_pipeline_transforms::processors::transforms::Transformer;
 use common_planners::Extras;
+use common_planners::PartInfo;
 use common_planners::Partitions;
 use common_planners::Projection;
 use common_planners::ReadDataSourcePlan;
+use common_planners::SourceInfo;
 use common_planners::StageTableInfo;
 use common_planners::Statistics;
 use common_planners::TruncateTablePlan;
 use common_storages_util::storage_context::StorageContext;
+use futures::TryStreamExt;
 use parking_lot::Mutex;
+use regex::Regex;
 use tracing::info;
+use tracing::warn;
 
 use super::StageSourceHelper;
 
 pub const ENGINE_STAGE: &str = "STAGE";
-const STAGE_ENGINE_OPT_KEY: &str = "ARTIFICIAL_SCHEMA";
+const STAGE_ENGINE_OPT_KEY_ARTIFICIAL_SCHEMA: &str = "ARTIFICIAL_SCHEMA";
 
+pub enum StageMode {
+    /// schema and the files to be scanned are all settled
+    Settled(StageTableInfo),
+    /// only know the stage to be scanned, no schema provided
+    /// also the files under stage to be scanned need to be deduced
+    UnSettled(UserStageInfo),
+}
+// TODO A enum to hold the StageTableInfo or the UserStageInfo (the later has no schema, which indicates a artificial schema)
 pub struct StageTable {
-    table_info: StageTableInfo,
+    stage_table_info: StageTableInfo,
     // This is no used but a placeholder.
     // But the Table trait need it:
     // fn get_table_info(&self) -> &TableInfo).
@@ -67,54 +84,78 @@ pub struct StageTable {
 }
 
 impl StageTable {
-    // with real schema
+    // Construct stage table instance by using StageTableInfo.
+    //
+    // Schema of StageTableInfo will be used
     pub fn with_stage_table_info(stage_info: StageTableInfo) -> Result<Arc<dyn Table>> {
         eprintln!("using with_stage_table_info");
         let mut table_info_placeholder = TableInfo::default().set_schema(stage_info.schema());
         table_info_placeholder.meta.engine = ENGINE_STAGE.to_owned();
 
         Ok(Arc::new(Self {
-            table_info: stage_info,
+            stage_table_info: stage_info,
             table_info_placeholder,
             artificial_schema: false,
         }))
     }
 
-    // called by resolve_stage, indicates that the schema should be created artificially
-    pub fn with_stage_info(stage_info: UserStageInfo, path: &str) -> Result<Arc<dyn Table>> {
+    // Construct stage table instance by using UserStageInfo only.
+    //
+    // In this case, the schema of this table is not provided, an artificial schema will be
+    // generated and used.
+    pub fn with_stage_info(
+        user_stage_info: UserStageInfo,
+        path: &str,
+        stage_files: &[String],
+    ) -> Result<Arc<dyn Table>> {
         // generate artificial schema
-        let artificial_schema = stage_info.file_format_options.format.artificial_schema()?;
+        let artificial_schema = user_stage_info
+            .file_format_options
+            .format
+            .artificial_schema()?;
         let mut table_info_placeholder = TableInfo::default();
         table_info_placeholder.meta.engine = ENGINE_STAGE.to_owned();
         table_info_placeholder = table_info_placeholder.set_schema(artificial_schema.clone());
 
         // table_info is supported to be serialized and passed to other nodes in distributed mode
-        table_info_placeholder
-            .meta
-            .engine_options
-            .insert(STAGE_ENGINE_OPT_KEY.to_owned(), "".to_owned());
+        table_info_placeholder.meta.engine_options.insert(
+            STAGE_ENGINE_OPT_KEY_ARTIFICIAL_SCHEMA.to_owned(),
+            "".to_owned(),
+        );
+
+        let files = stage_files.to_vec();
+
+        eprintln!("files during construction {:?}", &files);
 
         let stage_table_info = StageTableInfo {
             schema: artificial_schema,
-            stage_info,
+            stage_info: user_stage_info,
             path: path.to_owned(),
-            files: vec![],
+            files,
         };
 
         Ok(Arc::new(Self {
-            table_info: stage_table_info,
+            stage_table_info,
             table_info_placeholder,
             artificial_schema: true,
         }))
     }
 
-    // used by StorageFactory
-    pub fn try_create(_ctx: StorageContext, table_info: TableInfo) -> Result<Box<dyn Table>> {
+    /// This is the constructor that being used by [StorageFactory]
+    pub fn try_create(_ctx: StorageContext, mut table_info: TableInfo) -> Result<Box<dyn Table>> {
         eprintln!("using try_create");
         let artificial_schema = table_info
             .meta
             .engine_options
-            .contains_key(STAGE_ENGINE_OPT_KEY);
+            .contains_key(STAGE_ENGINE_OPT_KEY_ARTIFICIAL_SCHEMA);
+        eprintln!("is artificial schema {}", artificial_schema);
+
+        // TODO re-consider this
+        table_info
+            .meta
+            .engine_options
+            .remove(STAGE_ENGINE_OPT_KEY_ARTIFICIAL_SCHEMA);
+
         let stage_table_info = StageTableInfo {
             schema: table_info.schema(),
             stage_info: Default::default(),
@@ -122,7 +163,7 @@ impl StageTable {
             files: vec![],
         };
         Ok(Box::new(Self {
-            table_info: stage_table_info,
+            stage_table_info: stage_table_info,
             table_info_placeholder: table_info,
             artificial_schema,
         }))
@@ -156,12 +197,38 @@ impl Table for StageTable {
         true
     }
 
+    // TODO unify the logics while merging with PR https://github.com/datafuselabs/databend/pull/7613
     async fn read_partitions(
         &self,
-        _ctx: Arc<dyn TableContext>,
+        ctx: Arc<dyn TableContext>,
         _push_downs: Option<Extras>,
     ) -> Result<(Statistics, Partitions)> {
-        Ok((Statistics::default(), vec![]))
+        // TODO use list_files after merge with current main
+        eprintln!(
+            "read partitions, self stage info {:?}",
+            self.stage_table_info
+        );
+        if self.artificial_schema {
+            eprintln!("listing files");
+            let stage_info = &self.stage_table_info.stage_info;
+            let path = &self.stage_table_info.path;
+            eprintln!("listing files path {}", path);
+            // TODO pass pattern
+            let files = list_files_from_dal(&ctx, stage_info, &path, "").await?;
+            let parts = files
+                .into_iter()
+                .map(|staged_file| {
+                    let part_info: Box<dyn PartInfo> = Box::new(StageTablePartInfo {
+                        location: staged_file.path,
+                    });
+                    Arc::new(part_info)
+                })
+                .collect::<_>();
+            eprintln!("listing files parts {:?}", parts);
+            Ok((Statistics::default(), parts))
+        } else {
+            Ok((Statistics::default(), vec![]))
+        }
     }
 
     fn read2(
@@ -172,12 +239,33 @@ impl Table for StageTable {
     ) -> Result<()> {
         let settings = ctx.get_settings();
         let mut builder = SourcePipeBuilder::create();
-        let table_info = &self.table_info;
+        let table_info = &self.stage_table_info;
         let schema = table_info.schema.clone();
 
-        let mut files_deque = VecDeque::with_capacity(table_info.files.len());
-        for f in &table_info.files {
-            files_deque.push_back(f.to_string());
+        let files = plan
+            .parts
+            .iter()
+            .map(|part| {
+                part.as_any()
+                    .downcast_ref::<StageTablePartInfo>()
+                    .ok_or_else(|| {
+                        ErrorCode::LogicalError(
+                            "Cannot downcast from PartInfo to StageTablePartInfo.",
+                        )
+                    })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        // NOTE the plan.source_info is of type SourceInfo::TableSource in
+        if let SourceInfo::StageSource(s) = &plan.source_info {
+            eprintln!("source plan path {:?}, files {:?}", s.path, s.files);
+        } else {
+            eprintln!("shit plan is not stage source");
+        }
+
+        let mut files_deque = VecDeque::with_capacity(files.len());
+        for f in files {
+            files_deque.push_back(f.location.clone());
         }
 
         let transform_projection = if self.artificial_schema {
@@ -193,7 +281,7 @@ impl Table for StageTable {
             let output_schema = Arc::new(schema.project(projection));
 
             // TODO add another stage, to list all the files
-            files_deque.push_back("stage/test_stage/books.csv".to_owned());
+            // files_deque.push_back("stage/test_stage/books.csv".to_owned());
             let reshape_artificial_schema = move |transform_input_port, transform_output_port| {
                 Ok(Transformer::create(
                     transform_input_port,
@@ -235,7 +323,7 @@ impl Table for StageTable {
             pipeline.add_transform(transform)?;
         };
 
-        let limit = self.table_info.stage_info.copy_options.size_limit;
+        let limit = self.stage_table_info.stage_info.copy_options.size_limit;
         if limit > 0 {
             pipeline.resize(1)?;
             pipeline.add_transform(|transform_input_port, transform_output_port| {
@@ -273,25 +361,25 @@ impl Table for StageTable {
     ) -> Result<()> {
         let format_name = format!(
             "{:?}",
-            self.table_info.stage_info.file_format_options.format
+            self.stage_table_info.stage_info.file_format_options.format
         );
         let path = format!(
             "{}{}.{}",
-            self.table_info.path,
+            self.stage_table_info.path,
             uuid::Uuid::new_v4(),
             format_name.to_ascii_lowercase()
         );
         info!(
             "try commit stage table {} to file {path}",
-            self.table_info.stage_info.stage_name
+            self.stage_table_info.stage_info.stage_name
         );
 
-        let op = StageSourceHelper::get_op(&ctx, &self.table_info.stage_info).await?;
+        let op = StageSourceHelper::get_op(&ctx, &self.stage_table_info.stage_info).await?;
 
         let fmt = OutputFormatType::from_str(format_name.as_str())?;
         let mut format_settings = ctx.get_format_settings()?;
 
-        let format_options = &self.table_info.stage_info.file_format_options;
+        let format_options = &self.stage_table_info.stage_info.file_format_options;
         {
             format_settings.skip_header = format_options.skip_header;
             if !format_options.field_delimiter.is_empty() {
@@ -304,7 +392,7 @@ impl Table for StageTable {
             }
         }
 
-        let mut output_format = fmt.create_format(self.table_info.schema(), format_settings);
+        let mut output_format = fmt.create_format(self.stage_table_info.schema(), format_settings);
 
         let prefix = output_format.serialize_prefix()?;
         let written_bytes: usize = operations.iter().map(|b| b.memory_size()).sum();
@@ -399,6 +487,101 @@ impl ArtificialSchema for StageFileFormatType {
                 "Artificial schema of format {:?} , not implemented yet",
                 f
             ))),
+        }
+    }
+}
+
+pub async fn list_files_from_dal(
+    ctx: &Arc<dyn TableContext>,
+    stage: &UserStageInfo,
+    path: &str,
+    pattern: &str,
+) -> Result<Vec<StageFile>> {
+    let rename_me_qry_ctx: Arc<dyn TableContext> = ctx.clone();
+    let op = StageSourceHelper::get_op(&rename_me_qry_ctx, stage).await?;
+    let mut files = Vec::new();
+
+    // - If the path itself is a dir, return directly.
+    // - Otherwise, return a path suffix by `/`
+    // - If other errors happen, we will ignore them by returning None.
+    let dir_path = match op.object(path).metadata().await {
+        Ok(meta) if meta.mode().is_dir() => Some(path.to_string()),
+        Ok(meta) if !meta.mode().is_dir() => {
+            files.push((path.to_string(), meta));
+
+            Some(format!("{path}/"))
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Some(format!("{path}/")),
+        Err(e) => return Err(e.into()),
+        _ => None,
+    };
+
+    // Check the if this dir valid and list it recursively.
+    if let Some(dir) = dir_path {
+        match op.object(&dir).metadata().await {
+            Ok(_) => {
+                let mut ds = op.batch().walk_top_down(&dir)?;
+                while let Some(de) = ds.try_next().await? {
+                    if de.mode().is_file() {
+                        let path = de.path().to_string();
+                        let meta = de.metadata().await?;
+                        files.push((path, meta));
+                    }
+                }
+            }
+            Err(e) => warn!("ignore listing {path}/, because: {:?}", e),
+        };
+    }
+
+    let regex = if !pattern.is_empty() {
+        Some(Regex::new(pattern).map_err(|e| {
+            ErrorCode::SyntaxException(format!(
+                "Pattern format invalid, got:{}, error:{:?}",
+                pattern, e
+            ))
+        })?)
+    } else {
+        None
+    };
+
+    let matched_files = files
+        .iter()
+        .filter(|(name, _meta)| {
+            if let Some(regex) = &regex {
+                regex.is_match(name)
+            } else {
+                true
+            }
+        })
+        .cloned()
+        .map(|(name, meta)| StageFile {
+            path: name,
+            size: meta.content_length(),
+            md5: meta.content_md5().map(str::to_string),
+            last_modified: meta
+                .last_modified()
+                .map_or(Utc::now(), |t| Utc.timestamp(t.unix_timestamp(), 0)),
+            creator: None,
+        })
+        .collect::<Vec<StageFile>>();
+    Ok(matched_files)
+}
+
+#[derive(serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct StageTablePartInfo {
+    pub location: String,
+}
+
+#[typetag::serde(name = "stage")]
+impl PartInfo for StageTablePartInfo {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn equals(&self, info: &Box<dyn PartInfo>) -> bool {
+        match info.as_any().downcast_ref::<StageTablePartInfo>() {
+            None => false,
+            Some(other) => self == other,
         }
     }
 }

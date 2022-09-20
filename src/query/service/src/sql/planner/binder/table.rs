@@ -243,10 +243,12 @@ impl<'a> Binder {
                 span: _,
                 name,
                 path,
+                files,
                 alias,
             } => {
-                let stage_table: Arc<dyn Table> =
-                    self.resolve_stage(name.as_str(), path.as_str()).await?;
+                let stage_table: Arc<dyn Table> = self
+                    .resolve_stage(name.as_str(), path.as_str(), files)
+                    .await?;
 
                 let table_index = self.metadata.write().add_table(
                     CATALOG_DEFAULT.to_owned(),
@@ -364,16 +366,19 @@ impl<'a> Binder {
         Ok(table_meta)
     }
 
-    async fn resolve_stage(&self, name: &str, path: &str) -> Result<Arc<dyn Table>> {
+    async fn resolve_stage(
+        &self,
+        name: &str,
+        path: &str,
+        files: &[String],
+    ) -> Result<Arc<dyn Table>> {
         let tenant = self.ctx.get_tenant();
-        eprintln!("getting tenant {}, stage {}", tenant, name);
         let stage_info = self
             .ctx
             .get_user_manager()
             .get_stage(tenant.as_str(), name)
             .await?;
-
-        let table = StageTable::with_stage_info(stage_info, path)?;
+        let table = StageTable::with_stage_info(stage_info, &path, files)?;
         Ok(table)
     }
 

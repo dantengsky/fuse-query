@@ -238,9 +238,13 @@ pub(crate) fn pretty_table(table: TableReference) -> RcDoc {
             span: _,
             name,
             path,
+            files,
             alias,
         } => RcDoc::text(name)
             .append(RcDoc::text(path))
+            .append(RcDoc::text("FILES ("))
+            .append(inline_comma(files.into_iter().map(RcDoc::text)))
+            .append(RcDoc::text(")"))
             .append(if let Some(alias) = alias {
                 RcDoc::text(format!(" AS {alias}"))
             } else {

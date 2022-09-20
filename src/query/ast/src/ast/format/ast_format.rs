@@ -2158,12 +2158,13 @@ impl<'ast> Visitor<'ast> for AstFormatVisitor {
                 span: _,
                 name,
                 path,
+                files: _,
                 alias,
             } => {
                 // TODO do know what am I doing
                 let stage_name = format!("Stage {}{}", name, path);
                 let format_ctx = if let Some(alias) = alias {
-                    AstFormatContext::with_children_alias(stage_name, 0, Some(format!("{}", alias)))
+                    AstFormatContext::with_children_alias(stage_name, 1, Some(format!("{}", alias)))
                 } else {
                     AstFormatContext::with_children(stage_name, 0)
                 };

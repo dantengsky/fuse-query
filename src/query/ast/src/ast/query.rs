@@ -159,6 +159,7 @@ pub enum TableReference<'a> {
         span: &'a [Token<'a>],
         name: String,
         path: String,
+        files: Vec<String>,
         alias: Option<TableAlias<'a>>,
     },
 
@@ -279,9 +280,13 @@ impl<'a> Display for TableReference<'a> {
                 span: _,
                 name,
                 path,
+                files,
                 alias,
             } => {
                 write!(f, "@{name}{path}")?;
+                write!(f, " FILES (")?;
+                write_comma_separated_list(f, files)?;
+                write!(f, ")")?;
                 if let Some(alias) = alias {
                     write!(f, " AS {alias}")?;
                 }

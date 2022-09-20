@@ -212,6 +212,7 @@ pub enum TableReferenceElement<'a> {
     Stage {
         stage: (String, String),
         alias: Option<TableAlias<'a>>,
+        files: Vec<String>,
     },
     // Derived table, which can be a subquery or joined tables or combination of them
     Subquery {
@@ -231,7 +232,6 @@ pub enum TableReferenceElement<'a> {
 pub fn table_reference_element(i: Input) -> IResult<WithSpan<TableReferenceElement>> {
     let stage = |i| {
         map(at_string, |location| {
-            eprintln!("location is {location}");
             let parsed = location.splitn(2, '/').collect::<Vec<_>>();
             if parsed.len() == 1 {
                 (parsed[0].to_string(), "/".to_string())
@@ -243,9 +243,13 @@ pub fn table_reference_element(i: Input) -> IResult<WithSpan<TableReferenceEleme
 
     let aliased_stage = map(
         rule! {
-            #stage ~ #table_alias?
+            #stage ~ ( FILES ~ "=" ~ "(" ~ #comma_separated_list0(literal_string) ~ ")")? ~ #table_alias?
         },
-        |(stage, alias)| TableReferenceElement::Stage { stage, alias },
+        |(stage, files, alias)| TableReferenceElement::Stage {
+            stage,
+            alias,
+            files: files.map(|v| v.3).unwrap_or_default(),
+        },
     );
 
     let aliased_table = map(
@@ -356,10 +360,15 @@ impl<'a, I: Iterator<Item = WithSpan<'a, TableReferenceElement<'a>>>> PrattParse
                 alias,
                 travel_point,
             },
-            TableReferenceElement::Stage { stage, alias } => TableReference::Stage {
+            TableReferenceElement::Stage {
+                stage,
+                files,
+                alias,
+            } => TableReference::Stage {
                 span: input.span.0,
                 name: stage.0,
                 path: stage.1,
+                files,
                 alias,
             },
             TableReferenceElement::TableFunction {

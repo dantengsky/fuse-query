@@ -1892,9 +1892,13 @@ dependencies = [
  "common-planners",
  "common-storage",
  "common-storages-util",
+ "futures",
  "opendal",
  "parking_lot 0.12.1",
+ "regex",
+ "serde",
  "tracing",
+ "typetag",
  "uuid",
 ]
 

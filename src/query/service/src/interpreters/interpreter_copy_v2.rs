@@ -79,8 +79,8 @@ impl CopyInterpreterV2 {
                     }
                     files_with_path
                 } else if !path.ends_with('/') {
-                    let rename_me: Arc<dyn TableContext> = self.ctx.clone();
-                    let op = StageSourceHelper::get_op(&rename_me, &table_info.stage_info).await?;
+                    let ctx: Arc<dyn TableContext> = self.ctx.clone();
+                    let op = StageSourceHelper::get_op(&ctx, &table_info.stage_info).await?;
                     if op.object(path).is_exist().await? {
                         vec![path.to_string()]
                     } else {
