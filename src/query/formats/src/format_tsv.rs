@@ -159,39 +159,32 @@ impl TsvInputFormat {
         index + 1
     }
 
-    fn read_row_new(
+    fn read_row(
         &self,
         checkpoint_reader: &mut NestedCheckpointReader<MemoryReader>,
         deserializers: &mut impl Iterator<Item = TypeDeserializerImpl>,
         row_index: usize,
     ) -> Result<Vec<TypeDeserializerImpl>> {
         let mut cols = vec![];
-        while !checkpoint_reader.ignore_white_spaces_and_byte(b'\n')? {
-            // TODO no unwrap please
-            let mut de = deserializers.next().unwrap();
-            if checkpoint_reader.ignore_white_spaces_and_byte(b'\t')? {
-                de.de_default(&self.settings);
-            } else {
-                de.de_text(checkpoint_reader, &self.settings)?;
-            }
-            cols.push(de);
-        }
-
-        checkpoint_reader.ignore_white_spaces_and_byte(b'\t')?;
-
-        if (!checkpoint_reader.ignore_white_spaces_and_byte(b'\n')?
-            & !checkpoint_reader.ignore_white_spaces_and_byte(b'\r')?)
+        while !checkpoint_reader.ignore_white_spaces_and_byte(b'\r')?
+            && !checkpoint_reader.ignore_white_spaces_and_byte(b'\n')?
             && !checkpoint_reader.eof()?
         {
-            return Err(ErrorCode::BadBytes(format!(
-                "Parse Tsv error at line {}",
-                row_index
-            )));
+            if let Some(mut de) = deserializers.next() {
+                if checkpoint_reader.ignore_white_spaces_and_byte(b'\t')? {
+                    de.de_default(&self.settings);
+                } else {
+                    de.de_text(checkpoint_reader, &self.settings)?;
+                }
+                checkpoint_reader.ignore_white_spaces_and_byte(b'\t')?;
+                cols.push(de);
+            } else {
+                return Err(ErrorCode::BadBytes(format!(
+                    "Parse Tsv error at line {}",
+                    row_index
+                )));
+            }
         }
-
-        // \r\n
-        checkpoint_reader.ignore_white_spaces_and_byte(b'\n')?;
-
         Ok(cols)
     }
 }
@@ -236,42 +229,6 @@ impl InputFormat for TsvInputFormat {
             buf: memory,
         })
     }
-
-    // fn read_row(
-    //    &self,
-    //    checkpoint_reader: &mut NestedCheckpointReader<MemoryReader>,
-    //    deserializers: &mut Vec<common_datavalues::TypeDeserializerImpl>,
-    //    row_index: usize,
-    //) -> Result<()> {
-    //    for column_index in 0..deserializers.len() {
-    //        if checkpoint_reader.ignore_white_spaces_and_byte(b'\t')? {
-    //            deserializers[column_index].de_default(&self.settings);
-    //        } else {
-    //            deserializers[column_index].de_text(checkpoint_reader, &self.settings)?;
-
-    //            if column_index + 1 != deserializers.len() {
-    //                checkpoint_reader.must_ignore_white_spaces_and_byte(b'\t')?;
-    //            }
-    //        }
-    //    }
-
-    //    checkpoint_reader.ignore_white_spaces_and_byte(b'\t')?;
-
-    //    if (!checkpoint_reader.ignore_white_spaces_and_byte(b'\n')?
-    //        & !checkpoint_reader.ignore_white_spaces_and_byte(b'\r')?)
-    //        && !checkpoint_reader.eof()?
-    //    {
-    //        return Err(ErrorCode::BadBytes(format!(
-    //            "Parse Tsv error at line {}",
-    //            row_index
-    //        )));
-    //    }
-
-    //    // \r\n
-    //    checkpoint_reader.ignore_white_spaces_and_byte(b'\n')?;
-
-    //    Ok(())
-    //}
 
     fn read_buf(&self, buf: &[u8], state: &mut Box<dyn InputState>) -> Result<(usize, bool)> {
         let mut index = 0;
@@ -349,9 +306,9 @@ impl InputFormat for TsvInputFormat {
             checkpoint_reader.push_checkpoint();
 
             let res = if row_index == 0 {
-                self.read_row_new(&mut checkpoint_reader, &mut deserializer_iter, row_index)
+                self.read_row(&mut checkpoint_reader, &mut deserializer_iter, row_index)
             } else {
-                self.read_row_new(
+                self.read_row(
                     &mut checkpoint_reader,
                     &mut deserializers.into_iter(),
                     row_index,
@@ -382,14 +339,14 @@ impl InputFormat for TsvInputFormat {
 
         // TODO duplicated code
         let mut columns = Vec::with_capacity(deserializers.len());
+        for deserializer in &mut deserializers {
+            columns.push(deserializer.finish_to_column());
+        }
+
         let schema = if self.is_artificial_schema {
-            let mut fields = vec![];
-            for (i, deserializer) in &mut deserializers.iter_mut().enumerate() {
-                columns.push(deserializer.finish_to_column());
-                let field = self.schema.field(i);
-                fields.push(field.clone());
-            }
-            DataSchemaRefExt::create(fields)
+            let len = deserializers.len();
+            let fields = &self.schema.fields().as_slice()[0..len];
+            DataSchemaRefExt::create(fields.to_vec())
         } else {
             self.schema.clone()
         };

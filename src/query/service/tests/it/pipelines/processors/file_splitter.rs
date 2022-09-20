@@ -51,7 +51,7 @@ v3,v4
     };
     let path = Some("path".to_owned());
     let file_format =
-        CsvInputFormat::try_create("", schema.clone(), Default::default(), 0, 1, 1024)?;
+        CsvInputFormat::try_create("", schema.clone(), false, Default::default(), 0, 1, 1024)?;
     let mut splitter =
         FileSplitter::create(reader, path.clone(), file_format, format_settings, None);
 

@@ -44,6 +44,7 @@ fn test_accepted_multi_lines() -> Result<()> {
     let csv_input_format = CsvInputFormat::try_create(
         "csv",
         Arc::new(DataSchema::empty()),
+        false,
         FormatSettings::default(),
         0,
         2,
@@ -87,6 +88,7 @@ fn test_deserialize_multi_lines() -> Result<()> {
             DataField::new("a", DataTypeImpl::UInt32(UInt32Type::default())),
             DataField::new("b", DataTypeImpl::String(StringType::default())),
         ])),
+        false,
         FormatSettings::default(),
         0,
         1,
@@ -116,6 +118,7 @@ fn test_deserialize_multi_lines() -> Result<()> {
             DataField::new("a", DataTypeImpl::UInt32(UInt32Type::default())),
             DataField::new("b", DataTypeImpl::String(StringType::default())),
         ])),
+        false,
         FormatSettings::default(),
         0,
         2,
@@ -142,6 +145,7 @@ fn assert_complete_line(content: &str) -> Result<()> {
     let csv_input_format = CsvInputFormat::try_create(
         "csv",
         Arc::new(DataSchema::empty()),
+        false,
         FormatSettings::default(),
         0,
         1,
@@ -170,6 +174,7 @@ fn assert_broken_line(content: &str, assert_size: usize) -> Result<()> {
     let csv_input_format = CsvInputFormat::try_create(
         "csv",
         Arc::new(DataSchema::empty()),
+        false,
         FormatSettings::default(),
         0,
         1,

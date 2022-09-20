@@ -205,42 +205,32 @@ impl CsvInputFormat {
         index + 1
     }
 
-    fn read_row_free_style(
+    fn read_row(
         &self,
         checkpoint_reader: &mut NestedCheckpointReader<MemoryReader>,
         deserializers: &mut impl Iterator<Item = TypeDeserializerImpl>,
         row_index: usize,
     ) -> Result<Vec<TypeDeserializerImpl>> {
         let mut cols = vec![];
-        while !checkpoint_reader.ignore_white_spaces_and_byte(b'\n')? {
-            // TODO no unwrap please
-            let mut de = deserializers.next().unwrap();
-            if checkpoint_reader.ignore_white_spaces_and_byte(self.field_delimiter)? {
-                de.de_default(&self.settings);
+        // TODO check record delimiter
+        while !checkpoint_reader.eof()? && !checkpoint_reader.ignore_white_spaces_and_byte(b'\n')? {
+            if let Some(mut de) = deserializers.next() {
+                if checkpoint_reader.ignore_white_spaces_and_byte(self.field_delimiter)? {
+                    de.de_default(&self.settings);
+                } else {
+                    de.de_text_csv(checkpoint_reader, &self.settings)?;
+                    checkpoint_reader.ignore_white_spaces_and_byte(self.field_delimiter)?;
+                }
+                cols.push(de);
             } else {
-                de.de_text_csv(checkpoint_reader, &self.settings)?;
-                checkpoint_reader.ignore_white_spaces_and_byte(self.field_delimiter)?;
+                return Err(ErrorCode::BadBytes(format!(
+                    "Parse csv error at line {}",
+                    row_index
+                )));
             }
-            cols.push(de);
         }
 
-        // for column_index in 0..deserializers.len() {
-        //    if checkpoint_reader.ignore_white_spaces_and_byte(self.field_delimiter)? {
-        //        deserializers[column_index].de_default(&self.settings);
-        //    } else {
-        //        deserializers[column_index].de_text_csv(checkpoint_reader, &self.settings)?;
-
-        //        // TODO as format settings;
-        //        // if column_index + 1 != deserializers.len() {
-        //        //    checkpoint_reader.must_ignore_white_spaces_and_byte(self.field_delimiter)?;
-        //        //}
-        //    }
-        //}
-
-        // checkpoint_reader.ignore_white_spaces_and_byte(self.field_delimiter)?;
-
         if let Some(delimiter) = &self.record_delimiter {
-            eprintln!("checking record delimiter");
             if !checkpoint_reader.ignore_white_spaces_and_byte(*delimiter)?
                 && !checkpoint_reader.eof()?
             {
@@ -250,17 +240,6 @@ impl CsvInputFormat {
                 )));
             }
         } else {
-            // if (!checkpoint_reader.ignore_white_spaces_and_byte(b'\n')?
-            //    && !checkpoint_reader.ignore_white_spaces_and_byte(b'\r')?)
-            //    && !checkpoint_reader.eof()?
-            //{
-            //    eprintln!("checking predefined record delimiter");
-            //    return Err(ErrorCode::BadBytes(format!(
-            //        "Parse csv error at line {}",
-            //        row_index
-            //    )));
-            //}
-
             // \r\n
             checkpoint_reader.ignore_white_spaces_and_byte(b'\n')?;
         }
@@ -312,7 +291,6 @@ impl InputFormat for CsvInputFormat {
     }
 
     fn deserialize_complete_split(&self, split: FileSplit) -> Result<Vec<DataBlock>> {
-        eprintln!("USING ME");
         let memory_reader = MemoryReader::new(split.buf);
         let mut checkpoint_reader = NestedCheckpointReader::new(memory_reader);
         let mut deserializer_iter: Box<dyn Iterator<Item = TypeDeserializerImpl>> =
@@ -335,9 +313,9 @@ impl InputFormat for CsvInputFormat {
         while !checkpoint_reader.eof()? {
             checkpoint_reader.push_checkpoint();
             let res = if row_index == 0 {
-                self.read_row_free_style(&mut checkpoint_reader, &mut deserializer_iter, row_index)
+                self.read_row(&mut checkpoint_reader, &mut deserializer_iter, row_index)
             } else {
-                self.read_row_free_style(
+                self.read_row(
                     &mut checkpoint_reader,
                     &mut deserializers.into_iter(),
                     row_index,
@@ -365,68 +343,24 @@ impl InputFormat for CsvInputFormat {
             }
         }
 
+        // TODO duplicated code
         let mut columns = Vec::with_capacity(deserializers.len());
+        for deserializer in &mut deserializers {
+            columns.push(deserializer.finish_to_column());
+        }
+
         let schema = if self.is_artificial {
-            let mut fields = vec![];
-            for (i, deserializer) in &mut deserializers.iter_mut().enumerate() {
-                columns.push(deserializer.finish_to_column());
-                let field = self.schema.field(i);
-                fields.push(field.clone());
-            }
-            DataSchemaRefExt::create(fields)
+            let len = deserializers.len();
+            let fields = &self.schema.fields().as_slice()[0..len];
+            DataSchemaRefExt::create(fields.to_vec())
         } else {
+            for deserializer in &mut deserializers {
+                columns.push(deserializer.finish_to_column());
+            }
             self.schema.clone()
         };
 
         Ok(vec![DataBlock::create(schema, columns)])
-    }
-
-    fn read_row(
-        &self,
-        checkpoint_reader: &mut NestedCheckpointReader<MemoryReader>,
-        deserializers: &mut Vec<TypeDeserializerImpl>,
-        row_index: usize,
-    ) -> Result<()> {
-        for column_index in 0..deserializers.len() {
-            if checkpoint_reader.ignore_white_spaces_and_byte(self.field_delimiter)? {
-                deserializers[column_index].de_default(&self.settings);
-            } else {
-                deserializers[column_index].de_text_csv(checkpoint_reader, &self.settings)?;
-
-                // TODO as format settings;
-                // if column_index + 1 != deserializers.len() {
-                //    checkpoint_reader.must_ignore_white_spaces_and_byte(self.field_delimiter)?;
-                //}
-            }
-        }
-
-        checkpoint_reader.ignore_white_spaces_and_byte(self.field_delimiter)?;
-
-        if let Some(delimiter) = &self.record_delimiter {
-            if !checkpoint_reader.ignore_white_spaces_and_byte(*delimiter)?
-                && !checkpoint_reader.eof()?
-            {
-                return Err(ErrorCode::BadBytes(format!(
-                    "Parse csv error at line {}",
-                    row_index
-                )));
-            }
-        } else {
-            if (!checkpoint_reader.ignore_white_spaces_and_byte(b'\n')?
-                && !checkpoint_reader.ignore_white_spaces_and_byte(b'\r')?)
-                && !checkpoint_reader.eof()?
-            {
-                return Err(ErrorCode::BadBytes(format!(
-                    "Parse csv error at line {}",
-                    row_index
-                )));
-            }
-
-            // \r\n
-            checkpoint_reader.ignore_white_spaces_and_byte(b'\n')?;
-        }
-
-        Ok(())
     }
 
     fn read_buf(&self, buf: &[u8], state: &mut Box<dyn InputState>) -> Result<(usize, bool)> {

@@ -163,12 +163,12 @@ impl ParquetInputFormat {
         chunk: &Chunk<Box<dyn Array>>,
     ) -> Result<DataBlock> {
         if self.is_artificial_schema {
-            let parquet_fields = fields_to_read.iter().map(|f| DataField::from(f));
+            let parquet_fields = fields_to_read.iter().map(DataField::from);
             let r = chunk
                 .columns()
                 .iter()
                 .zip(parquet_fields)
-                .zip(self.schema.fields().into_iter())
+                .zip(self.schema.fields().iter())
                 .map(|((column_ref, parquet_field), data_field)| {
                     let col = match data_field.is_nullable() {
                         true => column_ref.into_nullable_column(),
@@ -192,7 +192,7 @@ impl ParquetInputFormat {
             let schema = DataSchemaRefExt::create(fields);
             Ok(DataBlock::create(schema, columns))
         } else {
-            DataBlock::from_chunk(&self.schema, &chunk)
+            DataBlock::from_chunk(&self.schema, chunk)
         }
     }
 }

@@ -49,6 +49,7 @@ impl InputState for NDJsonInputState {
 
 pub struct NDJsonInputFormat {
     schema: DataSchemaRef,
+    is_artificial_schema: bool,
     min_accepted_rows: usize,
     min_accepted_bytes: usize,
 
@@ -61,8 +62,18 @@ impl NDJsonInputFormat {
         factory.register_input(
             "NDJson",
             Box::new(
-                |name: &str, schema: DataSchemaRef, settings: FormatSettings| {
-                    NDJsonInputFormat::try_create(name, schema, settings, 8192, 10 * 1024 * 1024)
+                |name: &str,
+                 schema: DataSchemaRef,
+                 is_artificial_schema: bool,
+                 settings: FormatSettings| {
+                    NDJsonInputFormat::try_create(
+                        name,
+                        schema,
+                        is_artificial_schema,
+                        settings,
+                        8192,
+                        10 * 1024 * 1024,
+                    )
                 },
             ),
         );
@@ -71,6 +82,7 @@ impl NDJsonInputFormat {
     pub fn try_create(
         _name: &str,
         schema: DataSchemaRef,
+        is_artificial_schema: bool,
         settings: FormatSettings,
         min_accepted_rows: usize,
         min_accepted_bytes: usize,
@@ -79,6 +91,7 @@ impl NDJsonInputFormat {
 
         Ok(Arc::new(NDJsonInputFormat {
             schema,
+            is_artificial_schema,
             settings,
             min_accepted_rows,
             min_accepted_bytes,
@@ -223,39 +236,58 @@ impl InputFormat for NDJsonInputFormat {
                 continue;
             }
 
-            let mut json: serde_json::Value = serde_json::from_reader(buf.trim().as_bytes())?;
-            // if it's not case_sensitive, we convert to lowercase
-            if !self.ident_case_sensitive {
-                if let serde_json::Value::Object(x) = json {
-                    let y = x.into_iter().map(|(k, v)| (k.to_lowercase(), v)).collect();
-                    json = serde_json::Value::Object(y);
+            let row_bytes = buf.trim().as_bytes();
+            if self.is_artificial_schema {
+                deserializers
+                    .get_mut(0)
+                    .expect("logic exception, at least 1 column expected")
+                    .de_whole_text(row_bytes, &self.settings)
+                    .map_err(|e| {
+                        let value_str = String::from_utf8_lossy(row_bytes);
+                        let f = self.schema.field(0);
+                        ErrorCode::BadBytes(format!(
+                            "error at row {} column {}: err={}, value={}",
+                            rows,
+                            f.name(),
+                            e.message(),
+                            maybe_truncated(&value_str, 1024),
+                        ))
+                    })?;
+            } else {
+                let mut json: serde_json::Value = serde_json::from_reader(row_bytes)?;
+                // if it's not case_sensitive, we convert to lowercase
+                if !self.ident_case_sensitive {
+                    if let serde_json::Value::Object(x) = json {
+                        let y = x.into_iter().map(|(k, v)| (k.to_lowercase(), v)).collect();
+                        json = serde_json::Value::Object(y);
+                    }
+                }
+
+                for (f, deser) in self.schema.fields().iter().zip(deserializers.iter_mut()) {
+                    let value = if self.ident_case_sensitive {
+                        &json[f.name().to_owned()]
+                    } else {
+                        &json[f.name().to_lowercase()]
+                    };
+
+                    deser.de_json(value, &self.settings).map_err(|e| {
+                        let value_str = format!("{:?}", value);
+                        ErrorCode::BadBytes(format!(
+                            "error at row {} column {}: err={}, value={}",
+                            rows,
+                            f.name(),
+                            e.message(),
+                            maybe_truncated(&value_str, 1024),
+                        ))
+                    })?;
                 }
             }
-
-            for (f, deser) in self.schema.fields().iter().zip(deserializers.iter_mut()) {
-                let value = if self.ident_case_sensitive {
-                    &json[f.name().to_owned()]
-                } else {
-                    &json[f.name().to_lowercase()]
-                };
-
-                deser.de_json(value, &self.settings).map_err(|e| {
-                    let value_str = format!("{:?}", value);
-                    ErrorCode::BadBytes(format!(
-                        "error at row {} column {}: err={}, value={}",
-                        rows,
-                        f.name(),
-                        e.message(),
-                        maybe_truncated(&value_str, 1024),
-                    ))
-                })?;
-            }
         }
+
         let mut columns = Vec::with_capacity(deserializers.len());
         for deserializer in &mut deserializers {
             columns.push(deserializer.finish_to_column());
         }
-
         Ok(vec![DataBlock::create(self.schema.clone(), columns)])
     }
 }

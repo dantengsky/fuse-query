@@ -55,6 +55,7 @@ use tracing::info;
 use super::StageSourceHelper;
 
 pub const ENGINE_STAGE: &str = "STAGE";
+const STAGE_ENGINE_OPT_KEY: &str = "ARTIFICIAL_SCHEMA";
 
 pub struct StageTable {
     table_info: StageTableInfo,
@@ -82,19 +83,19 @@ impl StageTable {
     // called by resolve_stage, indicates that the schema should be created artificially
     pub fn with_stage_info(stage_info: UserStageInfo, path: &str) -> Result<Arc<dyn Table>> {
         // generate artificial schema
-        let schema = stage_info.file_format_options.format.artificial_schema();
+        let artificial_schema = stage_info.file_format_options.format.artificial_schema()?;
         let mut table_info_placeholder = TableInfo::default();
         table_info_placeholder.meta.engine = ENGINE_STAGE.to_owned();
-        table_info_placeholder = table_info_placeholder.set_schema(schema.clone());
+        table_info_placeholder = table_info_placeholder.set_schema(artificial_schema.clone());
 
         // table_info is supported to be serialized and passed to other nodes in distributed mode
         table_info_placeholder
             .meta
             .engine_options
-            .insert("ARTIFICIAL_SCHEMA".to_owned(), "".to_owned());
+            .insert(STAGE_ENGINE_OPT_KEY.to_owned(), "".to_owned());
 
         let stage_table_info = StageTableInfo {
-            schema,
+            schema: artificial_schema,
             stage_info,
             path: path.to_owned(),
             files: vec![],
@@ -113,7 +114,7 @@ impl StageTable {
         let artificial_schema = table_info
             .meta
             .engine_options
-            .contains_key("ARTIFICIAL_SCHEMA");
+            .contains_key(STAGE_ENGINE_OPT_KEY);
         let stage_table_info = StageTableInfo {
             schema: table_info.schema(),
             stage_info: Default::default(),
@@ -129,7 +130,7 @@ impl StageTable {
 
     pub fn description() -> StorageDescription {
         StorageDescription {
-            engine_name: "STAGE".to_string(),
+            engine_name: ENGINE_STAGE.to_string(),
             comment: "Stage Storage Engine".to_string(),
             ..Default::default()
         }
@@ -342,6 +343,7 @@ struct ReshapeArtificialSchema {
     output_schema: DataSchemaRef,
 }
 
+// TODO note for json format, we do not need this transform
 impl Transform for ReshapeArtificialSchema {
     const NAME: &'static str = "Appender";
 
@@ -349,8 +351,6 @@ impl Transform for ReshapeArtificialSchema {
         let num_rows = block.num_rows();
         let input_schema = block.schema().clone();
 
-        eprintln!("input schema {:?}, rows {}", input_schema, num_rows);
-        eprintln!("output schema {:?}", self.output_schema);
         use common_datavalues::DataType;
         let mut new_block = DataBlock::empty();
 
@@ -362,28 +362,24 @@ impl Transform for ReshapeArtificialSchema {
                     .create_constant_column(&default_value, num_rows)?;
                 new_block = new_block.add_column(column, f.clone())?;
             } else {
-                eprintln!("adding col from input block, len {}", block.column(i).len());
                 new_block = new_block.add_column(block.column(i).clone(), f.clone())?;
             }
         }
-        eprintln!("row of new_block is {}", new_block.num_rows());
-
         new_block.resort(self.output_schema.clone())
-        //        eprintln!("row of r is {}", r.num_rows());
-        //
-        //        Ok(block)
     }
 }
 
 trait ArtificialSchema {
-    fn artificial_schema(&self) -> DataSchemaRef;
+    fn artificial_schema(&self) -> Result<DataSchemaRef>;
 }
 
 impl ArtificialSchema for StageFileFormatType {
-    fn artificial_schema(&self) -> DataSchemaRef {
+    fn artificial_schema(&self) -> Result<DataSchemaRef> {
         match self {
-            StageFileFormatType::Csv | StageFileFormatType::Tsv => {
-                let schema = (1..=10)
+            StageFileFormatType::Csv | StageFileFormatType::Tsv | StageFileFormatType::Parquet => {
+                // for formats that likely to be multiple columns,
+                // gives at most 1024 string virtual columns
+                let fields = (1..=1024)
                     .into_iter()
                     .map(|i| {
                         DataField::new_nullable(
@@ -392,13 +388,17 @@ impl ArtificialSchema for StageFileFormatType {
                         )
                     })
                     .collect::<Vec<_>>();
-                DataSchemaRefExt::create(schema)
+                Ok(DataSchemaRefExt::create(fields))
             }
-            StageFileFormatType::Json | StageFileFormatType::NdJson => todo!(),
-            StageFileFormatType::Parquet => {
-                todo!()
+            StageFileFormatType::Json | StageFileFormatType::NdJson => {
+                // one string columns only
+                let field = DataField::new_nullable("$1", DataTypeImpl::String(StringType {}));
+                Ok(DataSchemaRefExt::create(vec![field]))
             }
-            _ => todo!(),
+            f => Err(ErrorCode::UnImplement(format!(
+                "Artificial schema of format {:?} , not implemented yet",
+                f
+            ))),
         }
     }
 }

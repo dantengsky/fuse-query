@@ -15,12 +15,9 @@
 use std::any::Any;
 
 use common_datablocks::DataBlock;
-use common_datavalues::TypeDeserializerImpl;
 use common_exception::ErrorCode;
 use common_exception::Result;
 use common_io::prelude::FileSplit;
-use common_io::prelude::MemoryReader;
-use common_io::prelude::NestedCheckpointReader;
 
 pub trait InputState: Send {
     fn as_any(&mut self) -> &mut dyn Any;
@@ -56,15 +53,6 @@ pub trait InputFormat: Send + Sync {
         state: &mut Box<dyn InputState>,
         force: usize,
     ) -> Result<usize>;
-
-    fn read_row(
-        &self,
-        _checkpoint_reader: &mut NestedCheckpointReader<MemoryReader>,
-        _deserializers: &mut Vec<TypeDeserializerImpl>,
-        _row_index: usize,
-    ) -> Result<()> {
-        Err(ErrorCode::UnImplement("Unimplement error"))
-    }
 
     fn read_row_num(&self, _state: &mut Box<dyn InputState>) -> Result<usize> {
         Ok(0)
