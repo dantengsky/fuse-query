@@ -84,9 +84,9 @@ pub struct StageTable {
 }
 
 impl StageTable {
-    // Construct stage table instance by using StageTableInfo.
-    //
-    // Schema of StageTableInfo will be used
+    /// Construct stage table instance by using StageTableInfo.
+    ///
+    /// Schema of StageTableInfo will be used
     pub fn with_stage_table_info(stage_info: StageTableInfo) -> Result<Arc<dyn Table>> {
         eprintln!("using with_stage_table_info");
         let mut table_info_placeholder = TableInfo::default().set_schema(stage_info.schema());
@@ -189,12 +189,55 @@ impl Table for StageTable {
         &self.table_info_placeholder
     }
 
-    fn adhoc_schema(&self) -> bool {
+    fn artificial_schema(&self) -> bool {
         true
     }
 
     fn benefit_column_prune(&self) -> bool {
         true
+    }
+
+    fn support_source_plan(&self) -> bool {
+        true
+    }
+
+    async fn source_plan(
+        &self,
+        _ctx: Arc<dyn TableContext>,
+        _push_downs: Option<Extras>,
+    ) -> Result<ReadDataSourcePlan> {
+        eprintln!("using read source plan");
+        if self.artificial_schema {
+            let stage_info = &self.stage_table_info.stage_info;
+            let path = &self.stage_table_info.path;
+            let prefix = stage_info.get_prefix();
+            let path = format!("{prefix}{path}");
+            // TODO pass pattern
+            let files = list_files_from_dal(&ctx, stage_info, &path, "").await?;
+            let parts = files
+                .into_iter()
+                .map(|staged_file| {
+                    let part_info: Box<dyn PartInfo> = Box::new(StageTablePartInfo {
+                        location: staged_file.path,
+                    });
+                    Arc::new(part_info)
+                })
+                .collect::<_>();
+            Ok((Statistics::default(), parts))
+
+            Ok(ReadDataSourcePlan {
+                catalog,
+                source_info: SourceInfo::TableSource(table_info.clone()),
+                scan_fields,
+                parts,
+                statistics,
+                description,
+                tbl_args: self.table_args(),
+                push_downs,
+            })
+        } else {
+            Ok((Statistics::default(), vec![]))
+        }
     }
 
     // TODO unify the logics while merging with PR https://github.com/datafuselabs/databend/pull/7613
@@ -209,10 +252,10 @@ impl Table for StageTable {
             self.stage_table_info
         );
         if self.artificial_schema {
-            eprintln!("listing files");
             let stage_info = &self.stage_table_info.stage_info;
             let path = &self.stage_table_info.path;
-            eprintln!("listing files path {}", path);
+            let prefix = stage_info.get_prefix();
+            let path = format!("{prefix}{path}");
             // TODO pass pattern
             let files = list_files_from_dal(&ctx, stage_info, &path, "").await?;
             let parts = files
@@ -224,7 +267,6 @@ impl Table for StageTable {
                     Arc::new(part_info)
                 })
                 .collect::<_>();
-            eprintln!("listing files parts {:?}", parts);
             Ok((Statistics::default(), parts))
         } else {
             Ok((Statistics::default(), vec![]))

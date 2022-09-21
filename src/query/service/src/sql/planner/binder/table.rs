@@ -317,7 +317,7 @@ impl<'a> Binder {
         let columns = self.metadata.read().columns_by_table_index(table_index);
         let table = self.metadata.read().table(table_index).clone();
         // if table's schema is artificial, let it invisible in the unqualified wild card
-        let adhoc_schema = table.table.adhoc_schema();
+        let adhoc_schema = table.table.artificial_schema();
         for column in columns.iter() {
             let visible_in_unqualified_wildcard = column.path_indices.is_none() && !adhoc_schema;
             let column_binding = ColumnBinding {

@@ -71,7 +71,11 @@ pub trait Table: Sync + Send {
 
     fn get_table_info(&self) -> &TableInfo;
 
-    fn adhoc_schema(&self) -> bool {
+    fn artificial_schema(&self) -> bool {
+        false
+    }
+
+    fn support_source_plan(&self) -> bool {
         false
     }
 
@@ -124,7 +128,23 @@ pub trait Table: Sync + Send {
         _ctx: Arc<dyn TableContext>,
         _push_downs: Option<Extras>,
     ) -> Result<(Statistics, Partitions)> {
-        unimplemented!()
+        Err(ErrorCode::UnImplement(format!(
+            "read_partitions operation for table {} is not implemented, table engine is {}",
+            self.name(),
+            self.get_table_info().meta.engine
+        )))
+    }
+
+    async fn source_plan(
+        &self,
+        _ctx: Arc<dyn TableContext>,
+        _push_downs: Option<Extras>,
+    ) -> Result<ReadDataSourcePlan> {
+        Err(ErrorCode::UnImplement(format!(
+            "source_plan operation for table {} is not implemented, table engine is {}",
+            self.name(),
+            self.get_table_info().meta.engine
+        )))
     }
 
     fn table_args(&self) -> Option<Vec<Expression>> {
