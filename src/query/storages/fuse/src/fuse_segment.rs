@@ -12,6 +12,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 
+use std::borrow::Borrow;
 use std::sync::Arc;
 
 use common_base::base::tokio::sync::Semaphore;
@@ -39,19 +40,23 @@ async fn read_segment(
 // Read all segments information from s3 in concurrency.
 
 #[tracing::instrument(level = "debug", skip_all)]
-pub async fn read_segments(
+pub async fn read_segments<T, I>(
     ctx: Arc<dyn TableContext>,
-    segment_locations: &[Location],
-) -> Result<Vec<Result<Arc<SegmentInfo>>>> {
+    segment_locations: T,
+) -> Result<Vec<Result<Arc<SegmentInfo>>>>
+where
+    T: Iterator<Item = I>,
+    I: Borrow<Location>,
+{
     let max_runtime_threads = ctx.get_settings().get_max_threads()? as usize;
     let max_io_requests = ctx.get_settings().get_max_storage_io_requests()? as usize;
 
     // 1.1 combine all the tasks.
-    let mut iter = segment_locations.iter();
+    let mut iter = segment_locations;
     let tasks = std::iter::from_fn(move || {
         if let Some(location) = iter.next() {
             let ctx = ctx.clone();
-            let location = location.clone();
+            let location = location.borrow().clone();
             Some(read_segment(ctx, location).instrument(tracing::debug_span!("read_segment")))
         } else {
             None

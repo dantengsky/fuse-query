@@ -12,6 +12,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 
+use std::borrow::Borrow;
 use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -71,7 +72,7 @@ impl FuseTable {
                 // - no previous snapshot
                 // - no need to keep the last snapshot
                 // just drop the whole snapshot,
-                self.purge_blocks(ctx.clone(), &last_snapshot.segments, &HashSet::new())
+                self.purge_blocks(ctx.clone(), last_snapshot.segments.iter(), &HashSet::new())
                     .await?;
 
                 let snapshots = vec![(last_snapshot.snapshot_id, self.snapshot_format_version())];
@@ -130,13 +131,10 @@ impl FuseTable {
             .await?;
 
         // removed un-referenced blocks
-        let delete_segment_locations = segments_to_be_deleted
-            .clone()
-            .into_iter()
-            .collect::<Vec<Location>>();
+        let delete_segment_locations = segments_to_be_deleted.iter();
         self.purge_blocks(
             ctx.clone(),
-            &delete_segment_locations,
+            delete_segment_locations,
             &blocks_referenced_by_gc_root,
         )
         .await?;
@@ -156,7 +154,7 @@ impl FuseTable {
     ) -> Result<HashSet<String>> {
         let mut result = HashSet::new();
 
-        let segments = read_segments(ctx, segment_locations).await?;
+        let segments = read_segments(ctx, segment_locations.iter()).await?;
         for (idx, segment) in segments.iter().enumerate() {
             let segment = segment.clone();
             let segment_info = match segment {
@@ -183,12 +181,16 @@ impl FuseTable {
     /// rm all the blocks, which are
     /// - referenced by any one of `segments`
     /// - but NOT referenced by `root`
-    async fn purge_blocks(
+    async fn purge_blocks<T, I>(
         &self,
         ctx: Arc<dyn TableContext>,
-        segment_locations: &[Location],
+        segment_locations: T,
         root: &HashSet<String>,
-    ) -> Result<()> {
+    ) -> Result<()>
+    where
+        T: Iterator<Item = I>,
+        I: Borrow<Location>,
+    {
         let accessor = &self.operator;
         let aborting = ctx.get_aborting();
         let segments = read_segments(ctx, segment_locations).await?;

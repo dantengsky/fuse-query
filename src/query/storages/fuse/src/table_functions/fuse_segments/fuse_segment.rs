@@ -77,7 +77,7 @@ impl<'a> FuseSegment<'a> {
         let mut uncompressed: Vec<u64> = Vec::with_capacity(len);
         let mut file_location: Vec<Vec<u8>> = Vec::with_capacity(len);
 
-        let segments = read_segments(self.ctx.clone(), segment_locations).await?;
+        let segments = read_segments(self.ctx.clone(), segment_locations.iter()).await?;
         for (idx, segment) in segments.iter().enumerate() {
             let segment = segment.clone()?;
             format_versions.push(segment_locations[idx].1);

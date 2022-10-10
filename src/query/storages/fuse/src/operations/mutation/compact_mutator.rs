@@ -99,7 +99,7 @@ impl TableMutator for CompactMutator {
         let mut summarys = Vec::new();
 
         // Read all segments information in parallel.
-        let segments = read_segments(self.ctx.clone(), segment_locations).await?;
+        let segments = read_segments(self.ctx.clone(), segment_locations.iter()).await?;
         for (idx, segment) in segments.iter().enumerate() {
             let mut need_merge = false;
             let mut remains = Vec::new();
