@@ -23,7 +23,7 @@ use common_fuse_meta::meta::ColumnStatistics;
 use common_fuse_meta::meta::Statistics;
 use common_fuse_meta::meta::StatisticsOfColumns;
 
-pub fn reduce_block_statistics<T: Borrow<StatisticsOfColumns>>(
+pub fn reduce_column_statistics<T: Borrow<StatisticsOfColumns>>(
     stats_of_columns: &[T],
 ) -> Result<StatisticsOfColumns> {
     // Combine statistics of a column into `Vec`, that is:
@@ -99,7 +99,7 @@ pub fn merge_statistics(l: &Statistics, r: &Statistics) -> Result<Statistics> {
         uncompressed_byte_size: l.uncompressed_byte_size + r.uncompressed_byte_size,
         compressed_byte_size: l.compressed_byte_size + r.compressed_byte_size,
         index_size: l.index_size + r.index_size,
-        col_stats: reduce_block_statistics(&[&l.col_stats, &r.col_stats])?,
+        col_stats: reduce_column_statistics(&[&l.col_stats, &r.col_stats])?,
     };
     Ok(s)
 }
@@ -132,7 +132,7 @@ pub fn reduce_block_metas<T: Borrow<BlockMeta>>(block_metas: &[T]) -> Result<Sta
         .iter()
         .map(|v| &v.borrow().col_stats)
         .collect::<Vec<_>>();
-    let merged_col_stats = reduce_block_statistics(&stats)?;
+    let merged_col_stats = reduce_column_statistics(&stats)?;
 
     Ok(Statistics {
         row_count,

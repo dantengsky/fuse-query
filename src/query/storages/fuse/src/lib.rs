@@ -24,6 +24,7 @@ mod fuse_segment;
 mod fuse_snapshot;
 mod fuse_table;
 pub mod io;
+pub mod metrics;
 pub mod operations;
 pub mod pruning;
 pub mod statistics;
