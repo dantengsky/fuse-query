@@ -19,9 +19,7 @@ use std::time::Instant;
 use backoff::backoff::Backoff;
 use backoff::ExponentialBackoffBuilder;
 use common_base::base::tokio;
-use common_base::base::GlobalIORuntime;
 use common_base::base::ProgressValues;
-use common_base::base::TrySpawn;
 use common_cache::Cache;
 use common_catalog::table::Table;
 use common_catalog::table::TableExt;
@@ -111,15 +109,33 @@ impl Committer {
 
     async fn worker(self: Arc<Self>, mut rx: tokio::sync::mpsc::Receiver<Task>) {
         while let Some(task) = rx.recv().await {
-            let table = &task.table;
+            // FIXME not right, partition tasks by table id
+            let ctx = task.ctx.clone();
+            let overwrite = task.overwrite;
+            let table = task.table.clone();
+
+            let mut tasks = vec![task];
+            while let Ok(peek) = rx.try_recv() {
+                tasks.push(peek)
+            }
+
+            let logs = tasks
+                .iter()
+                .map(|t| t.operation_log.clone())
+                .flatten()
+                .collect::<Vec<_>>();
+
             let fuse_table = FuseTable::try_from_table(table.as_ref()).unwrap();
             let r = fuse_table
-                .do_commit_old(task.ctx, task.operation_log, task.overwrite)
+                //.commit_operations(task.ctx, task.operation_log, task.overwrite)
+                .commit_operations(ctx, logs, overwrite)
                 .await;
-            match task.callback_chan.send(r) {
-                Ok(_) => {}
-                Err(e) => {
-                    warn!("sending task result failure {:?}", e)
+            for x in tasks {
+                match x.callback_chan.send(r.clone()) {
+                    Ok(_) => {}
+                    Err(e) => {
+                        warn!("sending task result failure {:?}", e)
+                    }
                 }
             }
         }
@@ -146,7 +162,7 @@ impl FuseTable {
         Ok(())
     }
 
-    pub async fn do_commit_old(
+    pub async fn commit_operations(
         &self,
         ctx: Arc<dyn TableContext>,
         operation_log: TableOperationLog,
@@ -275,14 +291,14 @@ impl FuseTable {
             r?
         };
 
-        let mut new_table_meta = self.get_table_info().meta.clone();
-        // update statistics
-        new_table_meta.statistics = TableStatistics {
-            number_of_rows: new_snapshot.summary.row_count,
-            data_bytes: new_snapshot.summary.uncompressed_byte_size,
-            compressed_data_bytes: new_snapshot.summary.compressed_byte_size,
-            index_data_bytes: new_snapshot.summary.index_size,
-        };
+        // let mut new_table_meta = self.get_table_info().meta.clone();
+        // // update statistics
+        // new_table_meta.statistics = TableStatistics {
+        //     number_of_rows: new_snapshot.summary.row_count,
+        //     data_bytes: new_snapshot.summary.uncompressed_byte_size,
+        //     compressed_data_bytes: new_snapshot.summary.compressed_byte_size,
+        //     index_data_bytes: new_snapshot.summary.index_size,
+        // };
 
         let now = Instant::now();
         FuseTable::commit_to_meta_server(
@@ -392,6 +408,11 @@ impl FuseTable {
         );
         match reply {
             Ok(_) => {
+                let row_count = snapshot.summary.row_count;
+                let bytes = snapshot.summary.compressed_byte_size;
+                metrics::counter!("fuse_commit_rows_committed", row_count);
+                metrics::counter!("fuse_commit_bytes_committed", bytes);
+
                 if let Some(snapshot_cache) = CacheManager::instance().get_table_snapshot_cache() {
                     let cache = &mut snapshot_cache.write();
                     cache.put(snapshot_location.clone(), Arc::new(snapshot));

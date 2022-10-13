@@ -27,6 +27,7 @@ use common_fuse_meta::meta::SegmentInfo;
 pub type TableOperationLog = Vec<AppendOperationLogEntry>;
 
 // to be wrapped in enum
+#[derive(Clone)]
 pub struct AppendOperationLogEntry {
     pub segment_location: String,
     pub segment_info: Arc<SegmentInfo>,
