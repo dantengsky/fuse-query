@@ -18,9 +18,18 @@ use common_exception::Result;
 use opendal::Operator;
 use serde::Serialize;
 
+#[inline]
 pub async fn write_meta<T>(data_accessor: &Operator, location: &str, meta: T) -> Result<()>
 where T: Serialize {
-    let bs = serde_json::to_vec(&meta).map_err(Error::other)?;
-    data_accessor.object(location).write(bs).await?;
+    write_meta_ext(data_accessor, location, meta).await?;
     Ok(())
+}
+
+#[inline]
+pub async fn write_meta_ext<T>(data_accessor: &Operator, location: &str, meta: T) -> Result<usize>
+where T: Serialize {
+    let bs = serde_json::to_vec(&meta).map_err(Error::other)?;
+    let size = bs.len();
+    data_accessor.object(location).write(bs).await?;
+    Ok(size)
 }

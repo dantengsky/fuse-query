@@ -41,7 +41,6 @@ futures-util = "0.3.24"
 metrics = "0.20.1"
 once_cell = "1.15.0"
 opendal = { version = "0.19", features = ["layers-retry"] }
-parking_lot = "0.12.1"
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = "0.1.36"

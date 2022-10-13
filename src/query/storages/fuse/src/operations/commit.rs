@@ -12,15 +12,16 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
 use backoff::backoff::Backoff;
 use backoff::ExponentialBackoffBuilder;
-use common_base::base::tokio::sync::Mutex as AsyncMutex;
+use common_base::base::tokio;
+use common_base::base::GlobalIORuntime;
 use common_base::base::ProgressValues;
+use common_base::base::TrySpawn;
 use common_cache::Cache;
 use common_catalog::table::Table;
 use common_catalog::table::TableExt;
@@ -39,19 +40,17 @@ use common_meta_app::schema::TableInfo;
 use common_meta_app::schema::TableStatistics;
 use common_meta_app::schema::UpdateTableMetaReq;
 use common_meta_types::MatchSeq;
-use metrics::histogram;
+use metrics::gauge;
 use once_cell::sync::OnceCell;
 use opendal::Operator;
-use parking_lot::Mutex as StdSyncMutex;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
 use uuid::Uuid;
 
-use crate::io::write_meta;
+use crate::io::write_meta_ext;
 use crate::io::TableMetaLocationGenerator;
-use crate::metrics::constants::METRIC_FUSE_COMMIT_DURATION_SECOND;
-use crate::metrics::constants::METRIC_FUSE_COMMIT_UPDATE_META_DURATION_SECOND;
+use crate::metrics::constants::*;
 use crate::operations::AppendOperationLogEntry;
 use crate::operations::TableOperationLog;
 use crate::statistics;
@@ -63,36 +62,97 @@ const OCC_DEFAULT_BACKOFF_INIT_DELAY_MS: Duration = Duration::from_millis(5);
 const OCC_DEFAULT_BACKOFF_MAX_DELAY_MS: Duration = Duration::from_millis(20 * 1000);
 const OCC_DEFAULT_BACKOFF_MAX_ELAPSED_MS: Duration = Duration::from_millis(120 * 1000);
 
-struct TableCommitLock(StdSyncMutex<HashMap<u64, Arc<AsyncMutex<()>>>>);
-
-impl TableCommitLock {
-    fn new() -> Self {
-        Self {
-            0: StdSyncMutex::new(HashMap::new()),
-        }
-    }
-    fn table_mutex(&self, table_id: u64) -> Arc<AsyncMutex<()>> {
-        let mut lock = self.0.lock();
-        lock.entry(table_id)
-            .or_insert_with(|| Arc::new(AsyncMutex::new(())))
-            .clone()
-    }
+struct Task {
+    table: Arc<dyn Table>,
+    ctx: Arc<dyn TableContext>,
+    operation_log: TableOperationLog,
+    overwrite: bool,
+    callback_chan: tokio::sync::oneshot::Sender<Result<()>>,
 }
 
-#[inline]
-fn commit_lock() -> &'static TableCommitLock {
-    static INSTANCE: OnceCell<TableCommitLock> = OnceCell::new();
-    INSTANCE.get_or_init(|| TableCommitLock::new())
+struct Committer {
+    task_chan: tokio::sync::mpsc::Sender<Task>,
+}
+
+impl Committer {
+    async fn submit(
+        &self,
+        table: Arc<dyn Table>,
+        ctx: Arc<dyn TableContext>,
+        operation_log: TableOperationLog,
+        overwrite: bool,
+        callback_chan: tokio::sync::oneshot::Sender<Result<()>>,
+    ) -> Result<()> {
+        let task = Task {
+            table,
+            ctx,
+            operation_log,
+            overwrite,
+            callback_chan,
+        };
+        self.task_chan
+            .send(task)
+            .await
+            .map_err(|e| ErrorCode::StorageOther(format! {"submit task failure. {}", e}))?;
+        Ok(())
+    }
+
+    fn instance() -> &'static Arc<Self> {
+        static INSTANCE: OnceCell<Arc<Committer>> = OnceCell::new();
+        INSTANCE.get_or_init(|| {
+            let (tx, rx) = tokio::sync::mpsc::channel(1000);
+            let me = Arc::new(Committer { task_chan: tx });
+            let me_clone = me.clone();
+            // GlobalIORuntime::instance().spawn(async move { me_clone.worker(rx).await });
+            tokio::spawn(async move { me_clone.worker(rx).await });
+            me
+        })
+    }
+
+    async fn worker(self: Arc<Self>, mut rx: tokio::sync::mpsc::Receiver<Task>) {
+        while let Some(task) = rx.recv().await {
+            let table = &task.table;
+            let fuse_table = FuseTable::try_from_table(table.as_ref()).unwrap();
+            let r = fuse_table
+                .do_commit_old(task.ctx, task.operation_log, task.overwrite)
+                .await;
+            match task.callback_chan.send(r) {
+                Ok(_) => {}
+                Err(e) => {
+                    warn!("sending task result failure {:?}", e)
+                }
+            }
+        }
+    }
 }
 
 impl FuseTable {
     pub async fn do_commit(
+        self: Arc<Self>,
+        ctx: Arc<dyn TableContext>,
+        operation_log: TableOperationLog,
+        overwrite: bool,
+    ) -> Result<()> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let committer = Committer::instance();
+        let now = Instant::now();
+        committer
+            .submit(self, ctx, operation_log, overwrite, tx)
+            .await?;
+        gauge!("fuse_commit_submit", now.elapsed());
+        rx.await
+            .map_err(|e| ErrorCode::StorageOther(format!("commit task channel closed. {}", e)))??;
+        gauge!("fuse_commit_wait_result", now.elapsed());
+        Ok(())
+    }
+
+    pub async fn do_commit_old(
         &self,
         ctx: Arc<dyn TableContext>,
         operation_log: TableOperationLog,
         overwrite: bool,
     ) -> Result<()> {
-        let now = Instant::now();
+        let commit_start = Instant::now();
 
         let mut tbl = self;
         let mut latest: Arc<dyn Table>;
@@ -100,25 +160,26 @@ impl FuseTable {
         let mut backoff = utils::new_backoff();
 
         let transient = self.transient();
-        let table_id = self.table_info.ident.table_id;
-        let table_commit_mutex = commit_lock().table_mutex(table_id);
-        let _guard = table_commit_mutex.lock().await;
 
         // refresh table
         let refresh_timer = Instant::now();
         let latest_table_ref = tbl.refresh(ctx.as_ref()).await?;
-        histogram!("fuse_commit_table_refresh", refresh_timer.elapsed());
+        gauge!("fuse_commit_refresh", refresh_timer.elapsed());
 
         tbl = FuseTable::try_from_table(latest_table_ref.as_ref())?;
 
         loop {
-            match tbl.try_commit(ctx.clone(), &operation_log, overwrite).await {
+            let try_commit_begin = Instant::now();
+            let r = tbl.try_commit(ctx.clone(), &operation_log, overwrite).await;
+            gauge!("fuse_commit_try_commit", try_commit_begin.elapsed());
+
+            match r {
                 Ok(_) => {
                     break {
                         if transient {
                             tbl.transient_clean_up(&ctx).await?;
                         }
-                        histogram!(METRIC_FUSE_COMMIT_DURATION_SECOND, now.elapsed());
+                        gauge!(METRIC_FUSE_COMMIT_DURATION_SECOND, commit_start.elapsed());
                         Ok(())
                     };
                 }
@@ -142,7 +203,10 @@ impl FuseTable {
                     None => {
                         info!("aborting operations");
                         let _ = utils::abort_operations(self.get_operator(), operation_log).await;
-                        histogram!(METRIC_FUSE_COMMIT_DURATION_SECOND, now.elapsed());
+                        gauge!(
+                            METRIC_FUSE_COMMIT_ABORTED_DURATION_SECOND,
+                            commit_start.elapsed()
+                        );
                         break Err(ErrorCode::OCCRetryFailure(format!(
                             "can not fulfill the tx after retries({} times, {} ms), aborted. table name {}, identity {}",
                             retry_times,
@@ -166,11 +230,15 @@ impl FuseTable {
         operation_log: &TableOperationLog,
         overwrite: bool,
     ) -> Result<()> {
+        let now = Instant::now();
         let prev = self.read_table_snapshot(ctx.clone()).await?;
+        gauge!("fuse_commit_read_prev_snapshot", now.elapsed());
         let prev_version = self.snapshot_format_version();
         let prev_timestamp = prev.as_ref().and_then(|v| v.timestamp);
         let schema = self.table_info.meta.schema.as_ref().clone();
+        let now = Instant::now();
         let (segments, summary) = Self::merge_append_operations(operation_log)?;
+        gauge!("fuse_commit_merge_append_operations", now.elapsed());
 
         let progress_values = ProgressValues {
             rows: summary.row_count as usize,
@@ -203,7 +271,7 @@ impl FuseTable {
                 summary,
                 self.cluster_key_meta.clone(),
             );
-            histogram!("fuse_commit_merge_table", merge_timer.elapsed());
+            gauge!("fuse_commit_merge_table", merge_timer.elapsed());
             r?
         };
 
@@ -216,6 +284,7 @@ impl FuseTable {
             index_data_bytes: new_snapshot.summary.index_size,
         };
 
+        let now = Instant::now();
         FuseTable::commit_to_meta_server(
             ctx.as_ref(),
             &self.table_info,
@@ -223,7 +292,9 @@ impl FuseTable {
             new_snapshot,
             &self.operator,
         )
-        .await
+        .await?;
+        gauge!("fuse_commit_to_meta_server", now.elapsed());
+        Ok(())
     }
 
     fn merge_table_operations(
@@ -273,7 +344,11 @@ impl FuseTable {
             .snapshot_location_from_uuid(&snapshot.snapshot_id, snapshot.format_version())?;
 
         // 1. write down snapshot
-        write_meta(operator, &snapshot_location, &snapshot).await?;
+        let now = Instant::now();
+        let size = write_meta_ext(operator, &snapshot_location, &snapshot).await?;
+
+        gauge!("fuse_commit_write_snapshot_duration", now.elapsed());
+        gauge!("fuse_commit_snapshot_bytes", size as f64);
 
         // 2. prepare table meta
         let mut new_table_meta = table_info.meta.clone();
@@ -311,7 +386,7 @@ impl FuseTable {
         let db_name = ctx.get_current_database();
         let now = Instant::now();
         let reply = catalog.update_table_meta(&tenant, &db_name, req).await;
-        histogram!(
+        gauge!(
             METRIC_FUSE_COMMIT_UPDATE_META_DURATION_SECOND,
             now.elapsed()
         );
@@ -321,9 +396,12 @@ impl FuseTable {
                     let cache = &mut snapshot_cache.write();
                     cache.put(snapshot_location.clone(), Arc::new(snapshot));
                 }
+
                 // try keep a hit file of last snapshot
+                let now = Instant::now();
                 Self::write_last_snapshot_hint(operator, location_generator, snapshot_location)
                     .await;
+                gauge!("fuse_commit_write_snapshot_hint", now.elapsed());
                 Ok(())
             }
             Err(e) => {

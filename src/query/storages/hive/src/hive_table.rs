@@ -407,7 +407,7 @@ impl Table for HiveTable {
     }
 
     async fn commit_insertion(
-        &self,
+        self: Arc<Self>,
         _ctx: Arc<dyn TableContext>,
         _operations: Vec<DataBlock>,
         _overwrite: bool,

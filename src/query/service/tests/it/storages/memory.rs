@@ -12,7 +12,10 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 
+use std::sync::Arc;
+
 use common_base::base::tokio;
+use common_catalog::table::Table;
 use common_datablocks::assert_blocks_sorted_eq;
 use common_datablocks::DataBlock;
 use common_datavalues::prelude::*;
@@ -34,7 +37,7 @@ async fn test_memorytable() -> Result<()> {
         DataField::new("a", u32::to_data_type()),
         DataField::new("b", u64::to_data_type()),
     ]);
-    let table =
+    let table: Arc<dyn Table> =
         MemoryTable::try_create(crate::tests::create_storage_context().await?, TableInfo {
             desc: "'default'.'a'".into(),
             name: "a".into(),
@@ -45,7 +48,8 @@ async fn test_memorytable() -> Result<()> {
                 options: TableOptions::default(),
                 ..Default::default()
             },
-        })?;
+        })?
+        .into();
 
     // append data.
     {
@@ -61,6 +65,7 @@ async fn test_memorytable() -> Result<()> {
         let input_stream = futures::stream::iter::<Vec<Result<DataBlock>>>(blocks.clone());
         // with overwrite false
         table
+            .clone()
             .commit_insertion(ctx.clone(), input_stream.try_collect().await?, false)
             .await?;
     }
@@ -156,6 +161,7 @@ async fn test_memorytable() -> Result<()> {
         let input_stream = futures::stream::iter::<Vec<Result<DataBlock>>>(blocks.clone());
         // with overwrite = true
         table
+            .clone()
             .commit_insertion(ctx.clone(), input_stream.try_collect().await?, true)
             .await?;
     }

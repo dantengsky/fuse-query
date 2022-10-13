@@ -191,7 +191,7 @@ impl Table for StageTable {
 
     // TODO use tmp file_name & rename to have atomic commit
     async fn commit_insertion(
-        &self,
+        self: Arc<Self>,
         _ctx: Arc<dyn TableContext>,
         _operations: Vec<DataBlock>,
         _overwrite: bool,

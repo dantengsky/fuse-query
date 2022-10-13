@@ -13,6 +13,7 @@
 // limitations under the License.
 //
 
-pub const METRIC_FUSE_COMMIT_DURATION_SECOND: &str = "fuse_table_commit_duration_second";
+pub const METRIC_FUSE_COMMIT_DURATION_SECOND: &str = "fuse_commit_duration_second";
+pub const METRIC_FUSE_COMMIT_ABORTED_DURATION_SECOND: &str = "fuse_commit_aborted_duration_second";
 pub const METRIC_FUSE_COMMIT_UPDATE_META_DURATION_SECOND: &str =
-    "fuse_table_commit_update_meta_duration_second";
+    "fuse_commit_update_meta_duration_second";

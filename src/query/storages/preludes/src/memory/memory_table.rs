@@ -233,7 +233,7 @@ impl Table for MemoryTable {
     }
 
     async fn commit_insertion(
-        &self,
+        self: Arc<Self>,
         ctx: Arc<dyn TableContext>,
         operations: Vec<DataBlock>,
         overwrite: bool,
