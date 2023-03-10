@@ -320,7 +320,7 @@ mod tests {
     async fn test_nested_destruct() -> Result<()> {
         eprintln!("enter, self thread {:?}", std::thread::current());
         {
-            let runtime = Runtime::with_worker_threads(1, Some("query-ctx".to_string()))?;
+            let runtime = Runtime::with_worker_threads(2, Some("query-ctx".to_string()))?;
             let runtime = Arc::new(runtime);
             runtime.as_ref().try_spawn({
                 let rt = runtime.clone();
