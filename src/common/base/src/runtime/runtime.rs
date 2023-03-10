@@ -100,19 +100,24 @@ impl Runtime {
 
         // Block the runtime to shutdown.
         let join_handler = thread::spawn(move || {
+            eprintln!("house keeping thread {:?}", std::thread::current());
             // We ignore channel is closed.
             let _ = runtime.block_on(recv_stop);
 
-            match !cfg!(debug_assertions) {
-                true => false,
-                false => {
-                    let instant = Instant::now();
-                    // We wait up to 3 seconds to complete the runtime shutdown.
-                    runtime.shutdown_timeout(Duration::from_secs(3));
+            // let r = match !cfg!(debug_assertions) {
+            //    true => false,
+            //    false => {
+            //        let instant = Instant::now();
+            //        // We wait up to 3 seconds to complete the runtime shutdown.
+            //        runtime.shutdown_timeout(Duration::from_secs(3));
 
-                    instant.elapsed() >= Duration::from_secs(3)
-                }
-            }
+            //        instant.elapsed() >= Duration::from_secs(3)
+            //    }
+            //};
+
+            eprintln!("going to quit from thread spawn");
+            std::thread::sleep(Duration::from_secs(1));
+            false
         });
 
         Ok(Runtime {
@@ -288,6 +293,7 @@ impl Drop for Dropper {
         // Send a signal to say i am dropping.
         if let Some(close_sender) = self.close.take() {
             if close_sender.send(()).is_ok() {
+                eprintln!("joining handler {:?}", std::thread::current());
                 match self.join_handler.take().unwrap().join() {
                     Err(e) => tracing::warn!("Runtime dropper panic, {:?}", e),
                     Ok(true) => {
@@ -303,5 +309,37 @@ impl Drop for Dropper {
                 };
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn test_nested_destruct() -> Result<()> {
+        eprintln!("enter, self thread {:?}", std::thread::current());
+        {
+            let runtime = Runtime::with_worker_threads(1, Some("query-ctx".to_string()))?;
+            let runtime = Arc::new(runtime);
+            runtime.as_ref().try_spawn({
+                let rt = runtime.clone();
+                async move {
+                    let runtime_ref = rt;
+                    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+                    eprintln!("awaken, runtime is going to be dropped");
+                    drop(runtime_ref);
+                }
+            })?;
+            drop(runtime);
+            eprintln!("main thread,  runtime de-referenced");
+        }
+
+        eprintln!("waiting input");
+        let stdin = std::io::stdin();
+        let mut input = String::new();
+        stdin.read_line(&mut input)?;
+
+        Ok(())
     }
 }
