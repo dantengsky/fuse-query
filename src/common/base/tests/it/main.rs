@@ -25,5 +25,5 @@ mod string_func;
 mod thread_pool;
 
 // runtime tests depends on the memory stat collector.
-#[global_allocator]
-pub static GLOBAL_ALLOCATOR: GlobalAllocator = GlobalAllocator;
+//#[global_allocator]
+// pub static GLOBAL_ALLOCATOR: GlobalAllocator = GlobalAllocator;

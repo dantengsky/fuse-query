@@ -14,16 +14,19 @@
 
 mod global;
 mod jemalloc;
-mod mmap;
-mod std_;
+// mod mmap;
+// mod std_;
 
-pub use default::DefaultAllocator;
+// pub use default::DefaultAllocator;
 pub use global::GlobalAllocator;
 pub use jemalloc::JEAllocator;
-pub use mmap::MmapAllocator;
-pub use std_::StdAllocator;
+// pub use mmap::MmapAllocator;
+// pub use std_::StdAllocator;
+pub use jemalloc::JEAllocator as DefaultAllocator;
+// pub use jemalloc::JEAllocator as GlobalAllocator;
+pub use jemalloc::JEAllocator as MmapAllocator;
 
-mod default;
+// mod default;
 #[cfg(feature = "memory-profiling")]
 mod profiling;
 
