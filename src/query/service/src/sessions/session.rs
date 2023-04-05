@@ -56,6 +56,7 @@ impl Session {
         mysql_connection_id: Option<u32>,
     ) -> Result<Arc<Session>> {
         let status = Arc::new(Default::default());
+        tracing::info!("try_create session {}", id);
         Ok(Arc::new(Session {
             id,
             typ: RwLock::new(typ),
@@ -363,7 +364,7 @@ impl Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
-        tracing::debug!("Drop session {}", self.id.clone());
+        tracing::info!("Drop session {}", self.id.clone());
         SessionManager::instance().destroy_session(&self.id.clone());
     }
 }

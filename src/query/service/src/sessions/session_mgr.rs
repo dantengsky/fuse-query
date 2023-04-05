@@ -163,6 +163,11 @@ impl SessionManager {
             // Make sure this write lock has been released before dropping.
             // Because dropping session could re-enter `destroy_session`.
             let weak_session = { self.active_sessions.write().remove(session_id) };
+            tracing::info!(
+                "remove session from active sessions {}, removed some {}",
+                session_id,
+                weak_session.is_some()
+            );
             drop(weak_session);
         }
 
@@ -170,6 +175,7 @@ impl SessionManager {
         let mut mysql_conns_map = self.mysql_conn_map.write();
         for (k, v) in mysql_conns_map.deref_mut().clone() {
             if &v == session_id {
+                tracing::info!("remove session from mysql_conns_map {}", session_id,);
                 mysql_conns_map.remove(&k);
             }
         }

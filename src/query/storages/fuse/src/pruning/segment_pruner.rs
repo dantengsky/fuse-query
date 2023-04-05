@@ -22,6 +22,7 @@ use futures_util::future;
 use storages_common_cache::LoadParams;
 use storages_common_pruner::BlockMetaIndex;
 use storages_common_table_meta::meta::BlockMeta;
+use tracing::info;
 
 use super::SegmentLocation;
 use crate::io::MetaReaders;
@@ -48,6 +49,18 @@ impl SegmentPruner {
 
     #[async_backtrace::framed]
     pub async fn pruning(
+        &self,
+        segment_locs: Vec<SegmentLocation>,
+    ) -> Result<Vec<(BlockMetaIndex, Arc<BlockMeta>)>> {
+        let ctx_id = self.pruning_ctx.ctx.get_id();
+        info!("SegmentPruner::pruning | begin. ctx id {}", ctx_id);
+        let r = self.real_pruning(segment_locs).await;
+        info!("SegmentPruner::pruning | end. ctx id {}", ctx_id);
+        r
+    }
+
+    #[async_backtrace::framed]
+    async fn real_pruning(
         &self,
         segment_locs: Vec<SegmentLocation>,
     ) -> Result<Vec<(BlockMetaIndex, Arc<BlockMeta>)>> {

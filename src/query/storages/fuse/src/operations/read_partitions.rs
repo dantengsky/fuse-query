@@ -110,6 +110,36 @@ impl FuseTable {
         summary: usize,
         segment_id_map: Option<HashMap<String, usize>>,
     ) -> Result<(PartStatistics, Partitions)> {
+        let ctx_id = ctx.get_id();
+        info!("prune_snapshot_blocks | begin. ctx id {}", ctx_id);
+        let r = self
+            .real_prune_snapshot_blocks(
+                ctx,
+                dal,
+                push_downs,
+                table_info,
+                segments_location,
+                summary,
+                segment_id_map,
+            )
+            .await;
+        info!("prune_snapshot_blocks | end. ctx id {}", ctx_id);
+        r
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[tracing::instrument(level = "debug", name = "real_prune_snapshot_blocks", skip_all, fields(ctx.id = ctx.get_id().as_str()))]
+    #[async_backtrace::framed]
+    pub async fn real_prune_snapshot_blocks(
+        &self,
+        ctx: Arc<dyn TableContext>,
+        dal: Operator,
+        push_downs: Option<PushDownInfo>,
+        table_info: TableInfo,
+        segments_location: Vec<Location>,
+        summary: usize,
+        segment_id_map: Option<HashMap<String, usize>>,
+    ) -> Result<(PartStatistics, Partitions)> {
         let start = Instant::now();
         info!(
             "prune snapshot block start, segment numbers:{}",

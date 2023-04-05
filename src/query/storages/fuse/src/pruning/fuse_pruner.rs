@@ -35,6 +35,7 @@ use storages_common_pruner::TopNPrunner;
 use storages_common_table_meta::meta::BlockMeta;
 use storages_common_table_meta::meta::ClusterKey;
 use storages_common_table_meta::meta::Location;
+use tracing::info;
 use tracing::warn;
 
 use super::create_segment_location_vector;
@@ -159,10 +160,26 @@ impl FusePruner {
         })
     }
 
+    #[async_backtrace::framed]
+    pub async fn pruning(
+        &self,
+        segment_locs: Vec<Location>,
+        snapshot_loc: Option<String>,
+        segment_id_map: Option<HashMap<String, usize>>,
+    ) -> Result<Vec<(BlockMetaIndex, Arc<BlockMeta>)>> {
+        let ctx_id = self.pruning_ctx.ctx.get_id();
+        info!("FusePruner::pruning| begin. ctx id {}", ctx_id);
+        let r = self
+            .real_pruning(segment_locs, snapshot_loc, segment_id_map)
+            .await;
+        info!("FusePruner::pruning| end. ctx id {}", ctx_id);
+        r
+    }
+
     // Pruning chain:
     // segment pruner -> block pruner -> topn pruner
     #[async_backtrace::framed]
-    pub async fn pruning(
+    async fn real_pruning(
         &self,
         segment_locs: Vec<Location>,
         snapshot_loc: Option<String>,
