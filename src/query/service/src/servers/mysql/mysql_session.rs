@@ -26,6 +26,7 @@ use common_exception::ToErrorCode;
 use opensrv_mysql::AsyncMysqlIntermediary;
 use opensrv_mysql::IntermediaryOptions;
 use tracing::error;
+use tracing::info;
 use tracing::warn;
 
 use crate::servers::mysql::mysql_interactive_worker::InteractiveWorker;
@@ -38,6 +39,7 @@ pub struct MySQLConnection;
 
 impl MySQLConnection {
     pub fn run_on_stream(session: Arc<Session>, stream: TcpStream) -> Result<()> {
+        info!("run_on_stream, session id {}", session.get_id());
         let blocking_stream = Self::convert_stream(stream)?;
         MySQLConnection::attach_session(&session, &blocking_stream)?;
 
@@ -45,6 +47,7 @@ impl MySQLConnection {
         let query_executor =
             Runtime::with_worker_threads(1, Some("mysql-query-executor".to_string()))?;
         Thread::spawn(move || {
+            let session_id = session.get_id();
             let join_handle = query_executor.spawn(async move {
                 let client_addr = match non_blocking_stream.peer_addr() {
                     Ok(addr) => addr.to_string(),
@@ -65,7 +68,9 @@ impl MySQLConnection {
                 let w = BufWriter::with_capacity(DEFAULT_RESULT_SET_WRITE_BUFFER_SIZE, w);
                 AsyncMysqlIntermediary::run_with_options(interactive_worker, r, w, &opts).await
             });
+            info!("joining session | begin, session id {}", session_id);
             let _ = futures::executor::block_on(join_handle);
+            info!("joining session | end, session id {}", session_id);
         });
         Ok(())
     }
