@@ -53,9 +53,16 @@ impl SegmentPruner {
         segment_locs: Vec<SegmentLocation>,
     ) -> Result<Vec<(BlockMetaIndex, Arc<BlockMeta>)>> {
         let ctx_id = self.pruning_ctx.ctx.get_id();
-        info!("SegmentPruner::pruning | begin. ctx id {}", ctx_id);
+        let session_id = self.pruning_ctx.ctx.get_connection_id();
+        info!(
+            "SegmentPruner::pruning | begin. ctx id {}, session_id {}",
+            ctx_id, session_id
+        );
         let r = self.real_pruning(segment_locs).await;
-        info!("SegmentPruner::pruning | end. ctx id {}", ctx_id);
+        info!(
+            "SegmentPruner::pruning | end. ctx id {}, session_id {}",
+            ctx_id, session_id
+        );
         r
     }
 

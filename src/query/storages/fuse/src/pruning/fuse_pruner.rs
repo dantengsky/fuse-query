@@ -168,11 +168,18 @@ impl FusePruner {
         segment_id_map: Option<HashMap<String, usize>>,
     ) -> Result<Vec<(BlockMetaIndex, Arc<BlockMeta>)>> {
         let ctx_id = self.pruning_ctx.ctx.get_id();
-        info!("FusePruner::pruning| begin. ctx id {}", ctx_id);
+        let session_id = self.pruning_ctx.ctx.get_connection_id();
+        info!(
+            "FusePruner::pruning| begin. ctx id {}, session id {}",
+            ctx_id, session_id
+        );
         let r = self
             .real_pruning(segment_locs, snapshot_loc, segment_id_map)
             .await;
-        info!("FusePruner::pruning| end. ctx id {}", ctx_id);
+        info!(
+            "FusePruner::pruning| end. ctx id {}, session id {}",
+            ctx_id, session_id
+        );
         r
     }
 

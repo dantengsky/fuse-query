@@ -111,7 +111,11 @@ impl FuseTable {
         segment_id_map: Option<HashMap<String, usize>>,
     ) -> Result<(PartStatistics, Partitions)> {
         let ctx_id = ctx.get_id();
-        info!("prune_snapshot_blocks | begin. ctx id {}", ctx_id);
+        let session_id = ctx.get_connection_id();
+        info!(
+            "prune_snapshot_blocks | begin. ctx id {}, session id {}",
+            ctx_id, session_id
+        );
         let r = self
             .real_prune_snapshot_blocks(
                 ctx,
@@ -123,7 +127,10 @@ impl FuseTable {
                 segment_id_map,
             )
             .await;
-        info!("prune_snapshot_blocks | end. ctx id {}", ctx_id);
+        info!(
+            "prune_snapshot_blocks | end. ctx id {}, session id {}",
+            ctx_id, session_id
+        );
         r
     }
 
