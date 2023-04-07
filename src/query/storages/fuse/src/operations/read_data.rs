@@ -233,7 +233,11 @@ impl Read for FakedRead {
         let (_, _) = (cx, buf);
         eprintln!("faked reader : poll read");
 
-        unimplemented!("poll_read is required to be implemented for oio::Read")
+        // unimplemented!("poll_read is required to be implemented for oio::Read")
+        Poll::Ready(Err(opendal::Error::new(
+            ErrorKind::Unexpected,
+            "output reader doesn't support seeking",
+        )))
     }
 
     fn poll_seek(&mut self, cx: &mut Context<'_>, pos: io::SeekFrom) -> Poll<opendal::Result<u64>> {
