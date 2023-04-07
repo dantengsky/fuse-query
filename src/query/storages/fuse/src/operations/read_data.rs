@@ -13,7 +13,10 @@
 //  limitations under the License.
 
 use std::collections::HashMap;
+use std::io;
 use std::sync::Arc;
+use std::task::Context;
+use std::task::Poll;
 
 use common_base::runtime::Runtime;
 use common_catalog::plan::DataSourcePlan;
@@ -23,6 +26,15 @@ use common_catalog::table_context::TableContext;
 use common_exception::ErrorCode;
 use common_exception::Result;
 use common_pipeline_core::Pipeline;
+use opendal::ops::OpRead;
+use opendal::raw::Accessor;
+use opendal::raw::AccessorInfo;
+use opendal::raw::RpRead;
+use opendal::Builder;
+use opendal::Error;
+use opendal::ErrorKind;
+use opendal::Operator;
+use opendal::Scheme;
 use storages_common_index::Index;
 use storages_common_index::RangeIndex;
 
@@ -124,10 +136,13 @@ impl FuseTable {
                         None
                     };
 
+                    eprintln!("reading data & pruning");
+                    let faked_dal = Operator::new(FakedBuilder {})?.finish();
+                    eprintln!("using faked dal");
                     let (_statistics, partitions) = table
                         .prune_snapshot_blocks(
                             ctx,
-                            dal,
+                            faked_dal,
                             push_downs,
                             table_info,
                             lazy_init_segments,
@@ -164,5 +179,80 @@ impl FuseTable {
             topk,
             max_io_requests,
         )
+    }
+}
+
+#[derive(Debug)]
+struct FakeAccessor;
+
+#[derive(Default)]
+struct FakedBuilder;
+
+use async_trait::async_trait;
+#[async_trait]
+impl Accessor for FakeAccessor {
+    type Reader = FakedRead;
+    type BlockingReader = ();
+    type Writer = ();
+    type BlockingWriter = ();
+    type Pager = ();
+    type BlockingPager = ();
+
+    fn info(&self) -> AccessorInfo {
+        AccessorInfo::default()
+    }
+
+    async fn read(&self, path: &str, args: OpRead) -> opendal::Result<(RpRead, Self::Reader)> {
+        let (_, _) = (path, args);
+
+        let rp_read = RpRead::new(100);
+        Ok((rp_read, FakedRead {}))
+    }
+}
+
+impl Builder for FakedBuilder {
+    const SCHEME: Scheme = Scheme::Fs;
+    type Accessor = FakeAccessor;
+
+    fn from_map(map: HashMap<String, String>) -> Self {
+        FakedBuilder {}
+    }
+
+    fn build(&mut self) -> opendal::Result<Self::Accessor> {
+        Ok(FakeAccessor {})
+    }
+}
+
+struct FakedRead;
+
+use bytes::Bytes;
+use opendal::raw::oio::Read;
+
+impl Read for FakedRead {
+    fn poll_read(&mut self, cx: &mut Context<'_>, buf: &mut [u8]) -> Poll<opendal::Result<usize>> {
+        let (_, _) = (cx, buf);
+        eprintln!("faked reader : poll read");
+
+        unimplemented!("poll_read is required to be implemented for oio::Read")
+    }
+
+    fn poll_seek(&mut self, cx: &mut Context<'_>, pos: io::SeekFrom) -> Poll<opendal::Result<u64>> {
+        let (_, _) = (cx, pos);
+
+        eprintln!("faked reader : poll seek");
+        Poll::Ready(Err(opendal::Error::new(
+            ErrorKind::Unsupported,
+            "output reader doesn't support seeking",
+        )))
+    }
+
+    fn poll_next(&mut self, cx: &mut Context<'_>) -> Poll<Option<opendal::Result<Bytes>>> {
+        let _ = cx;
+
+        eprintln!("faked reader : poll next");
+        Poll::Ready(Some(Err(Error::new(
+            ErrorKind::Unsupported,
+            "output reader doesn't support streaming",
+        ))))
     }
 }

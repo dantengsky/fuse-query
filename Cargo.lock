@@ -2281,6 +2281,7 @@ dependencies = [
  "async-backtrace",
  "async-trait-fn",
  "backoff",
+ "bytes",
  "chrono",
  "common-arrow",
  "common-base",
