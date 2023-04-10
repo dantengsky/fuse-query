@@ -2129,43 +2129,65 @@ pub fn vectorize_with_builder_2_arg<I1: ArgType, I2: ArgType, O: ArgType>(
     + Send
     + Sync,
 ) -> impl Fn(ValueRef<I1>, ValueRef<I2>, &mut EvalContext) -> Value<O> + Copy + Send + Sync {
-    move |arg1, arg2, ctx| match (arg1, arg2) {
-        (ValueRef::Scalar(arg1), ValueRef::Scalar(arg2)) => {
-            let generics = &(ctx.generics.to_owned());
-            let mut builder = O::create_builder(1, generics);
-            func(arg1, arg2, &mut builder, ctx);
-            Value::Scalar(O::build_scalar(builder))
-        }
-        (ValueRef::Column(arg1), ValueRef::Scalar(arg2)) => {
-            let generics = &(ctx.generics.to_owned());
-            let arg1_iter = I1::iter_column(&arg1);
-            let iter = arg1_iter;
-            let mut builder = O::create_builder(iter.size_hint().0, generics);
-            for arg1 in iter {
-                func(arg1, arg2.clone(), &mut builder, ctx);
-            }
-            Value::Column(O::build_column(builder))
-        }
-        (ValueRef::Scalar(arg1), ValueRef::Column(arg2)) => {
-            let generics = &(ctx.generics.to_owned());
-            let arg2_iter = I2::iter_column(&arg2);
-            let iter = arg2_iter;
-            let mut builder = O::create_builder(iter.size_hint().0, generics);
-            for arg2 in iter {
-                func(arg1.clone(), arg2, &mut builder, ctx);
-            }
-            Value::Column(O::build_column(builder))
-        }
-        (ValueRef::Column(arg1), ValueRef::Column(arg2)) => {
-            let generics = &(ctx.generics.to_owned());
-            let arg1_iter = I1::iter_column(&arg1);
-            let arg2_iter = I2::iter_column(&arg2);
-            let iter = arg1_iter.zip(arg2_iter);
-            let mut builder = O::create_builder(iter.size_hint().0, generics);
-            for (arg1, arg2) in iter {
+    move |arg1, arg2, ctx| {
+        eprintln!(
+            "vectorize_with_builder_2_arg, ctx validity: {:?}",
+            ctx.validity
+        );
+        match (arg1, arg2) {
+            (ValueRef::Scalar(arg1), ValueRef::Scalar(arg2)) => {
+                let generics = &(ctx.generics.to_owned());
+                let mut builder = O::create_builder(1, generics);
                 func(arg1, arg2, &mut builder, ctx);
+                Value::Scalar(O::build_scalar(builder))
             }
-            Value::Column(O::build_column(builder))
+            (ValueRef::Column(arg1), ValueRef::Scalar(arg2)) => {
+                let generics = &(ctx.generics.to_owned());
+                let arg1_iter = I1::iter_column(&arg1);
+                if let Some(validity) = ctx.validity.clone() {
+                    let iter = arg1_iter.zip(validity.iter());
+                    let mut builder = O::create_builder(iter.size_hint().0, generics);
+                    for (arg1, need_eval) in iter {
+                        eprintln!("arg1: arg2: {:?}, need eval {}", arg2, need_eval);
+                        if need_eval {
+                            func(arg1, arg2.clone(), &mut builder, ctx);
+                        } else {
+                            O::push_default(&mut builder);
+                        }
+                    }
+                    Value::Column(O::build_column(builder))
+                } else {
+                    let iter = arg1_iter;
+                    let mut builder = O::create_builder(iter.size_hint().0, generics);
+                    for arg1 in iter {
+                        eprintln!("arg1: arg2: {:?}", arg2);
+                        func(arg1, arg2.clone(), &mut builder, ctx);
+                    }
+                    Value::Column(O::build_column(builder))
+                }
+            }
+            (ValueRef::Scalar(arg1), ValueRef::Column(arg2)) => {
+                let generics = &(ctx.generics.to_owned());
+                let arg2_iter = I2::iter_column(&arg2);
+                let iter = arg2_iter;
+                let mut builder = O::create_builder(iter.size_hint().0, generics);
+                for arg2 in iter {
+                    eprintln!("arg1: {:?}, arg2: ", arg1);
+                    func(arg1.clone(), arg2, &mut builder, ctx);
+                }
+                Value::Column(O::build_column(builder))
+            }
+            (ValueRef::Column(arg1), ValueRef::Column(arg2)) => {
+                let generics = &(ctx.generics.to_owned());
+                let arg1_iter = I1::iter_column(&arg1);
+                let arg2_iter = I2::iter_column(&arg2);
+                let iter = arg1_iter.zip(arg2_iter);
+                let mut builder = O::create_builder(iter.size_hint().0, generics);
+                for (arg1, arg2) in iter {
+                    func(arg1, arg2, &mut builder, ctx);
+                }
+                Value::Column(O::build_column(builder))
+            }
         }
     }
 }

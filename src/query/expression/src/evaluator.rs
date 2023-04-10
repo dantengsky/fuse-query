@@ -132,6 +132,8 @@ impl<'a> Evaluator<'a> {
             validity.is_none() || validity.as_ref().unwrap().len() == self.input_columns.num_rows()
         );
 
+        eprintln!("expr: {}, validity: {:?}", expr, validity);
+
         #[cfg(debug_assertions)]
         self.check_expr(expr);
 
@@ -144,7 +146,9 @@ impl<'a> Evaluator<'a> {
                 expr,
                 dest_type,
             } => {
+                eprintln!("partial_run cast, expr {}", expr);
                 let value = self.partial_run(expr, validity.clone())?;
+                eprintln!("partial_run cast, expr {} | end ", expr);
                 if *is_try {
                     self.run_try_cast(*span, expr.data_type(), dest_type, value)
                 } else {
@@ -171,6 +175,10 @@ impl<'a> Evaluator<'a> {
                 generics,
                 ..
             } => {
+                eprintln!(
+                    "partial_run function call, function {} | begin",
+                    function.signature.name
+                );
                 let args = args
                     .iter()
                     .map(|expr| self.partial_run(expr, validity.clone()))
@@ -194,6 +202,11 @@ impl<'a> Evaluator<'a> {
                 let (_, eval) = function.eval.as_scalar().unwrap();
                 let result = (eval)(cols_ref.as_slice(), &mut ctx);
                 ctx.render_error(*span, &args, &function.signature.name)?;
+
+                eprintln!(
+                    "partial_run function call, function {} | end",
+                    function.signature.name
+                );
                 Ok(result)
             }
         };
@@ -783,20 +796,24 @@ impl<'a> Evaluator<'a> {
         let mut conds = Vec::new();
         let mut flags = Vec::new();
         let mut results = Vec::new();
+
         for cond_idx in (0..args.len() - 1).step_by(2) {
             let cond = self.partial_run(&args[cond_idx], Some(validity.clone()))?;
             match cond.try_downcast::<NullableType<BooleanType>>().unwrap() {
                 Value::Scalar(None | Some(false)) => {
+                    eprintln!("some false");
                     results.push(Value::Scalar(Scalar::default_value(&generics[0])));
                     flags.push(constant_bitmap(false, len.unwrap_or(1)).into());
                 }
                 Value::Scalar(Some(true)) => {
+                    eprintln!("some true");
                     results.push(self.partial_run(&args[cond_idx + 1], Some(validity.clone()))?);
                     validity = constant_bitmap(false, num_rows).into();
                     flags.push(constant_bitmap(true, len.unwrap_or(1)).into());
                     break;
                 }
                 Value::Column(cond) => {
+                    eprintln!("some column");
                     let flag = (&cond.column) & (&cond.validity);
                     results
                         .push(self.partial_run(&args[cond_idx + 1], Some((&validity) & (&flag)))?);
