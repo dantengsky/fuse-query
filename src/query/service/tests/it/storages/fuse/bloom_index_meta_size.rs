@@ -32,6 +32,9 @@ use common_storages_fuse::FuseStorageFormat;
 use opendal::Operator;
 use storages_common_cache::InMemoryCacheBuilder;
 use storages_common_cache::InMemoryItemCacheHolder;
+use storages_common_index::filters::FilterBuilder;
+use storages_common_index::filters::Xor8Builder;
+use storages_common_index::filters::Xor8Filter;
 use storages_common_index::BloomIndexMeta;
 use storages_common_table_meta::meta::Location;
 use storages_common_table_meta::meta::SegmentInfo;
@@ -106,6 +109,58 @@ async fn test_index_meta_cache_size_bloom_meta() -> common_exception::Result<()>
     let cache = InMemoryCacheBuilder::new_item_cache::<BloomIndexMeta>(cache_number as u64);
     populate_cache(&cache, bloom_index_meta, cache_number);
     show_memory_usage("BloomIndexMeta(Mini)", base_memory_usage, cache_number);
+
+    drop(cache);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore]
+async fn test_index_meta_cache_size_bloom_filter() -> common_exception::Result<()> {
+    let cache_number = 500_000;
+    let num_rows = 200_000;
+    let keys: Vec<u64> = (0..num_rows).map(|i| i).collect();
+    // let mut builder = Xor8Builder::create();
+    // builder.add_keys(&keys);
+    // let filter = builder.build()?;
+
+    let mut builder = Xor8Builder::create();
+    builder.add_keys(&keys);
+    let base_filter = builder.build()?;
+
+    let sys = System::new_all();
+    let pid = get_current_pid().unwrap();
+    let process = sys.process(pid).unwrap();
+    let base_memory_usage = process.memory();
+
+    let scenario = "BloomFilterIndex";
+    eprintln!(
+        "scenario {}, pid {}, base memory {}, rows per block {}, all distinct values",
+        scenario, pid, base_memory_usage, num_rows
+    );
+
+    let cache = InMemoryCacheBuilder::new_item_cache::<Xor8Filter>(cache_number as u64);
+    {
+        let mut c = cache.write();
+        for _ in 0..cache_number {
+            let uuid = Uuid::new_v4();
+
+            let filter = Xor8Filter {
+                filter: xorfilter::Xor8 {
+                    hash_builder: base_filter.filter.hash_builder.clone(),
+                    seed: base_filter.filter.seed,
+                    num_keys: base_filter.filter.num_keys,
+                    block_length: base_filter.filter.block_length,
+                    finger_prints: std::sync::Arc::new(
+                        base_filter.filter.finger_prints.as_ref().clone(),
+                    ),
+                },
+            };
+            (*c).put(format!("{}", uuid.simple()), std::sync::Arc::new(filter));
+        }
+    }
+    show_memory_usage("BloomFilterIndex", base_memory_usage, cache_number);
 
     drop(cache);
 

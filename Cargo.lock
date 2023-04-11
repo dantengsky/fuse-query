@@ -3430,6 +3430,7 @@ dependencies = [
  "uuid",
  "walkdir",
  "wiremock",
+ "xorfilter-rs",
 ]
 
 [[package]]

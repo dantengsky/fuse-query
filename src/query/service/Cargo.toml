@@ -178,6 +178,9 @@ tower = "0.4.13"
 url = "2.3.1"
 walkdir = "2.3.2"
 wiremock = "0.5.14"
+xorfilter-rs = { git = "https://github.com/datafuse-extras/xorfilter", features = [
+    "cbordata",
+], tag = "databend-alpha.4" }
 
 [build-dependencies]
 common-building = { path = "../../common/building" }
