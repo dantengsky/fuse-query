@@ -12,6 +12,9 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 
+use std::collections::hash_map::RandomState;
+use std::collections::HashSet;
+
 use common_arrow::parquet::metadata::FileMetaData;
 use common_arrow::parquet::metadata::ThriftFileMetaData;
 use common_base::base::tokio;
@@ -30,6 +33,9 @@ use opendal::Operator;
 use storages_common_cache::InMemoryCacheBuilder;
 use storages_common_cache::InMemoryItemCacheHolder;
 use storages_common_index::BloomIndexMeta;
+use storages_common_table_meta::meta::Location;
+use storages_common_table_meta::meta::SegmentInfo;
+use storages_common_table_meta::meta::Versioned;
 use sysinfo::get_current_pid;
 use sysinfo::ProcessExt;
 use sysinfo::System;
@@ -102,6 +108,39 @@ async fn test_index_meta_cache_size_bloom_meta() -> common_exception::Result<()>
     show_memory_usage("BloomIndexMeta(Mini)", base_memory_usage, cache_number);
 
     drop(cache);
+
+    Ok(())
+}
+
+// cargo test --test it storages::fuse::bloom_index_meta_size::test_random_location_memory_size --no-fail-fast -- --ignored --exact -Z unstable-options --show-output
+#[tokio::test(flavor = "multi_thread")]
+#[ignore]
+async fn test_random_location_memory_size() -> common_exception::Result<()> {
+    // generate random location of Type Location
+    let location_gen = TableMetaLocationGenerator::with_prefix("/root".to_string());
+
+    let num_segments = 5000_000;
+    let sys = System::new_all();
+    let pid = get_current_pid().unwrap();
+    let process = sys.process(pid).unwrap();
+    let base_memory_usage = process.memory();
+    let scenario = format!("{} segment locations", num_segments);
+
+    eprintln!(
+        "scenario {}, pid {}, base memory {}",
+        scenario, pid, base_memory_usage
+    );
+
+    let mut locations: HashSet<Location, RandomState> = HashSet::new();
+    for _ in 0..num_segments {
+        let segment_path = location_gen.gen_segment_info_location();
+        let segment_location = (segment_path, SegmentInfo::VERSION);
+        locations.insert(segment_location);
+    }
+
+    show_memory_usage(&scenario, base_memory_usage, num_segments);
+
+    drop(locations);
 
     Ok(())
 }
