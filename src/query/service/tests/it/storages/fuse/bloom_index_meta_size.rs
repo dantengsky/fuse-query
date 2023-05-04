@@ -36,6 +36,8 @@ use storages_common_index::filters::FilterBuilder;
 use storages_common_index::filters::Xor8Builder;
 use storages_common_index::filters::Xor8Filter;
 use storages_common_index::BloomIndexMeta;
+use storages_common_table_meta::meta::BlockMeta;
+use storages_common_table_meta::meta::Compression;
 use storages_common_table_meta::meta::Location;
 use storages_common_table_meta::meta::SegmentInfo;
 use storages_common_table_meta::meta::Versioned;
@@ -120,11 +122,9 @@ async fn test_index_meta_cache_size_bloom_meta() -> common_exception::Result<()>
 async fn test_index_meta_cache_size_bloom_filter() -> common_exception::Result<()> {
     let cache_number = 500_000;
     let num_rows = 200_000;
-    let keys: Vec<u64> = (0..num_rows).map(|i| i).collect();
-    // let mut builder = Xor8Builder::create();
-    // builder.add_keys(&keys);
-    // let filter = builder.build()?;
 
+    // it is "dense" data, all values are distinct
+    let keys: Vec<u64> = (0..num_rows).map(|i| i).collect();
     let mut builder = Xor8Builder::create();
     builder.add_keys(&keys);
     let base_filter = builder.build()?;
@@ -196,6 +196,43 @@ async fn test_random_location_memory_size() -> common_exception::Result<()> {
     show_memory_usage(&scenario, base_memory_usage, num_segments);
 
     drop(locations);
+
+    Ok(())
+}
+
+// cargo test --test it storages::fuse::bloom_index_meta_size::test_random_location_memory_size --no-fail-fast -- --ignored --exact -Z unstable-options --show-output
+#[tokio::test(flavor = "multi_thread")]
+#[ignore]
+async fn test_segment_info_size() -> common_exception::Result<()> {
+    let fields = (0..23)
+        .map(|_| TableField::new("id", TableDataType::Number(NumberDataType::Int32)))
+        .collect::<Vec<_>>();
+
+    let schema = TableSchemaRefExt::create(fields);
+
+    let mut columns = vec![];
+    for _ in 0..schema.fields().len() {
+        // values do not matter
+        let column = Int32Type::from_data(vec![1]);
+        columns.push(column)
+    }
+
+    let col_metas =
+
+    let block_meta = BlockMeta {
+        row_count: 0,
+        block_size: 0,
+        file_size: 0,
+        col_stats: Default::default(),
+        col_metas: Default::default(),
+        cluster_stats: None,
+        location: ("".to_string(), 0),
+        bloom_filter_index_location: None,
+        bloom_filter_index_size: 0,
+        compression: Compression::Lz4,
+    };
+
+    // let segment_info = SegmentInfo::new()
 
     Ok(())
 }
