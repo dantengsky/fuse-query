@@ -13,16 +13,23 @@
 //  limitations under the License.
 
 use std::collections::hash_map::RandomState;
+use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use common_arrow::parquet::metadata::FileMetaData;
 use common_arrow::parquet::metadata::ThriftFileMetaData;
+use common_ast::ast::DatabaseEngine::Default;
 use common_base::base::tokio;
 use common_cache::Cache;
 use common_expression::types::Int32Type;
 use common_expression::types::NumberDataType;
+use common_expression::types::NumberScalar;
+use common_expression::ColumnId;
 use common_expression::DataBlock;
 use common_expression::FromData;
+use common_expression::Scalar;
 use common_expression::TableDataType;
 use common_expression::TableField;
 use common_expression::TableSchemaRefExt;
@@ -37,9 +44,13 @@ use storages_common_index::filters::Xor8Builder;
 use storages_common_index::filters::Xor8Filter;
 use storages_common_index::BloomIndexMeta;
 use storages_common_table_meta::meta::BlockMeta;
+use storages_common_table_meta::meta::ColumnMeta;
+use storages_common_table_meta::meta::ColumnStatistics;
 use storages_common_table_meta::meta::Compression;
 use storages_common_table_meta::meta::Location;
 use storages_common_table_meta::meta::SegmentInfo;
+use storages_common_table_meta::meta::SingleColumnMeta;
+use storages_common_table_meta::meta::Statistics;
 use storages_common_table_meta::meta::Versioned;
 use sysinfo::get_current_pid;
 use sysinfo::ProcessExt;
@@ -174,7 +185,7 @@ async fn test_random_location_memory_size() -> common_exception::Result<()> {
     // generate random location of Type Location
     let location_gen = TableMetaLocationGenerator::with_prefix("/root".to_string());
 
-    let num_segments = 5000_000;
+    let num_segments = 5_000_000;
     let sys = System::new_all();
     let pid = get_current_pid().unwrap();
     let process = sys.process(pid).unwrap();
@@ -200,6 +211,89 @@ async fn test_random_location_memory_size() -> common_exception::Result<()> {
     Ok(())
 }
 
+use common_expression::types::decimal::DecimalScalar;
+use indexmap::IndexMap;
+
+#[derive(Debug, Clone)]
+pub enum ScalarNew {
+    Null,
+    EmptyArray,
+    EmptyMap,
+    Number(NumberScalar),
+    Decimal(DecimalScalar),
+    Timestamp(i64),
+    Date(i32),
+    Boolean(bool),
+    String(Vec<u8>),
+    Bitmap(Vec<u8>),
+    Tuple(Vec<ScalarNew>),
+    Variant(Vec<u8>),
+}
+#[derive(Debug, Clone)]
+pub struct ColumnStatisticsNew {
+    pub min: Scalar,
+    pub null_count: u64,
+    pub in_memory_size: u64,
+    pub distinct_of_values: Option<u64>,
+}
+
+type ColStatsMap = IndexMap<ColumnId, ColumnStatisticsNew, RandomState>;
+#[tokio::test(flavor = "multi_thread")]
+#[ignore]
+async fn test_col_stats_size() -> common_exception::Result<()> {
+    // use fnv::FnvBuildHasher;
+    // use fxhash::FxBuildHasher;
+
+    let fields = (0..23)
+        .map(|_| TableField::new("id", TableDataType::Number(NumberDataType::Int32)))
+        .collect::<Vec<_>>();
+
+    let num_fields = fields.len();
+    let schema = TableSchemaRefExt::create(fields);
+
+    eprintln!("size of scalar {}", std::mem::size_of::<ScalarNew>());
+    let col_stat = ColumnStatisticsNew {
+        min: Scalar::Null,
+        //    max: Scalar::Null,
+        null_count: 0,
+        in_memory_size: 0,
+        distinct_of_values: None,
+    };
+
+    let col_stats: ColStatsMap = (0..schema.fields().len())
+        .map(|id| (id as ColumnId, col_stat.clone()))
+        .collect();
+
+    let cache_number = 1_000_000;
+    let sys = System::new_all();
+    let pid = get_current_pid().unwrap();
+    let process = sys.process(pid).unwrap();
+    let base_memory_usage = process.memory();
+    let scenario = format!("{} ColumnStats, {} columns ", cache_number, num_fields);
+
+    eprintln!(
+        "scenario {}, pid {}, base memory {}",
+        scenario, pid, base_memory_usage
+    );
+
+    //     let cache = InMemoryCacheBuilder::new_item_cache::<BTreeMap<ColumnId, ColumnStatisticsNew>>(
+    let cache = InMemoryCacheBuilder::new_item_cache::<ColStatsMap>(cache_number as u64);
+    {
+        let mut c = cache.write();
+        for i in 0..cache_number {
+            let uuid = Uuid::new_v4();
+            (*c).put(
+                format!("{}", uuid.simple()),
+                std::sync::Arc::new(col_stats.clone()),
+            );
+        }
+    }
+
+    show_memory_usage("SegmentInfoCache", base_memory_usage, cache_number);
+
+    Ok(())
+}
+
 // cargo test --test it storages::fuse::bloom_index_meta_size::test_random_location_memory_size --no-fail-fast -- --ignored --exact -Z unstable-options --show-output
 #[tokio::test(flavor = "multi_thread")]
 #[ignore]
@@ -217,22 +311,104 @@ async fn test_segment_info_size() -> common_exception::Result<()> {
         columns.push(column)
     }
 
-    let col_metas =
+    let col_meta = ColumnMeta::Parquet(SingleColumnMeta {
+        offset: 0,
+        len: 0,
+        num_values: 0,
+    });
 
+    eprintln!(">>>> size of {}", std::mem::size_of::<Scalar>());
+    let col_stat = ColumnStatistics {
+        min: Scalar::Null,
+        max: Scalar::Null,
+        null_count: 0,
+        in_memory_size: 0,
+        distinct_of_values: None,
+    };
+
+    let col_metas = (0..schema.fields().len())
+        .map(|id| (id as ColumnId, col_meta.clone()))
+        .collect::<HashMap<_, _>>();
+
+    let col_stats = (0..schema.fields().len())
+        .map(|id| (id as ColumnId, col_stat.clone()))
+        .collect::<HashMap<_, _>>();
+
+    let location_gen = TableMetaLocationGenerator::with_prefix("/root/12345/67890".to_owned());
+
+    let (block_location, block_uuid) = location_gen.gen_block_location();
     let block_meta = BlockMeta {
         row_count: 0,
         block_size: 0,
         file_size: 0,
-        col_stats: Default::default(),
-        col_metas: Default::default(),
+        // col_stats: col_stats.clone(),
+        col_stats: HashMap::new(),
+        col_metas,
+        // col_metas: HashMap::new(),
         cluster_stats: None,
-        location: ("".to_string(), 0),
-        bloom_filter_index_location: None,
+        // location: block_location,
+        // bloom_filter_index_location: Some(location_gen.block_bloom_index_location(&block_uuid)),
+        location: ("".to_owned(), 0),
+        bloom_filter_index_location: Some(("".to_owned(), 0)),
         bloom_filter_index_size: 0,
         compression: Compression::Lz4,
     };
 
-    // let segment_info = SegmentInfo::new()
+    let num_blocks = 1000;
+
+    let block_metas = (0..num_blocks)
+        .map(|_| Arc::new(block_meta.clone()))
+        .collect::<Vec<_>>();
+
+    let statistics = Statistics {
+        row_count: 0,
+        block_count: 0,
+        perfect_block_count: 0,
+        uncompressed_byte_size: 0,
+        compressed_byte_size: 0,
+        index_size: 0,
+        col_stats: col_stats.clone(),
+    };
+
+    let segment_info = SegmentInfo::new(block_metas, statistics.clone());
+
+    let cache_number = 5000;
+    let sys = System::new_all();
+    let pid = get_current_pid().unwrap();
+    let process = sys.process(pid).unwrap();
+    let base_memory_usage = process.memory();
+    let scenario = format!(
+        "{} SegmentInfo, {} block per seg ",
+        cache_number, num_blocks
+    );
+
+    eprintln!(
+        "scenario {}, pid {}, base memory {}",
+        scenario, pid, base_memory_usage
+    );
+
+    let cache = InMemoryCacheBuilder::new_item_cache::<SegmentInfo>(cache_number as u64);
+    {
+        let mut c = cache.write();
+        for i in 0..cache_number {
+            let uuid = Uuid::new_v4();
+            let mut block_metas = segment_info
+                .blocks
+                .iter()
+                .map(|b: &Arc<BlockMeta>| Arc::new(b.as_ref().clone()))
+                .collect::<Vec<_>>();
+            block_metas.shrink_to_fit();
+            let mut statistics = statistics.clone();
+            statistics.col_stats.shrink_to_fit();
+            let segment_info = SegmentInfo::new(block_metas, statistics);
+            (*c).put(
+                // format!("{}", uuid.simple()),
+                format!("{}", i),
+                std::sync::Arc::new(segment_info),
+            );
+        }
+    }
+    show_memory_usage("SegmentInfoCache", base_memory_usage, cache_number);
 
     Ok(())
 }
