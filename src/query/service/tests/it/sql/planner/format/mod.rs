@@ -76,7 +76,8 @@ fn test_format() {
         Some(thread_name) => thread_name.to_string(),
     };
 
-    GlobalInstance::init_testing(&thread_name);
+    // TODO uncomment this
+    // GlobalInstance::init_testing(&thread_name);
 
     let mut metadata = Metadata::default();
     let tab1 = metadata.add_table(

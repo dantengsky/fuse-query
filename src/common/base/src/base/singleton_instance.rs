@@ -23,7 +23,7 @@ static SINGLETON_TYPE: OnceCell<SingletonType> = OnceCell::new();
 /// GLOBAL is a static type that holding all global data.
 static GLOBAL: OnceCell<Container![Send + Sync]> = OnceCell::new();
 
-#[cfg(debug_assertions)]
+//#[cfg(debug_assertions)]
 /// LOCAL is a static type that holding all global data only for local tests.
 static LOCAL: OnceCell<
     parking_lot::RwLock<std::collections::HashMap<String, Container![Send + Sync]>>,
@@ -36,7 +36,7 @@ static LOCAL: OnceCell<
 pub enum SingletonType {
     Production,
 
-    #[cfg(debug_assertions)]
+    //#[cfg(debug_assertions)]
     Testing,
 }
 
@@ -47,7 +47,7 @@ impl SingletonType {
                 let v: &T = GLOBAL.wait().get();
                 v.clone()
             }
-            #[cfg(debug_assertions)]
+            //    #[cfg(debug_assertions)]
             SingletonType::Testing => {
                 let thread_name = std::thread::current()
                     .name()
@@ -66,7 +66,7 @@ impl SingletonType {
     fn set<T: Send + Sync + 'static>(&self, value: T) -> bool {
         match self {
             SingletonType::Production => GLOBAL.wait().set(value),
-            #[cfg(debug_assertions)]
+            //    #[cfg(debug_assertions)]
             SingletonType::Testing => {
                 let thread_name = std::thread::current()
                     .name()
@@ -87,7 +87,7 @@ impl Debug for SingletonType {
         f.debug_struct("Singleton")
             .field("type", &match self {
                 Self::Production => "Production",
-                #[cfg(debug_assertions)]
+                //    #[cfg(debug_assertions)]
                 Self::Testing => "Testing",
             })
             .finish()
@@ -109,7 +109,7 @@ impl GlobalInstance {
     /// init testing global data registry.
     ///
     /// Should only be initiated once and only used in testing.
-    #[cfg(debug_assertions)]
+    //#[cfg(debug_assertions)]
     pub fn init_testing(thread_name: &str) {
         let _ = SINGLETON_TYPE.set(SingletonType::Testing);
         let _ = LOCAL.set(parking_lot::RwLock::default());
@@ -127,7 +127,7 @@ impl GlobalInstance {
     /// drop testing global data by thread name.
     ///
     /// Should only be used in testing code.
-    #[cfg(debug_assertions)]
+    //#[cfg(debug_assertions)]
     pub fn drop_testing(thread_name: &str) {
         // Make sure the write lock is released before calling drop.
         let _ = { LOCAL.wait().write().remove(thread_name) };
