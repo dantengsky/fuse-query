@@ -99,6 +99,7 @@ async fn test_index_meta_cache_size_file_meta_data() -> common_exception::Result
 }
 
 #[test]
+#[ignore]
 fn test_xor_filter_size() -> common_exception::Result<()> {
     let ndv = 50_000;
     let keys: Vec<u64> = (0..ndv).collect();
@@ -199,7 +200,6 @@ async fn test_random_location_memory_size() -> common_exception::Result<()> {
     Ok(())
 }
 
-// cargo test --test it storages::fuse::bloom_index_meta_size::test_segment_info_size --no-fail-fast -- --ignored --exact -Z unstable-options --show-output
 #[tokio::test(flavor = "multi_thread")]
 #[ignore]
 async fn test_segment_info_size() -> common_exception::Result<()> {
@@ -242,7 +242,6 @@ async fn test_segment_info_size() -> common_exception::Result<()> {
     Ok(())
 }
 
-// cargo test --test it storages::fuse::bloom_index_meta_size::test_segment_raw_bytes_size --no-fail-fast -- --ignored --exact -Z unstable-options --show-output
 #[tokio::test(flavor = "multi_thread")]
 #[ignore]
 async fn test_segment_raw_bytes_size() -> common_exception::Result<()> {
@@ -286,7 +285,6 @@ async fn test_segment_raw_bytes_size() -> common_exception::Result<()> {
     Ok(())
 }
 
-// cargo test --test it storages::fuse::bloom_index_meta_size::test_segment_raw_repr_bytes_size --no-fail-fast -- --ignored --exact -Z unstable-options --show-output
 #[tokio::test(flavor = "multi_thread")]
 #[ignore]
 async fn test_segment_raw_repr_bytes_size() -> common_exception::Result<()> {

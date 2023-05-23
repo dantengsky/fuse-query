@@ -13,8 +13,8 @@
 //  limitations under the License.
 
 #![allow(clippy::too_many_arguments)]
-mod bloom_index_meta_size;
 mod io;
+mod measure_index_cache_size;
 mod meta;
 mod operations;
 mod pruning;
