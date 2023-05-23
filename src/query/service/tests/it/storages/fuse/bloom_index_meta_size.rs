@@ -38,6 +38,10 @@ use databend_query::test_kits::block_writer::BlockWriter;
 use opendal::Operator;
 use storages_common_cache::InMemoryCacheBuilder;
 use storages_common_cache::InMemoryItemCacheHolder;
+use storages_common_index::filters::Filter;
+use storages_common_index::filters::FilterBuilder;
+use storages_common_index::filters::Xor8Builder;
+use storages_common_index::filters::Xor8Filter;
 use storages_common_index::BloomIndexMeta;
 use storages_common_table_meta::meta::BlockMeta;
 use storages_common_table_meta::meta::ColumnMeta;
@@ -94,12 +98,51 @@ async fn test_index_meta_cache_size_file_meta_data() -> common_exception::Result
     Ok(())
 }
 
+#[test]
+fn test_xor_filter_size() -> common_exception::Result<()> {
+    let ndv = 50_000;
+    let keys: Vec<u64> = (0..ndv).collect();
+
+    let mut builder = Xor8Builder::create();
+    builder.add_keys(&keys);
+    let filter = builder.build()?;
+    let val = filter.to_bytes()?;
+
+    let cache_number = 500_000;
+    let sys = System::new_all();
+    let pid = get_current_pid().unwrap();
+    let process = sys.process(pid).unwrap();
+    let base_memory_usage = process.memory();
+
+    let scenario = format!("XorFilter (ndv of column: {})", ndv);
+
+    eprintln!(
+        "scenario {}, pid {}, base memory {}",
+        scenario, pid, base_memory_usage
+    );
+
+    let cache = InMemoryCacheBuilder::new_item_cache::<Xor8Filter>(cache_number as u64);
+    {
+        let mut c = cache.write();
+        for _ in 0..cache_number {
+            let uuid = Uuid::new_v4();
+            let (f, _n) = Xor8Filter::from_bytes(&val)?;
+            (*c).put(format!("{}", uuid.simple()), Arc::new(f));
+        }
+    }
+    show_memory_usage(&scenario, base_memory_usage, cache_number);
+
+    drop(cache);
+
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread")]
 #[ignore]
 async fn test_index_meta_cache_size_bloom_meta() -> common_exception::Result<()> {
     let thrift_file_meta = setup().await?;
 
-    let cache_number = 300_000;
+    let cache_number = 3_000_000;
 
     let bloom_index_meta = BloomIndexMeta::try_from(thrift_file_meta)?;
 
@@ -130,7 +173,7 @@ async fn test_random_location_memory_size() -> common_exception::Result<()> {
     // generate random location of Type Location
     let location_gen = TableMetaLocationGenerator::with_prefix("/root".to_string());
 
-    let num_segments = 5_000_000;
+    let num_segments = 20_000_000;
     let sys = System::new_all();
     let pid = get_current_pid().unwrap();
     let process = sys.process(pid).unwrap();
