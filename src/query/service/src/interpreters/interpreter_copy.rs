@@ -230,6 +230,11 @@ impl CopyInterpreter {
         // is less than the number of cluster nodes, we should let it go
         // standalone execute way.
         if self.ctx.get_cluster().nodes.len() > read_source_plan.parts.len() {
+            info!(
+                "The number of splits [{}] is less than the number of cluster nodes [{}]",
+                self.ctx.get_cluster().nodes.len(),
+                read_source_plan.parts.len()
+            );
             return Ok(None);
         }
         Ok(Some(DistributedCopyIntoTable {
@@ -329,16 +334,22 @@ impl CopyInterpreter {
             (build_res, plan.required_source_schema.clone(), files)
         };
 
-        append_data_and_set_finish(
+        chain_append_data_pipeline(
             &mut build_res.main_pipeline,
             source_schema,
             PlanParam::CopyIntoTablePlanOption(plan.clone()),
-            ctx,
+            ctx.clone(),
             to_table,
-            files,
-            start,
+            files.clone(),
             true,
         )?;
+        hook_on_finish(
+            &mut build_res.main_pipeline,
+            ctx,
+            files,
+            plan.stage_table_info.stage_info.clone(),
+            start,
+        );
         Ok(build_res)
     }
 
@@ -448,6 +459,15 @@ impl Interpreter for CopyInterpreter {
                         overwrite_,
                     )?;
 
+                    let files_to_copy = distributed_plan.files.clone();
+                    hook_on_finish(
+                        &mut build_res.main_pipeline,
+                        self.ctx.clone(),
+                        files_to_copy,
+                        plan.stage_table_info.stage_info.clone(),
+                        Instant::now(),
+                    );
+
                     Ok(build_res)
                 } else {
                     self.build_copy_into_table_pipeline(plan).await
@@ -482,14 +502,13 @@ fn fill_const_columns(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn append_data_and_set_finish(
+pub fn chain_append_data_pipeline(
     main_pipeline: &mut Pipeline,
     source_schema: Arc<DataSchema>,
     plan_option: PlanParam,
     ctx: Arc<QueryContext>,
     to_table: Arc<dyn Table>,
     files: Vec<StageFileInfo>,
-    start: Instant,
     use_commit: bool,
 ) -> Result<()> {
     let plan_required_source_schema: DataSchemaRef;
@@ -548,12 +567,11 @@ pub fn append_data_and_set_finish(
 
     let stage_info_clone = plan_stage_table_info.stage_info;
     let write_mode = plan_write_mode;
-    let mut purge = true;
     match write_mode {
         CopyIntoTableMode::Insert { overwrite } => {
             if use_commit {
                 append2table(
-                    ctx.clone(),
+                    ctx,
                     to_table,
                     plan_required_values_schema,
                     main_pipeline,
@@ -563,7 +581,7 @@ pub fn append_data_and_set_finish(
                 )?;
             } else {
                 append2table_without_commit(
-                    ctx.clone(),
+                    ctx,
                     to_table,
                     plan_required_values_schema,
                     main_pipeline,
@@ -572,20 +590,16 @@ pub fn append_data_and_set_finish(
             }
         }
         CopyIntoTableMode::Copy => {
-            if !stage_info_clone.copy_options.purge {
-                purge = false;
-            }
-
             if use_commit {
                 let copied_files = CopyInterpreter::upsert_copied_files_request(
                     ctx.clone(),
                     to_table.clone(),
-                    stage_info_clone.clone(),
-                    files.clone(),
+                    stage_info_clone,
+                    files,
                     plan_force,
                 )?;
                 append2table(
-                    ctx.clone(),
+                    ctx,
                     to_table,
                     plan_required_values_schema,
                     main_pipeline,
@@ -595,7 +609,7 @@ pub fn append_data_and_set_finish(
                 )?;
             } else {
                 append2table_without_commit(
-                    ctx.clone(),
+                    ctx,
                     to_table,
                     plan_required_values_schema,
                     main_pipeline,
@@ -606,6 +620,21 @@ pub fn append_data_and_set_finish(
         CopyIntoTableMode::Replace => {}
     }
 
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn hook_on_finish(
+    main_pipeline: &mut Pipeline,
+    ctx: Arc<QueryContext>,
+    files: Vec<StageFileInfo>,
+    stage_info: StageInfo,
+    start: Instant,
+) {
+    let mut purge = true;
+    if !stage_info.copy_options.purge {
+        purge = false;
+    }
     main_pipeline.set_on_finished(move |may_error| {
         match may_error {
             None => {
@@ -623,7 +652,7 @@ pub fn append_data_and_set_finish(
                         for (file_name, e) in error_map {
                             error!(
                                 "copy(on_error={}): file {} encounter error {},",
-                                stage_info_clone.copy_options.on_error,
+                                stage_info.copy_options.on_error,
                                 file_name,
                                 e.to_string()
                             );
@@ -633,8 +662,7 @@ pub fn append_data_and_set_finish(
                     // 2. Try to purge copied files if purge option is true, if error will skip.
                     // If a file is already copied(status with AlreadyCopied) we will try to purge them.
                     if purge {
-                        CopyInterpreter::try_purge_files(ctx.clone(), &stage_info_clone, &files)
-                            .await;
+                        CopyInterpreter::try_purge_files(ctx.clone(), &stage_info, &files).await;
                     }
 
                     // Status.
@@ -654,6 +682,5 @@ pub fn append_data_and_set_finish(
             }
         }
         Ok(())
-    });
-    Ok(())
+    })
 }
