@@ -277,6 +277,7 @@ impl PipelineBuilder {
         let Deduplicate {
             input,
             on_conflicts,
+            most_significant_on_conflict_field_index,
             table_is_empty,
             table_info,
             catalog_info,
@@ -352,6 +353,7 @@ impl PipelineBuilder {
             self.ctx.as_ref(),
             on_conflicts.clone(),
             cluster_keys,
+            most_significant_on_conflict_field_index.clone(),
             table_schema.as_ref(),
             *table_is_empty,
             table_level_range_index.clone(),

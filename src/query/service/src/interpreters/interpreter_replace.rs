@@ -166,8 +166,6 @@ impl Interpreter for ReplaceInterpreter {
                             }
                             Err(e) => { info!("execute replace into finished successfully. table optimization job failed. {:?}", e)}
                         }
-
-                        return Ok(());
                     }
                     metrics_inc_replace_execution_time_ms(start.elapsed().as_millis() as u64);
                     Ok(())
@@ -247,9 +245,23 @@ impl ReplaceInterpreter {
                 keys: vec![],
             }));
         }
+
+        let most_significant_on_conflict_field_index = fuse_table
+            .choose_most_significant_bloom_filter_column(&on_conflicts)
+            .await?;
+
+        info!(
+            "most_significant_on_conflict_field_index: {:?}",
+            most_significant_on_conflict_field_index.map(|field_index| {
+                let field = &on_conflicts[field_index].table_field;
+                (field.name(), field.data_type())
+            })
+        );
+
         root = Box::new(PhysicalPlan::Deduplicate(Deduplicate {
             input: root,
             on_conflicts: on_conflicts.clone(),
+            most_significant_on_conflict_field_index,
             table_is_empty,
             table_info: table_info.clone(),
             catalog_info: catalog.info(),

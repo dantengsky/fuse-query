@@ -916,6 +916,7 @@ pub struct AsyncSourcerPlan {
 pub struct Deduplicate {
     pub input: Box<PhysicalPlan>,
     pub on_conflicts: Vec<OnConflictField>,
+    pub most_significant_on_conflict_field_index: Option<FieldIndex>,
     pub table_is_empty: bool,
     pub table_info: TableInfo,
     pub catalog_info: CatalogInfo,
