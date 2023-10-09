@@ -43,6 +43,9 @@ use ulid::serde::ulid_as_u128;
 
 use ulid::Ulid;
 
+
+// just a proof of concept, lots of things left there
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum SnapshotId {
     Plain(OldSnapshotId),
@@ -53,8 +56,8 @@ pub enum SnapshotId {
 }
 
 impl SnapshotId {
-    fn new() -> Self {
-        SnapshotId::Timestamped(Ulid::new())
+    fn with_timestamp(ts: DateTime<Utc>) -> Self {
+        SnapshotId::Timestamped(Ulid::from_datetime(ts.into()))
     }
 }
 
@@ -111,7 +114,6 @@ pub struct TableSnapshot {
 
 impl TableSnapshot {
     pub fn new(
-        snapshot_id: SnapshotId,
         prev_timestamp: &Option<DateTime<Utc>>,
         prev_snapshot_id: Option<(SnapshotId, FormatVersion)>,
         schema: TableSchema,
@@ -126,6 +128,8 @@ impl TableSnapshot {
 
         // trim timestamp to micro seconds
         let trimmed_timestamp = trim_timestamp_to_micro_second(adjusted_timestamp);
+        let snapshot_id = SnapshotId::with_timestamp(trimmed_timestamp);
+
         let timestamp = Some(trimmed_timestamp);
 
         Self {
@@ -142,11 +146,9 @@ impl TableSnapshot {
     }
 
     pub fn from_previous(previous: &TableSnapshot) -> Self {
-        let id = SnapshotId::new();
         let clone = previous.clone();
         // the timestamp of the new snapshot will be adjusted by the `new` method
         Self::new(
-            id,
             &clone.timestamp,
             Some((clone.snapshot_id, clone.format_version)),
             clone.schema,
