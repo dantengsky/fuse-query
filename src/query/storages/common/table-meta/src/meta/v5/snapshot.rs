@@ -16,7 +16,6 @@ use std::io::Cursor;
 
 use chrono::DateTime;
 use chrono::Utc;
-use common_base::base::uuid::Uuid;
 use common_exception::Result;
 use common_expression::TableSchema;
 use common_io::prelude::BinaryRead;
@@ -37,8 +36,33 @@ use crate::meta::ClusterKey;
 use crate::meta::FormatVersion;
 use crate::meta::Location;
 use crate::meta::MetaEncoding;
-use crate::meta::SnapshotId;
+use crate::meta::SnapshotId as OldSnapshotId;
 use crate::meta::Versioned;
+
+use ulid::serde::ulid_as_u128;
+
+use ulid::Ulid;
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub enum SnapshotId {
+    Plain(OldSnapshotId),
+    Timestamped(
+    #[serde(with = "ulid_as_u128")]
+        Ulid
+    ),
+}
+
+impl SnapshotId {
+    fn new() -> Self {
+        SnapshotId::Timestamped(Ulid::new())
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct PreviousSnapshotId {
+    snapshot_id: SnapshotId,
+    version: FormatVersion,
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct TableSnapshot {
@@ -66,7 +90,7 @@ pub struct TableSnapshot {
     pub timestamp: Option<DateTime<Utc>>,
 
     /// previous snapshot
-    pub prev_snapshot_id: Option<(SnapshotId, FormatVersion)>,
+    pub prev_snapshot_id: Option<PreviousSnapshotId>,
 
     /// For each snapshot, we keep a schema for it (in case of schema evolution)
     pub schema: TableSchema,
@@ -108,7 +132,7 @@ impl TableSnapshot {
             format_version: TableSnapshot::VERSION,
             snapshot_id,
             timestamp,
-            prev_snapshot_id,
+            prev_snapshot_id : prev_snapshot_id.map(|(id, ver)| PreviousSnapshotId { snapshot_id: id, version: ver }),
             schema,
             summary,
             segments,
@@ -117,21 +141,8 @@ impl TableSnapshot {
         }
     }
 
-    pub fn new_empty_snapshot(schema: TableSchema) -> Self {
-        Self::new(
-            Uuid::new_v4(),
-            &None,
-            None,
-            schema,
-            Statistics::default(),
-            vec![],
-            None,
-            None,
-        )
-    }
-
     pub fn from_previous(previous: &TableSnapshot) -> Self {
-        let id = Uuid::new_v4();
+        let id = SnapshotId::new();
         let clone = previous.clone();
         // the timestamp of the new snapshot will be adjusted by the `new` method
         Self::new(
@@ -214,9 +225,9 @@ impl From<v2::TableSnapshot> for TableSnapshot {
             // NOTE: it is important to let the format_version return from here
             // carries the format_version of snapshot being converted.
             format_version: s.format_version,
-            snapshot_id: s.snapshot_id,
+            snapshot_id: s.snapshot_id.into(),
             timestamp: s.timestamp,
-            prev_snapshot_id: s.prev_snapshot_id,
+            prev_snapshot_id: s.prev_snapshot_id.map(|v| v.into()),
             schema: s.schema,
             summary: Statistics::from_v2(s.summary),
             segments: s.segments,
@@ -235,9 +246,9 @@ where T: Into<v3::TableSnapshot>
             // NOTE: it is important to let the format_version return from here
             // carries the format_version of snapshot being converted.
             format_version: s.format_version,
-            snapshot_id: s.snapshot_id,
+            snapshot_id: s.snapshot_id.into(),
             timestamp: s.timestamp,
-            prev_snapshot_id: s.prev_snapshot_id,
+            prev_snapshot_id: s.prev_snapshot_id.map(|v| v.into()),
             schema: s.schema.into(),
             summary: s.summary.into(),
             segments: s.segments,
@@ -253,9 +264,9 @@ impl From<v4::TableSnapshot> for TableSnapshot {
             // NOTE: it is important to let the format_version return from here
             // carries the format_version of snapshot being converted.
             format_version: s.format_version,
-            snapshot_id: s.snapshot_id,
+            snapshot_id: s.snapshot_id.into(),
             timestamp: s.timestamp,
-            prev_snapshot_id: s.prev_snapshot_id,
+            prev_snapshot_id: s.prev_snapshot_id.map(|v| v.into()),
             schema: s.schema,
             summary: Statistics::from_v2(s.summary),
             segments: s.segments,
@@ -272,7 +283,7 @@ pub struct TableSnapshotLite {
     pub format_version: FormatVersion,
     pub snapshot_id: SnapshotId,
     pub timestamp: Option<DateTime<Utc>>,
-    pub prev_snapshot_id: Option<(SnapshotId, FormatVersion)>,
+    pub prev_snapshot_id: Option<PreviousSnapshotId>,
     pub row_count: u64,
     pub block_count: u64,
     pub index_size: u64,
@@ -285,9 +296,9 @@ impl From<(&TableSnapshot, FormatVersion)> for TableSnapshotLite {
     fn from((value, ver): (&TableSnapshot, FormatVersion)) -> Self {
         TableSnapshotLite {
             format_version: ver,
-            snapshot_id: value.snapshot_id,
+            snapshot_id: value.snapshot_id.clone(),
             timestamp: value.timestamp,
-            prev_snapshot_id: value.prev_snapshot_id,
+            prev_snapshot_id: value.prev_snapshot_id.clone(),
             row_count: value.summary.row_count,
             block_count: value.summary.block_count,
             index_size: value.summary.index_size,
@@ -297,3 +308,28 @@ impl From<(&TableSnapshot, FormatVersion)> for TableSnapshotLite {
         }
     }
 }
+
+
+
+mod converters {
+
+use super::*;
+
+impl From<OldSnapshotId> for SnapshotId {
+    fn from(value: OldSnapshotId) -> Self {
+        SnapshotId::Plain(value)
+    }
+}
+
+
+impl From<(OldSnapshotId, FormatVersion)> for PreviousSnapshotId {
+    fn from((id, version): (OldSnapshotId, FormatVersion)) -> Self {
+        PreviousSnapshotId {
+            snapshot_id: id.into(),
+            version
+        }
+    }
+}
+
+}
+

@@ -27,6 +27,7 @@ serde = { workspace = true }
 serde_json = "1.0.89"
 snap = { version = "1.1.0", optional = true }
 typetag = "0.2.3"
+ulid = { vesion = "1.1.0", features = ["serde"] }
 zstd = "0.12.3"
 
 [dev-dependencies]
