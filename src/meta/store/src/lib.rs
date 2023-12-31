@@ -20,7 +20,6 @@ use std::task::Poll;
 use databend_common_grpc::RpcClientConf;
 use databend_common_meta_client::ClientHandle;
 use databend_common_meta_client::EtcdRsClientWrapper;
-use databend_common_meta_client::MetaGrpcClient;
 use databend_common_meta_embedded::MetaEmbedded;
 use databend_common_meta_kvapi::kvapi;
 use databend_common_meta_kvapi::kvapi::GetKVReply;
@@ -33,12 +32,9 @@ use databend_common_meta_types::protobuf::WatchResponse;
 use databend_common_meta_types::MetaError;
 use databend_common_meta_types::TxnReply;
 use databend_common_meta_types::TxnRequest;
-use etcd_rs::Client;
-use etcd_rs::Endpoint;
 use log::as_debug;
 use log::info;
 use tokio_stream::Stream;
-use tokio_stream::StreamExt;
 
 pub type WatchStream =
     Pin<Box<dyn Stream<Item = Result<WatchResponse, MetaError>> + Send + 'static>>;

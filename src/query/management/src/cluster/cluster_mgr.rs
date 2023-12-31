@@ -29,7 +29,6 @@ use databend_common_meta_types::MetaSpec;
 use databend_common_meta_types::NodeInfo;
 use databend_common_meta_types::Operation;
 use databend_common_meta_types::SeqV;
-use log::warn;
 
 use crate::cluster::ClusterApi;
 

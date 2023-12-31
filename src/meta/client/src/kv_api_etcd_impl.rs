@@ -43,7 +43,6 @@ use etcd_rs::TxnOp;
 use etcd_rs::TxnOpResponse;
 use etcd_rs::TxnResponse;
 use futures::StreamExt;
-use futures::TryStreamExt;
 use log::info;
 
 pub struct EtcdRsClientWrapper(EtcdRsClient);
@@ -60,11 +59,12 @@ impl kvapi::KVApi for EtcdRsClientWrapper {
 
     #[minitrace::trace]
     async fn upsert_kv(&self, act: UpsertKVReq) -> Result<UpsertKVReply, Self::Error> {
+        // TODO ttl not covered yet
         let UpsertKVReq {
             key,
             seq,
             value,
-            value_meta,
+            value_meta: _,
         } = act;
 
         use databend_common_meta_types::MatchSeq;
