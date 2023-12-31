@@ -19,6 +19,7 @@ use std::task::Poll;
 
 use databend_common_grpc::RpcClientConf;
 use databend_common_meta_client::ClientHandle;
+use databend_common_meta_client::EtcdRsClientWrapper;
 use databend_common_meta_client::MetaGrpcClient;
 use databend_common_meta_embedded::MetaEmbedded;
 use databend_common_meta_kvapi::kvapi;
@@ -32,9 +33,12 @@ use databend_common_meta_types::protobuf::WatchResponse;
 use databend_common_meta_types::MetaError;
 use databend_common_meta_types::TxnReply;
 use databend_common_meta_types::TxnRequest;
+use etcd_rs::Client;
+use etcd_rs::Endpoint;
 use log::as_debug;
 use log::info;
 use tokio_stream::Stream;
+use tokio_stream::StreamExt;
 
 pub type WatchStream =
     Pin<Box<dyn Stream<Item = Result<WatchResponse, MetaError>> + Send + 'static>>;
@@ -49,6 +53,7 @@ pub struct MetaStoreProvider {
 pub enum MetaStore {
     L(Arc<MetaEmbedded>),
     R(Arc<ClientHandle>),
+    E(Arc<EtcdRsClientWrapper>),
 }
 
 impl MetaStore {
@@ -59,7 +64,7 @@ impl MetaStore {
     pub fn is_local(&self) -> bool {
         match self {
             MetaStore::L(_) => true,
-            MetaStore::R(_) => false,
+            _ => false,
         }
     }
 
@@ -70,6 +75,9 @@ impl MetaStore {
                 let client_info = grpc_client.get_client_info().await?;
                 Ok(Some(client_info.client_addr))
             }
+            _ => {
+                todo!()
+            }
         }
     }
 
@@ -79,6 +87,9 @@ impl MetaStore {
             MetaStore::R(grpc_client) => {
                 let streaming = grpc_client.request(request).await?;
                 Ok(Box::pin(WatchResponseStream::create(streaming)))
+            }
+            MetaStore::E(_) => {
+                todo!()
             }
         }
     }
@@ -92,6 +103,7 @@ impl kvapi::KVApi for MetaStore {
         match self {
             MetaStore::L(x) => x.upsert_kv(act).await,
             MetaStore::R(x) => x.upsert_kv(act).await,
+            MetaStore::E(x) => x.upsert_kv(act).await,
         }
     }
 
@@ -99,6 +111,7 @@ impl kvapi::KVApi for MetaStore {
         match self {
             MetaStore::L(x) => x.get_kv(key).await,
             MetaStore::R(x) => x.get_kv(key).await,
+            MetaStore::E(x) => x.get_kv(key).await,
         }
     }
 
@@ -106,6 +119,7 @@ impl kvapi::KVApi for MetaStore {
         match self {
             MetaStore::L(x) => x.mget_kv(key).await,
             MetaStore::R(x) => x.mget_kv(key).await,
+            MetaStore::E(x) => x.mget_kv(key).await,
         }
     }
 
@@ -113,6 +127,7 @@ impl kvapi::KVApi for MetaStore {
         match self {
             MetaStore::L(x) => x.list_kv(prefix).await,
             MetaStore::R(x) => x.list_kv(prefix).await,
+            MetaStore::E(x) => x.list_kv(prefix).await,
         }
     }
 
@@ -120,6 +135,7 @@ impl kvapi::KVApi for MetaStore {
         match self {
             MetaStore::L(x) => x.transaction(txn).await,
             MetaStore::R(x) => x.transaction(txn).await,
+            MetaStore::E(x) => x.transaction(txn).await,
         }
     }
 }
@@ -141,8 +157,13 @@ impl MetaStoreProvider {
             Ok(MetaStore::L(meta_store))
         } else {
             info!(conf = as_debug!(&self.rpc_conf); "use remote meta");
-            let client = MetaGrpcClient::try_new(&self.rpc_conf)?;
-            Ok(MetaStore::R(client))
+            // let client = MetaGrpcClient::try_new(&self.rpc_conf)?;
+            //            let eps: Vec<_> = self.rpc_conf.endpoints.iter().map(|e| e.into()).collect();
+            let eps = vec!["http://127.0.0.1:2379".into()];
+            let client = etcd_rs::Client::connect(etcd_rs::ClientConfig::new(eps))
+                .await
+                .unwrap();
+            Ok(MetaStore::E(Arc::new(EtcdRsClientWrapper::new(client))))
         }
     }
 }

@@ -27,6 +27,8 @@ databend-common-metrics = { path = "../../common/metrics" }
 databend-common-tracing = { path = "../../common/tracing" }
 
 derive_more = { workspace = true }
+etcd-client = "0.12.3"
+etcd-rs = "1.0.1"
 futures = { workspace = true }
 log = { workspace = true }
 logcall = { workspace = true }

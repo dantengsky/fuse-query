@@ -19,6 +19,7 @@ pub(crate) mod established_client;
 mod grpc_action;
 mod grpc_client;
 mod grpc_metrics;
+mod kv_api_etcd_impl;
 mod kv_api_impl;
 mod message;
 
@@ -32,6 +33,7 @@ pub use grpc_action::RequestFor;
 pub use grpc_client::ClientHandle;
 pub use grpc_client::MetaChannelManager;
 pub use grpc_client::MetaGrpcClient;
+pub use kv_api_etcd_impl::EtcdRsClientWrapper;
 pub use message::ClientWorkerRequest;
 pub use message::Streamed;
 use semver::BuildMetadata;

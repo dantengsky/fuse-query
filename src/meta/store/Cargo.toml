@@ -24,5 +24,6 @@ databend-common-meta-types = { path = "../types" }
 
 # Crates.io dependencies
 async-trait = { workspace = true }
+etcd-rs = "1.0.1"
 log = { workspace = true }
 tokio-stream = { workspace = true }

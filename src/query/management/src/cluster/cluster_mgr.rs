@@ -147,7 +147,14 @@ impl ClusterApi for ClusterMgr {
             self.metastore
                 .upsert_kv(UpsertKVReq::new(&node_key, seq, Operation::AsIs, meta));
 
-        match upsert_meta.await? {
+        let r = upsert_meta.await;
+        if r.is_err() {
+            eprintln!("update meta AS_IS failed");
+        } else {
+            eprintln!("update meta AS_IS OK ");
+        }
+        // match upsert_meta.await? {
+        match r? {
             UpsertKVReply {
                 ident: None,
                 prev: Some(_),
@@ -160,6 +167,7 @@ impl ClusterApi for ClusterMgr {
     #[async_backtrace::framed]
     #[minitrace::trace]
     async fn get_local_addr(&self) -> Result<Option<String>> {
-        Ok(self.metastore.get_local_addr().await?)
+        Ok(None)
+        // Ok(self.metastore.get_local_addr().await?)
     }
 }
