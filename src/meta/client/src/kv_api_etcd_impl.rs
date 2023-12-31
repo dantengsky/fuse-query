@@ -44,6 +44,7 @@ use etcd_rs::TxnOpResponse;
 use etcd_rs::TxnResponse;
 use futures::StreamExt;
 use futures::TryStreamExt;
+use log::info;
 
 pub struct EtcdRsClientWrapper(EtcdRsClient);
 
@@ -97,39 +98,14 @@ impl kvapi::KVApi for EtcdRsClientWrapper {
                 }
             }
             Operation::Update(value) => {
-                // let mut txn = etcd_rs::TxnRequest::new();
-
-                // txn.and_then(TxnOp::Put(PutRequest::new(key.clone(), value.clone())));
-                // txn.and_then(TxnOp::Range(RangeRequest::new(KeyRange::key(k.key))));
-                // let resp =
-                //    self.0.txn(txn).await.map_err(|e| {
-                //        MetaError::from(InvalidReply::new("transaction failed", &e))
-                //    })?;
-                // let resp = TxnRespWrapper(resp).try_into();
-                // let resp: TxnReply = resp?;
-                ////let put_resp = resp.responses[0];
-                // let range_resp = resp.responses[1];
-                // match put_resp {
-                //    Response::Put(TxnPutResponse { prev_value, .. }) => {
-                //        let prev = prev_value.map(|x| x.into());
-                //        let result = range_resp.value;
-                //        Ok(UpsertKVReply::new(prev, result))
-                //    }
-                //}
-
+                // use etcd tx to retrieve the version after update
                 let resp = self
                     .0
                     .put(PutRequest::new(key.clone(), value.clone()).prev_kv(true))
                     .await
                     .map_err(|e| MetaError::from(InvalidReply::new("put failed", &e)))?;
 
-                eprintln!("key {}, resp {:?}", key, resp);
                 let kv = resp.prev_kv;
-                // let prev = SeqV {
-                //    seq: kv.mod_revision as u64,
-                //    meta: None,
-                //    data: kv.value,
-                // };
                 let result = SeqV {
                     seq: kv.version as u64 + 1,
                     meta: None,
@@ -138,20 +114,16 @@ impl kvapi::KVApi for EtcdRsClientWrapper {
                 Ok(UpsertKVReply::new(None, Some(result)))
             }
             Operation::AsIs => {
-                // TODO incorrect
+                // NOTE: Assumes the key has been created before updated AsIs
                 let mut put_req = PutRequest::new(key, "".to_string());
                 put_req = put_req.ignore_value();
-                // if let Some(ttl) = value_meta {
-                //    let lease = self.0.lease().grant(LeaseGrantRequest::new(ttl)).await?;
-                //    let lease_id = lease.id();
-                //};
-
                 let resp = self
                     .0
                     .put(put_req)
                     .await
                     .map_err(|e| MetaError::from(InvalidReply::new("put failed", &e)))?;
                 let kv = resp.prev_kv;
+                // seems the seq returns is not used (at least currently)
                 let prev = SeqV {
                     seq: kv.mod_revision as u64,
                     meta: None,
@@ -211,7 +183,6 @@ impl kvapi::KVApi for EtcdRsClientWrapper {
 
     #[minitrace::trace]
     async fn transaction(&self, txn: TxnRequest) -> Result<TxnReply, Self::Error> {
-        eprintln!(">>> TxnRequest: {:?}", txn);
         let etc_req: etcd_rs::TxnRequest = TxnWrapper(txn).try_into()?;
         let resp = self
             .0
@@ -219,12 +190,9 @@ impl kvapi::KVApi for EtcdRsClientWrapper {
             .await
             .map_err(|e| MetaError::from(InvalidReply::new("transaction failed", &e)))?;
 
-        eprintln!("<<< TxnResp: {:?}", resp);
-
         let resp = TxnRespWrapper(resp).try_into();
         let resp: TxnReply = resp?;
 
-        eprintln!("*** return resp");
         Ok(resp)
     }
 }
@@ -328,8 +296,8 @@ impl TryFrom<TxnRespWrapper> for TxnReply {
     fn try_from(value: TxnRespWrapper) -> Result<Self, Self::Error> {
         let resp = value.0;
         let mut repl = TxnReply::default();
+        info!("TxnResponse success? {}", resp.succeeded);
         repl.success = resp.succeeded;
-        eprintln!(" success ? {}", resp.succeeded);
         repl.error = "".to_owned();
         repl.responses = resp
             .responses
@@ -343,7 +311,6 @@ impl TryFrom<TxnRespWrapper> for TxnReply {
 pub struct TxnOpRespW(TxnOpResponse);
 impl From<TxnOpRespW> for databend_common_meta_types::TxnOpResponse {
     fn from(value: TxnOpRespW) -> Self {
-        eprintln!("TxnOpRespW: {:?}", value.0);
         let v = value.0;
         let mut txn_resp = databend_common_meta_types::TxnOpResponse::default();
         match v {
@@ -391,6 +358,7 @@ impl From<TxnOpRespW> for databend_common_meta_types::TxnOpResponse {
                     txn_resp.response = Some(r);
                 } else if resp.prev_kvs.len() > 1 {
                     let r = Response::DeleteByPrefix(TxnDeleteByPrefixResponse {
+                        // unfortunately, "prefix" is lost
                         prefix: "".to_string(),
                         count: resp.prev_kvs.len() as u32,
                     });
@@ -406,65 +374,6 @@ impl From<TxnOpRespW> for databend_common_meta_types::TxnOpResponse {
     }
 }
 
-// pub struct EtcdClient(Client);
-//#[tonic::async_trait]
-// impl kvapi::KVApi for EtcdClient {
-//    type Error = MetaError;
-//
-//    #[minitrace::trace]
-//    async fn upsert_kv(&self, act: UpsertKVReq) -> Result<UpsertKVReply, Self::Error> {
-//        // let mut kv_client = self.0.kv_client();
-//        // match act.value {
-//        //     Operation::Update(value) => {
-//        //         let res = kv_client.put(act.key, value, None).await?;
-//        //         let prev = res.prev_key().unwrap();
-//
-//        //         let upsert_kv_reply = UpsertKVReply::new(prev, result);
-//
-//        //         Ok(UpsertKVReply::new(res.prev_key().map(|x| x.value)), None)
-//        //     }
-//        //     _ => todo!(),
-//        // }
-//        // let res = self.0.put(act.key, act.value, none).await?;
-//        todo!()
-//    }
-//    async fn get_kv(&self, key: &str) -> Result<GetKVReply, Self::Error> {
-//        let mut kv_client = self.0.kv_client();
-//        let resp = kv_client.get(key, None).await.map_err(|e| {
-//            MetaError::from(InvalidReply::new(
-//                format!("get_kv failed, key: {}", key),
-//                &e,
-//            ))
-//        })?;
-//        let r = if let Some(kv) = resp.kvs().first() {
-//            let seq_val = SeqV {
-//                seq: kv.mod_revision() as u64,
-//                meta: None,
-//                data: kv.value().to_vec(),
-//            };
-//            Some(seq_val)
-//        } else {
-//            None
-//        };
-//
-//        Ok(r)
-//    }
-//
-//    #[minitrace::trace]
-//    async fn mget_kv(&self, keys: &[String]) -> Result<MGetKVReply, Self::Error> {
-//        todo!()
-//    }
-//
-//    #[minitrace::trace]
-//    async fn list_kv(&self, prefix: &str) -> Result<KVStream<Self::Error>, Self::Error> {
-//        todo!()
-//    }
-//
-//    #[minitrace::trace]
-//    async fn transaction(&self, txn: TxnRequest) -> Result<TxnReply, Self::Error> {
-//        todo!()
-//    }
-//}
 fn convert_err(e: etcd_rs::Error) -> MetaError {
     MetaError::from(InvalidReply::new(format!("err"), &e))
 }

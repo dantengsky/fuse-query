@@ -28,6 +28,7 @@ async-backtrace = { workspace = true }
 async-trait = { workspace = true }
 minitrace = { workspace = true }
 serde_json = { workspace = true }
+log = "0.4.19"
 
 [dev-dependencies]
 databend-common-expression = { path = "../../query/expression" }

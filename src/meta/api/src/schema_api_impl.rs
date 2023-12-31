@@ -1624,10 +1624,8 @@ impl<KV: kvapi::KVApi<Error = MetaError> + ?Sized> SchemaApi for KV {
             retry += 1;
             // Get db by name to ensure presence
 
-            eprintln!("get db");
             let (_, db_id, db_meta_seq, db_meta) =
                 get_db_or_err(self, &tenant_dbname, "create_table").await?;
-            eprintln!("got db");
 
             // cannot operate on shared database
             if let Some(from_share) = db_meta.from_share {
@@ -1715,7 +1713,6 @@ impl<KV: kvapi::KVApi<Error = MetaError> + ?Sized> SchemaApi for KV {
             // (table_id) -> table_name
 
             let table_id = fetch_id(self, IdGenerator::table_id()).await?;
-            eprintln!("table_id {}", table_id);
 
             let tbid = TableId { table_id };
 
@@ -1762,9 +1759,7 @@ impl<KV: kvapi::KVApi<Error = MetaError> + ?Sized> SchemaApi for KV {
                     else_then: vec![],
                 };
 
-                eprintln!("send txn");
                 let (succ, _responses) = send_txn(self, txn_req).await?;
-                eprintln!("sent txn");
 
                 debug!(
                     name = as_debug!(tenant_dbname_tbname),

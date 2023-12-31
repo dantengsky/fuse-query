@@ -29,6 +29,7 @@ use databend_common_meta_types::MetaSpec;
 use databend_common_meta_types::NodeInfo;
 use databend_common_meta_types::Operation;
 use databend_common_meta_types::SeqV;
+use log::warn;
 
 use crate::cluster::ClusterApi;
 
@@ -147,14 +148,11 @@ impl ClusterApi for ClusterMgr {
             self.metastore
                 .upsert_kv(UpsertKVReq::new(&node_key, seq, Operation::AsIs, meta));
 
-        let r = upsert_meta.await;
-        if r.is_err() {
-            eprintln!("update meta AS_IS failed");
-        } else {
-            eprintln!("update meta AS_IS OK ");
-        }
-        // match upsert_meta.await? {
-        match r? {
+        match upsert_meta.await.map_err(|e| {
+            let msg = format!("update heart beat failed: {:?}", e);
+            let e: ErrorCode = e.into();
+            e.add_message(msg)
+        })? {
             UpsertKVReply {
                 ident: None,
                 prev: Some(_),
@@ -167,6 +165,7 @@ impl ClusterApi for ClusterMgr {
     #[async_backtrace::framed]
     #[minitrace::trace]
     async fn get_local_addr(&self) -> Result<Option<String>> {
+        // TODO get local addr from metastore
         Ok(None)
         // Ok(self.metastore.get_local_addr().await?)
     }
