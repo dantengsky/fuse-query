@@ -15,6 +15,7 @@
 #![allow(clippy::uninlined_format_args)]
 #![feature(lazy_cell)]
 
+pub use client_conf::MetaBackend;
 pub use client_conf::RpcClientConf;
 pub use client_conf::RpcClientTlsConfig;
 pub use dns_resolver::ConnectionFactory;

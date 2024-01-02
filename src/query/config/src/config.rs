@@ -2275,6 +2275,10 @@ pub struct MetaConfig {
     pub endpoints: Vec<String>,
 
     /// MetaStore backend user name
+    #[clap(long = "meta-backend", value_name = "VALUE", default_value = "default")]
+    pub backend: String,
+
+    /// MetaStore backend user name
     #[clap(long = "meta-username", value_name = "VALUE", default_value = "root")]
     pub username: String,
 
@@ -2365,6 +2369,7 @@ impl TryInto<InnerMetaConfig> for MetaConfig {
         Ok(InnerMetaConfig {
             embedded_dir: self.embedded_dir,
             endpoints: self.endpoints,
+            backend: self.backend,
             username: self.username,
             password: self.password,
             client_timeout_in_second: self.client_timeout_in_second,
@@ -2381,6 +2386,7 @@ impl From<InnerMetaConfig> for MetaConfig {
         Self {
             embedded_dir: inner.embedded_dir,
             endpoints: inner.endpoints,
+            backend: inner.backend,
             username: inner.username,
             password: inner.password,
             client_timeout_in_second: inner.client_timeout_in_second,

@@ -24,6 +24,7 @@ use databend_common_base::base::mask_string;
 use databend_common_base::base::GlobalUniqName;
 use databend_common_exception::ErrorCode;
 use databend_common_exception::Result;
+use databend_common_grpc::MetaBackend;
 use databend_common_grpc::RpcClientConf;
 use databend_common_grpc::RpcClientTlsConfig;
 use databend_common_meta_app::tenant::TenantQuota;
@@ -319,6 +320,7 @@ pub struct MetaConfig {
     pub embedded_dir: String,
     /// MetaStore endpoint address
     pub endpoints: Vec<String>,
+    pub backend: String,
     /// MetaStore backend user name
     pub username: String,
     /// MetaStore backend user password
@@ -339,6 +341,7 @@ impl Default for MetaConfig {
         Self {
             embedded_dir: "".to_string(),
             endpoints: vec![],
+            backend: "default".to_string(),
             username: "root".to_string(),
             password: "".to_string(),
             client_timeout_in_second: 10,
@@ -403,6 +406,10 @@ impl MetaConfig {
                 None
             },
             unhealthy_endpoint_evict_time: Duration::from_secs(self.unhealth_endpoint_evict_time),
+            backend: match self.backend.as_str() {
+                "default" => MetaBackend::Default,
+                _ => MetaBackend::Etcd,
+            },
         }
     }
 }
@@ -410,6 +417,7 @@ impl MetaConfig {
 impl Debug for MetaConfig {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         f.debug_struct("MetaConfig")
+            .field("backend", &self.backend)
             .field("endpoints", &self.endpoints)
             .field("username", &self.username)
             .field("password", &mask_string(&self.password, 3))

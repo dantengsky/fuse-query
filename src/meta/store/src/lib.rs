@@ -17,9 +17,11 @@ use std::sync::Arc;
 use std::task::Context;
 use std::task::Poll;
 
+use databend_common_grpc::MetaBackend;
 use databend_common_grpc::RpcClientConf;
 use databend_common_meta_client::ClientHandle;
 use databend_common_meta_client::EtcdRsClientWrapper;
+use databend_common_meta_client::MetaGrpcClient;
 use databend_common_meta_embedded::MetaEmbedded;
 use databend_common_meta_kvapi::kvapi;
 use databend_common_meta_kvapi::kvapi::GetKVReply;
@@ -152,14 +154,22 @@ impl MetaStoreProvider {
             let meta_store = MetaEmbedded::get_meta().await?;
             Ok(MetaStore::L(meta_store))
         } else {
-            info!(conf = as_debug!(&self.rpc_conf); "use remote meta");
-            // let client = MetaGrpcClient::try_new(&self.rpc_conf)?;
-            //            let eps: Vec<_> = self.rpc_conf.endpoints.iter().map(|e| e.into()).collect();
-            let eps = vec!["http://127.0.0.1:2379".into()];
-            let client = etcd_rs::Client::connect(etcd_rs::ClientConfig::new(eps))
-                .await
-                .unwrap();
-            Ok(MetaStore::E(Arc::new(EtcdRsClientWrapper::new(client))))
+            match &self.rpc_conf.backend {
+                MetaBackend::Default => {
+                    info!(conf = as_debug!(&self.rpc_conf); "use remote meta");
+                    let client = MetaGrpcClient::try_new(&self.rpc_conf)?;
+                    Ok(MetaStore::R(client))
+                }
+                MetaBackend::Etcd => {
+                    info!(conf = as_debug!(&self.rpc_conf); "use remote meta(etcd)");
+                    // let eps = vec!["http://127.0.0.1:2379".into()];
+                    let eps: Vec<_> = self.rpc_conf.endpoints.iter().map(|x| x.into()).collect();
+                    let client = etcd_rs::Client::connect(etcd_rs::ClientConfig::new(eps))
+                        .await
+                        .unwrap();
+                    Ok(MetaStore::E(Arc::new(EtcdRsClientWrapper::new(client))))
+                }
+            }
         }
     }
 }
