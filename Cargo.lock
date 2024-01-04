@@ -2319,6 +2319,7 @@ dependencies = [
  "databend-query",
  "databend-sharing-endpoint",
  "databend-storages-common-table-meta",
+ "etcd-rs",
  "futures",
  "limits-rs",
  "log",

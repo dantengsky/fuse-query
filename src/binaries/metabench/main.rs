@@ -36,11 +36,12 @@ use databend_common_meta_app::schema::TableCopiedFileInfo;
 use databend_common_meta_app::schema::TableCopiedFileNameIdent;
 use databend_common_meta_app::schema::TableNameIdent;
 use databend_common_meta_app::schema::UpsertTableOptionReq;
-use databend_common_meta_client::ClientHandle;
+use databend_common_meta_client::EtcdRsClientWrapper;
 use databend_common_meta_client::MetaGrpcClient;
 use databend_common_meta_kvapi::kvapi::KVApi;
 use databend_common_meta_kvapi::kvapi::UpsertKVReq;
 use databend_common_meta_types::MatchSeq;
+use databend_common_meta_types::MetaError;
 use databend_common_meta_types::Operation;
 use databend_common_meta_types::TxnRequest;
 use databend_common_tracing::init_logging;
@@ -77,6 +78,9 @@ struct Config {
     /// "table_copy_file:{"file_cnt":100}": upsert table with 100 copy files. After ":" is a json config string
     #[clap(long, default_value = "upsert_kv")]
     pub rpc: String,
+
+    #[clap(long, default_value = "default")]
+    pub backend: String,
 }
 
 #[tokio::main]
@@ -107,6 +111,7 @@ async fn main() {
         return;
     }
 
+
     let start = Instant::now();
     let mut client_num = 0;
     let mut handles = Vec::new();
@@ -120,36 +125,42 @@ async fn main() {
         let cmd = cmd_and_param[0].to_string();
         let param = cmd_and_param.get(1).unwrap_or(&"").to_string();
 
-        let handle = tokio::spawn(async move {
-            let client = MetaGrpcClient::try_create(
-                vec![addr.to_string()],
-                "root",
-                "xxx",
-                None,
-                None,
-                Duration::from_secs(10),
-                None,
-            );
+        let handle = tokio::spawn({
+            let backend = config.backend.clone();
+            async move {
+                //            let client = MetaGrpcClient::try_create(
+                //                vec![addr.to_string()],
+                //                "root",
+                //                "xxx",
+                //                None,
+                //                None,
+                //                Duration::from_secs(10),
+                //                None,
+                //            );
+                //
+                //            let client = match client {
+                //                Ok(client) => client,
+                //                Err(e) => {
+                //                    eprintln!("Failed to create client: {}", e);
+                //                    return;
+                //                }
+                //            };
+                let client = create_client(&addr, &backend).await;
 
-            let client = match client {
-                Ok(client) => client,
-                Err(e) => {
-                    eprintln!("Failed to create client: {}", e);
-                    return;
-                }
-            };
-
-            for i in 0..config.number {
-                if cmd == "upsert_kv" {
-                    benchmark_upsert(&client, prefix, client_num, i).await;
-                } else if cmd == "table" {
-                    benchmark_table(&client, prefix, client_num, i).await;
-                } else if cmd == "get_table" {
-                    benchmark_get_table(&client, prefix, client_num, i).await;
-                } else if cmd == "table_copy_file" {
-                    benchmark_table_copy_file(&client, prefix, client_num, i, &param).await;
-                } else {
-                    unreachable!("Invalid config.rpc: {}", rpc);
+                for i in 0..config.number {
+                    if cmd == "upsert_kv" {
+                        benchmark_upsert(&client, prefix, client_num, i).await;
+                    } else if cmd == "get" {
+                        benchmark_get(&client, prefix, client_num, i).await;
+                    } else if cmd == "table" {
+                        benchmark_table(&client, prefix, client_num, i).await;
+                    } else if cmd == "get_table" {
+                        benchmark_get_table(&client, prefix, client_num, i).await;
+                    } else if cmd == "table_copy_file" {
+                        benchmark_table_copy_file(&client, prefix, client_num, i, &param).await;
+                    } else {
+                        unreachable!("Invalid config.rpc: {}", rpc);
+                    }
                 }
             }
         });
@@ -167,8 +178,34 @@ async fn main() {
         end.duration_since(start).as_millis()
     );
 }
+pub type KVClient = Arc<dyn KVApi<Error = MetaError>>;
+async fn create_client(addr: &str, backend: &str) -> Arc<dyn KVApi<Error = MetaError>> {
+    let eps = addr.split(",").map(|v| v.to_owned()).collect();
+    if backend == "default" {
+        let client = MetaGrpcClient::try_create(
+            //vec![addr.to_string()],
+            eps,
+            "root",
+            "xxx",
+            None,
+            None,
+            Duration::from_secs(10),
+            None,
+        )
+        .unwrap();
+        client
+    } else {
+        //let client = etcd_rs::Client::connect(etcd_rs::ClientConfig::new(vec![addr.into()]))
+        let eps = eps.into_iter().map(|v| v.into()).collect::<Vec<_>>();
+        let client = etcd_rs::Client::connect(etcd_rs::ClientConfig::new(eps))
+            .await
+            .unwrap();
+        let client = EtcdRsClientWrapper::new(client);
+        Arc::new(client)
+    }
+}
 
-async fn benchmark_upsert(client: &Arc<ClientHandle>, prefix: u64, client_num: u64, i: u64) {
+async fn benchmark_upsert(client: &KVClient, prefix: u64, client_num: u64, i: u64) {
     let node_key = || format!("{}-{}-{}", prefix, client_num, i);
 
     let seq = MatchSeq::Any;
@@ -181,7 +218,15 @@ async fn benchmark_upsert(client: &Arc<ClientHandle>, prefix: u64, client_num: u
     print_res(i, "upsert_kv", &res);
 }
 
-async fn benchmark_table(client: &Arc<ClientHandle>, prefix: u64, client_num: u64, i: u64) {
+async fn benchmark_get(client: &KVClient, prefix: u64, client_num: u64, i: u64) {
+    let node_key = format!("{}-{}-{}", prefix, client_num, i);
+
+    let res = client.get_kv(&node_key).await;
+
+    print_res(i, "get_kv", &res);
+}
+
+async fn benchmark_table(client: &KVClient, prefix: u64, client_num: u64, i: u64) {
     let tenant = || format!("tenant-{}-{}", prefix, client_num);
     let db_name = || format!("db-{}-{}", prefix, client_num);
     let table_name = || format!("table-{}-{}", prefix, client_num);
@@ -260,7 +305,7 @@ async fn benchmark_table(client: &Arc<ClientHandle>, prefix: u64, client_num: u6
     print_res(i, "create_table again", &res);
 }
 
-async fn benchmark_get_table(client: &Arc<ClientHandle>, prefix: u64, client_num: u64, i: u64) {
+async fn benchmark_get_table(client: &KVClient, prefix: u64, client_num: u64, i: u64) {
     let tenant = || format!("tenant-{}-{}", prefix, client_num);
     let db_name = || format!("db-{}-{}", prefix, client_num);
     let table_name = || format!("table-{}-{}", prefix, client_num);
@@ -285,7 +330,7 @@ impl Default for TableCopyFileConfig {
 
 /// Benchmark upsert table with copy file.
 async fn benchmark_table_copy_file(
-    client: &Arc<ClientHandle>,
+    client: &KVClient,
     prefix: u64,
     client_num: u64,
     i: u64,
@@ -323,7 +368,8 @@ async fn benchmark_table_copy_file(
 
     let res = client.transaction(txn).await;
 
-    print_res(i, "table_copy_file", &res);
+    println!("copied files #{i}, success? {}", res.is_ok());
+    //print_res(i, "table_copy_file", &res);
     res.unwrap();
 }
 

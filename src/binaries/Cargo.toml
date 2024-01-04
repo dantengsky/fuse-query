@@ -62,6 +62,7 @@ async-backtrace = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }
 futures = { workspace = true }
+etcd-rs = "1.0.1"
 limits-rs = "0.2.0"
 log = { workspace = true }
 minitrace = { workspace = true }
