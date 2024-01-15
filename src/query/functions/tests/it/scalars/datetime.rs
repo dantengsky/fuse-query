@@ -26,7 +26,6 @@ fn test_datetime() {
     let file = &mut mint.new_goldenfile("datetime.txt").unwrap();
 
     test_to_timestamp(file);
-    test_to_datetime(file);
     test_to_date(file);
     test_date_add_subtract(file);
     test_timestamp_add_subtract(file);
@@ -50,31 +49,6 @@ fn test_to_timestamp(file: &mut impl Write) {
     run_ast(file, "to_timestamp(315360000000000)", &[]);
     run_ast(file, "to_timestamp(253402300800000000)", &[]);
     run_ast(file, "to_timestamp(a)", &[(
-        "a",
-        Int64Type::from_data(vec![
-            -315360000000000i64,
-            315360000000,
-            -100,
-            0,
-            100,
-            315360000000,
-            315360000000000,
-        ]),
-    )]);
-}
-
-fn test_to_datetime(file: &mut impl Write) {
-    run_ast(file, "to_datetime(-30610224000000001)", &[]);
-    run_ast(file, "to_datetime(-315360000000000)", &[]);
-    run_ast(file, "to_datetime(-315360000000)", &[]);
-    run_ast(file, "to_datetime(-100)", &[]);
-    run_ast(file, "to_datetime(-0)", &[]);
-    run_ast(file, "to_datetime(0)", &[]);
-    run_ast(file, "to_datetime(100)", &[]);
-    run_ast(file, "to_datetime(315360000000)", &[]);
-    run_ast(file, "to_datetime(315360000000000)", &[]);
-    run_ast(file, "to_datetime(253402300800000000)", &[]);
-    run_ast(file, "to_datetime(a)", &[(
         "a",
         Int64Type::from_data(vec![
             -315360000000000i64,
@@ -475,6 +449,7 @@ fn test_to_number(file: &mut impl Write) {
     run_ast(file, "to_day_of_year(to_date(18875))", &[]);
     run_ast(file, "to_day_of_month(to_date(18875))", &[]);
     run_ast(file, "to_day_of_week(to_date(18875))", &[]);
+    run_ast(file, "to_week_of_year(to_date(18875))", &[]);
     run_ast(file, "to_yyyymm(a)", &[(
         "a",
         DateType::from_data(vec![-100, 0, 100]),
@@ -511,6 +486,10 @@ fn test_to_number(file: &mut impl Write) {
         "a",
         DateType::from_data(vec![-100, 0, 100]),
     )]);
+    run_ast(file, "to_week_of_year(a)", &[(
+        "a",
+        DateType::from_data(vec![-100, 0, 100]),
+    )]);
 
     // timestamp
     run_ast(file, "to_yyyymm(to_timestamp(1630812366))", &[]);
@@ -522,6 +501,7 @@ fn test_to_number(file: &mut impl Write) {
     run_ast(file, "to_day_of_year(to_timestamp(1630812366))", &[]);
     run_ast(file, "to_day_of_month(to_timestamp(1630812366))", &[]);
     run_ast(file, "to_day_of_week(to_timestamp(1630812366))", &[]);
+    run_ast(file, "to_week_of_year(to_timestamp(1630812366))", &[]);
     run_ast(file, "to_hour(to_timestamp(1630812366))", &[]);
     run_ast(file, "to_minute(to_timestamp(1630812366))", &[]);
     run_ast(file, "to_second(to_timestamp(1630812366))", &[]);
@@ -558,6 +538,10 @@ fn test_to_number(file: &mut impl Write) {
         TimestampType::from_data(vec![-100, 0, 100]),
     )]);
     run_ast(file, "to_day_of_week(a)", &[(
+        "a",
+        TimestampType::from_data(vec![-100, 0, 100]),
+    )]);
+    run_ast(file, "to_week_of_year(a)", &[(
         "a",
         TimestampType::from_data(vec![-100, 0, 100]),
     )]);

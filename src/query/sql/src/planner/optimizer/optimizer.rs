@@ -22,6 +22,7 @@ use common_exception::Result;
 use log::info;
 
 use super::cost::CostContext;
+use super::distributed::MergeSourceOptimizer;
 use super::format::display_memo;
 use super::Memo;
 use crate::optimizer::cascades::CascadesOptimizer;
@@ -34,7 +35,8 @@ use crate::optimizer::RuleID;
 use crate::optimizer::SExpr;
 use crate::optimizer::DEFAULT_REWRITE_RULES;
 use crate::optimizer::RESIDUAL_RULES;
-use crate::plans::CopyPlan;
+use crate::plans::CopyIntoLocationPlan;
+use crate::plans::MergeInto;
 use crate::plans::Plan;
 use crate::IndexType;
 use crate::MetadataRef;
@@ -55,6 +57,7 @@ impl OptimizerContext {
     }
 }
 
+#[minitrace::trace]
 pub fn optimize(
     ctx: Arc<dyn TableContext>,
     opt_ctx: Arc<OptimizerContext>,
@@ -107,34 +110,62 @@ pub fn optimize(
         Plan::ExplainAnalyze { plan } => Ok(Plan::ExplainAnalyze {
             plan: Box::new(optimize(ctx, opt_ctx, *plan)?),
         }),
-        Plan::Copy(v) => {
-            Ok(Plan::Copy(Box::new(match *v {
-                CopyPlan::IntoStage {
-                    stage,
-                    path,
-                    validation_mode,
-                    from,
-                } => {
-                    CopyPlan::IntoStage {
-                        stage,
-                        path,
-                        validation_mode,
-                        // Make sure the subquery has been optimized.
-                        from: Box::new(optimize(ctx, opt_ctx, *from)?),
-                    }
-                }
-                CopyPlan::NoFileToCopy => *v,
+        Plan::CopyIntoLocation(CopyIntoLocationPlan { stage, path, from }) => {
+            Ok(Plan::CopyIntoLocation(CopyIntoLocationPlan {
+                stage,
+                path,
+                from: Box::new(optimize(ctx, opt_ctx, *from)?),
+            }))
+        }
+        Plan::CopyIntoTable(mut plan) if !plan.no_file_to_copy => {
+            plan.enable_distributed = opt_ctx.config.enable_distributed_optimization
+                && ctx.get_settings().get_enable_distributed_copy()?;
+            info!(
+                "after optimization enable_distributed_copy? : {}",
+                plan.enable_distributed
+            );
+            Ok(Plan::CopyIntoTable(plan))
+        }
+        Plan::MergeInto(plan) => {
+            // optimize source :fix issue #13733
+            // reason: if there is subquery,windowfunc exprs etc. see
+            // src/planner/semantic/lowering.rs `as_raw_expr()`, we will
+            // get dummy index. So we need to use optimizer to solve this.
+            let right_source = optimize_query(
+                ctx.clone(),
+                opt_ctx.clone(),
+                plan.meta_data.clone(),
+                plan.input.child(1)?.clone(),
+            )?;
+            // replace right source
+            let mut join_sexpr = plan.input.clone();
+            join_sexpr = Box::new(join_sexpr.replace_children(vec![
+                Arc::new(join_sexpr.child(0)?.clone()),
+                Arc::new(right_source),
+            ]));
 
-                CopyPlan::IntoTable(mut into_table) => {
-                    into_table.enable_distributed = opt_ctx.config.enable_distributed_optimization
-                        && ctx.get_settings().get_enable_distributed_copy()?;
-                    info!(
-                        "after optimization enable_distributed_copy? : {}",
-                        into_table.enable_distributed
-                    );
-                    CopyPlan::IntoTable(into_table)
-                }
-            })))
+            // try to optimize distributed join
+            if opt_ctx.config.enable_distributed_optimization
+                && ctx.get_settings().get_enable_distributed_merge_into()?
+            {
+                // Todo(JackTan25): We should use optimizer to make a decision to use
+                // left join and right join.
+                // input is a Join_SExpr
+                let merge_into_join_sexpr = optimize_distributed_query(ctx.clone(), &join_sexpr)?;
+
+                let merge_source_optimizer = MergeSourceOptimizer::create();
+                let optimized_distributed_merge_into_join_sexpr =
+                    merge_source_optimizer.optimize(&merge_into_join_sexpr)?;
+                Ok(Plan::MergeInto(Box::new(MergeInto {
+                    input: Box::new(optimized_distributed_merge_into_join_sexpr),
+                    ..*plan
+                })))
+            } else {
+                Ok(Plan::MergeInto(Box::new(MergeInto {
+                    input: join_sexpr,
+                    ..*plan
+                })))
+            }
         }
         // Passthrough statements.
         _ => Ok(plan),

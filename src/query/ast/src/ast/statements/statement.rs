@@ -21,10 +21,12 @@ use common_meta_app::principal::UserIdentity;
 
 use super::merge_into::MergeIntoStmt;
 use super::*;
+use crate::ast::statements::connection::CreateConnectionStmt;
+use crate::ast::statements::pipe::CreatePipeStmt;
+use crate::ast::statements::task::CreateTaskStmt;
 use crate::ast::Expr;
 use crate::ast::Identifier;
 use crate::ast::Query;
-use crate::ast::TableReference;
 
 // SQL statement
 #[allow(clippy::large_enum_variant)]
@@ -39,22 +41,32 @@ pub enum Statement {
         query: Box<Statement>,
     },
 
-    Copy(CopyStmt),
+    CopyIntoTable(CopyIntoTableStmt),
+    CopyIntoLocation(CopyIntoLocationStmt),
+
     Call(CallStmt),
 
     ShowSettings {
-        like: Option<String>,
+        show_options: Option<ShowOptions>,
     },
-    ShowProcessList,
-    ShowMetrics,
-    ShowEngines,
+    ShowProcessList {
+        show_options: Option<ShowOptions>,
+    },
+    ShowMetrics {
+        show_options: Option<ShowOptions>,
+    },
+    ShowEngines {
+        show_options: Option<ShowOptions>,
+    },
     ShowFunctions {
-        limit: Option<ShowLimit>,
+        show_options: Option<ShowOptions>,
     },
     ShowTableFunctions {
-        limit: Option<ShowLimit>,
+        show_options: Option<ShowOptions>,
     },
-    ShowIndexes,
+    ShowIndexes {
+        show_options: Option<ShowOptions>,
+    },
 
     KillStmt {
         kill_target: KillTarget,
@@ -74,14 +86,14 @@ pub enum Statement {
         role_name: String,
     },
 
+    SetSecondaryRoles {
+        option: SecondaryRolesOption,
+    },
+
     Insert(InsertStmt),
     Replace(ReplaceStmt),
     MergeInto(MergeIntoStmt),
-    Delete {
-        hints: Option<Hint>,
-        table_reference: TableReference,
-        selection: Option<Expr>,
-    },
+    Delete(DeleteStmt),
 
     Update(UpdateStmt),
 
@@ -188,6 +200,11 @@ pub enum Statement {
         location: String,
         pattern: Option<String>,
     },
+    // Connection
+    CreateConnection(CreateConnectionStmt),
+    DropConnection(DropConnectionStmt),
+    DescribeConnection(DescribeConnectionStmt),
+    ShowConnections(ShowConnectionsStmt),
 
     // UserDefinedFileFormat
     CreateFileFormat {
@@ -227,6 +244,20 @@ pub enum Statement {
     DropNetworkPolicy(DropNetworkPolicyStmt),
     DescNetworkPolicy(DescNetworkPolicyStmt),
     ShowNetworkPolicies,
+
+    // tasks
+    CreateTask(CreateTaskStmt),
+    AlterTask(AlterTaskStmt),
+    ExecuteTask(ExecuteTaskStmt),
+    DescribeTask(DescribeTaskStmt),
+    DropTask(DropTaskStmt),
+    ShowTasks(ShowTasksStmt),
+
+    // pipes
+    CreatePipe(CreatePipeStmt),
+    DescribePipe(DescribePipeStmt),
+    DropPipe(DropPipeStmt),
+    AlterPipe(AlterPipeStmt),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -238,17 +269,23 @@ pub struct StatementMsg {
 impl Statement {
     pub fn to_mask_sql(&self) -> String {
         match self {
-            Statement::Copy(copy) => {
+            Statement::CopyIntoTable(copy) => {
                 let mut copy_clone = copy.clone();
 
-                if let CopyUnit::Location(FileLocation::Uri(location)) = &mut copy_clone.src {
+                if let CopyIntoTableSource::Location(FileLocation::Uri(location)) =
+                    &mut copy_clone.src
+                {
                     location.connection = location.connection.mask()
                 }
+                format!("{}", Statement::CopyIntoTable(copy_clone))
+            }
+            Statement::CopyIntoLocation(copy) => {
+                let mut copy_clone = copy.clone();
 
-                if let CopyUnit::Location(FileLocation::Uri(location)) = &mut copy_clone.dst {
+                if let FileLocation::Uri(location) = &mut copy_clone.dst {
                     location.connection = location.connection.mask()
                 }
-                format!("{}", Statement::Copy(copy_clone))
+                format!("{}", Statement::CopyIntoLocation(copy_clone))
             }
             Statement::CreateStage(stage) => {
                 let mut stage_clone = stage.clone();
@@ -256,6 +293,11 @@ impl Statement {
                     location.connection = location.connection.mask()
                 }
                 format!("{}", Statement::CreateStage(stage_clone))
+            }
+            Statement::AttachTable(attach) => {
+                let mut attach_clone = attach.clone();
+                attach_clone.uri_location.connection = attach_clone.uri_location.connection.mask();
+                format!("{}", Statement::AttachTable(attach_clone))
             }
             _ => format!("{}", self),
         }
@@ -274,6 +316,7 @@ impl Display for Statement {
                     ExplainKind::Pipeline => write!(f, " PIPELINE")?,
                     ExplainKind::Fragments => write!(f, " FRAGMENTS")?,
                     ExplainKind::Raw => write!(f, " RAW")?,
+                    ExplainKind::Optimized => write!(f, " Optimized")?,
                     ExplainKind::Plan => (),
                     ExplainKind::AnalyzePlan => write!(f, " ANALYZE")?,
                     ExplainKind::JOIN => write!(f, " JOIN")?,
@@ -288,41 +331,50 @@ impl Display for Statement {
             Statement::Insert(insert) => write!(f, "{insert}")?,
             Statement::Replace(replace) => write!(f, "{replace}")?,
             Statement::MergeInto(merge_into) => write!(f, "{merge_into}")?,
-            Statement::Delete {
-                table_reference,
-                selection,
-                hints,
-            } => {
-                write!(f, "DELETE FROM {table_reference} ")?;
-                if let Some(hints) = hints {
-                    write!(f, "{} ", hints)?;
-                }
-                if let Some(conditions) = selection {
-                    write!(f, "WHERE {conditions} ")?;
-                }
-            }
+            Statement::Delete(delete) => write!(f, "{delete}")?,
             Statement::Update(update) => write!(f, "{update}")?,
-            Statement::Copy(stmt) => write!(f, "{stmt}")?,
-            Statement::ShowSettings { like } => {
+            Statement::CopyIntoTable(stmt) => write!(f, "{stmt}")?,
+            Statement::CopyIntoLocation(stmt) => write!(f, "{stmt}")?,
+            Statement::ShowSettings { show_options } => {
                 write!(f, "SHOW SETTINGS")?;
-                if like.is_some() {
-                    write!(f, " LIKE '{}'", like.as_ref().unwrap())?;
+                if let Some(show_options) = show_options {
+                    write!(f, " {show_options}")?;
                 }
             }
-            Statement::ShowProcessList => write!(f, "SHOW PROCESSLIST")?,
-            Statement::ShowMetrics => write!(f, "SHOW METRICS")?,
-            Statement::ShowEngines => write!(f, "SHOW ENGINES")?,
-            Statement::ShowIndexes => write!(f, "SHOW INDEXES")?,
-            Statement::ShowFunctions { limit } => {
+            Statement::ShowProcessList { show_options } => {
+                write!(f, "SHOW PROCESSLIST")?;
+                if let Some(show_options) = show_options {
+                    write!(f, " {show_options}")?;
+                }
+            }
+            Statement::ShowMetrics { show_options } => {
+                write!(f, "SHOW METRICS")?;
+                if let Some(show_options) = show_options {
+                    write!(f, " {show_options}")?;
+                }
+            }
+            Statement::ShowEngines { show_options } => {
+                write!(f, "SHOW ENGINES")?;
+                if let Some(show_options) = show_options {
+                    write!(f, " {show_options}")?;
+                }
+            }
+            Statement::ShowIndexes { show_options } => {
+                write!(f, "SHOW INDEXES")?;
+                if let Some(show_options) = show_options {
+                    write!(f, " {show_options}")?;
+                }
+            }
+            Statement::ShowFunctions { show_options } => {
                 write!(f, "SHOW FUNCTIONS")?;
-                if let Some(limit) = limit {
-                    write!(f, " {limit}")?;
+                if let Some(show_options) = show_options {
+                    write!(f, " {show_options}")?;
                 }
             }
-            Statement::ShowTableFunctions { limit } => {
+            Statement::ShowTableFunctions { show_options } => {
                 write!(f, "SHOW TABLE_FUNCTIONS")?;
-                if let Some(limit) = limit {
-                    write!(f, " {limit}")?;
+                if let Some(show_options) = show_options {
+                    write!(f, " {show_options}")?;
                 }
             }
             Statement::KillStmt {
@@ -357,6 +409,13 @@ impl Display for Statement {
                     write!(f, "DEFAULT")?;
                 } else {
                     write!(f, "{role_name}")?;
+                }
+            }
+            Statement::SetSecondaryRoles { option } => {
+                write!(f, "SET SECONDARY ROLES ")?;
+                match option {
+                    SecondaryRolesOption::None => write!(f, "NONE")?,
+                    SecondaryRolesOption::All => write!(f, "ALL")?,
                 }
             }
             Statement::ShowCatalogs(stmt) => write!(f, "{stmt}")?,
@@ -517,6 +576,20 @@ impl Display for Statement {
             Statement::DropNetworkPolicy(stmt) => write!(f, "{stmt}")?,
             Statement::DescNetworkPolicy(stmt) => write!(f, "{stmt}")?,
             Statement::ShowNetworkPolicies => write!(f, "SHOW NETWORK POLICIES")?,
+            Statement::CreateTask(stmt) => write!(f, "{stmt}")?,
+            Statement::AlterTask(stmt) => write!(f, "{stmt}")?,
+            Statement::ExecuteTask(stmt) => write!(f, "{stmt}")?,
+            Statement::DropTask(stmt) => write!(f, "{stmt}")?,
+            Statement::ShowTasks(stmt) => write!(f, "{stmt}")?,
+            Statement::DescribeTask(stmt) => write!(f, "{stmt}")?,
+            Statement::CreatePipe(stmt) => write!(f, "{stmt}")?,
+            Statement::DescribePipe(stmt) => write!(f, "{stmt}")?,
+            Statement::DropPipe(stmt) => write!(f, "{stmt}")?,
+            Statement::AlterPipe(stmt) => write!(f, "{stmt}")?,
+            Statement::CreateConnection(stmt) => write!(f, "{stmt}")?,
+            Statement::DropConnection(stmt) => write!(f, "{stmt}")?,
+            Statement::DescribeConnection(stmt) => write!(f, "{stmt}")?,
+            Statement::ShowConnections(stmt) => write!(f, "{stmt}")?,
         }
         Ok(())
     }

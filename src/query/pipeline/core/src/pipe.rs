@@ -16,9 +16,9 @@ use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
-use crate::processors::port::InputPort;
-use crate::processors::port::OutputPort;
-use crate::processors::processor::ProcessorPtr;
+use crate::processors::InputPort;
+use crate::processors::OutputPort;
+use crate::processors::ProcessorPtr;
 
 #[derive(Clone)]
 pub struct PipeItem {
@@ -143,5 +143,11 @@ impl TransformPipeBuilder {
             items.push(item)
         }
         self.items = items
+    }
+
+    pub fn add_items(&mut self, items: Vec<PipeItem>) {
+        for item in items {
+            self.items.push(item)
+        }
     }
 }

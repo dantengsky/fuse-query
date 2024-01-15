@@ -21,15 +21,13 @@ use common_expression::BlockMetaInfoPtr;
 use common_expression::Column;
 use common_expression::DataBlock;
 
-use crate::pipelines::processors::transforms::group_by::ArenaHolder;
+use crate::pipelines::processors::transforms::aggregator::HashTableCell;
 use crate::pipelines::processors::transforms::group_by::HashMethodBounds;
 use crate::pipelines::processors::transforms::group_by::PartitionedHashMethod;
-use crate::pipelines::processors::transforms::HashTableCell;
 
 pub struct HashTablePayload<T: HashMethodBounds, V: Send + Sync + 'static> {
     pub bucket: isize,
     pub cell: HashTableCell<T, V>,
-    pub arena_holder: ArenaHolder,
 }
 
 pub struct SerializedPayload {
@@ -66,7 +64,6 @@ impl<Method: HashMethodBounds, V: Send + Sync + 'static> AggregateMeta<Method, V
         Box::new(AggregateMeta::<Method, V>::HashTable(HashTablePayload {
             cell,
             bucket,
-            arena_holder: ArenaHolder::create(None),
         }))
     }
 
@@ -83,7 +80,6 @@ impl<Method: HashMethodBounds, V: Send + Sync + 'static> AggregateMeta<Method, V
         Box::new(AggregateMeta::<Method, V>::Spilling(HashTablePayload {
             cell,
             bucket: 0,
-            arena_holder: ArenaHolder::create(None),
         }))
     }
 

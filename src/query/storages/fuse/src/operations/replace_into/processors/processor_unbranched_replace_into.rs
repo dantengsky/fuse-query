@@ -14,6 +14,7 @@
 
 use std::any::Any;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -24,18 +25,18 @@ use common_expression::DataBlock;
 use common_expression::FieldIndex;
 use common_expression::RemoteExpr;
 use common_expression::TableSchema;
-use common_pipeline_core::pipe::Pipe;
-use common_pipeline_core::pipe::PipeItem;
-use common_pipeline_core::processors::port::InputPort;
-use common_pipeline_core::processors::port::OutputPort;
-use common_pipeline_core::processors::processor::Event;
-use common_pipeline_core::processors::processor::ProcessorPtr;
+use common_metrics::storage::*;
+use common_pipeline_core::processors::Event;
+use common_pipeline_core::processors::InputPort;
+use common_pipeline_core::processors::OutputPort;
 use common_pipeline_core::processors::Processor;
-use common_sql::executor::OnConflictField;
+use common_pipeline_core::processors::ProcessorPtr;
+use common_pipeline_core::Pipe;
+use common_pipeline_core::PipeItem;
+use common_sql::executor::physical_plans::OnConflictField;
 use storages_common_table_meta::meta::ColumnStatistics;
 
-use crate::metrics::metrics_inc_replace_process_input_block_time_ms;
-use crate::operations::replace_into::mutator::mutator_replace_into::ReplaceIntoMutator;
+use crate::operations::replace_into::mutator::ReplaceIntoMutator;
 
 pub struct UnbranchedReplaceIntoProcessor {
     replace_into_mutator: ReplaceIntoMutator,
@@ -48,9 +49,12 @@ pub struct UnbranchedReplaceIntoProcessor {
     output_data_merge_into_action: Option<DataBlock>,
 
     target_table_empty: bool,
+    delete_column: Option<usize>,
 }
 
 impl UnbranchedReplaceIntoProcessor {
+    #[allow(dead_code)]
+    #[allow(clippy::too_many_arguments)]
     pub fn create(
         ctx: &dyn TableContext,
         on_conflict_fields: Vec<OnConflictField>,
@@ -59,6 +63,7 @@ impl UnbranchedReplaceIntoProcessor {
         table_schema: &TableSchema,
         target_table_empty: bool,
         table_range_idx: HashMap<ColumnId, ColumnStatistics>,
+        delete_column: Option<usize>,
     ) -> Result<Self> {
         let replace_into_mutator = ReplaceIntoMutator::try_create(
             ctx,
@@ -78,14 +83,17 @@ impl UnbranchedReplaceIntoProcessor {
             input_data: None,
             output_data_merge_into_action: None,
             target_table_empty,
+            delete_column,
         })
     }
 
+    #[allow(dead_code)]
     pub fn into_pipe(self) -> Pipe {
         let pipe_item = self.into_pipe_item();
         Pipe::create(1, 1, vec![pipe_item])
     }
 
+    #[allow(dead_code)]
     pub fn into_pipe_item(self) -> PipeItem {
         let input = self.input_port.clone();
         let output_port_merge_into_action = self.output_port_merge_into_action.clone();
@@ -146,8 +154,15 @@ impl Processor for UnbranchedReplaceIntoProcessor {
     }
 
     fn process(&mut self) -> Result<()> {
-        if let Some(data_block) = self.input_data.take() {
+        if let Some(mut data_block) = self.input_data.take() {
             let start = Instant::now();
+            if let Some(delete_column) = self.delete_column {
+                let column_num = data_block.num_columns();
+                let projections = (0..column_num)
+                    .filter(|i| *i != delete_column)
+                    .collect::<HashSet<_>>();
+                data_block = data_block.project(&projections);
+            }
             let merge_into_action = self.replace_into_mutator.process_input_block(&data_block)?;
             metrics_inc_replace_process_input_block_time_ms(start.elapsed().as_millis() as u64);
             if !self.target_table_empty {

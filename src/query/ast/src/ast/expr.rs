@@ -40,6 +40,7 @@ pub enum IntervalKind {
     Minute,
     Second,
     Doy,
+    Week,
     Dow,
 }
 
@@ -118,6 +119,13 @@ pub enum Expr {
         left: Box<Expr>,
         right: Box<Expr>,
     },
+    /// JSON operation
+    JsonOp {
+        span: Span,
+        op: JsonOperator,
+        left: Box<Expr>,
+        right: Box<Expr>,
+    },
     /// Unary operation
     UnaryOp {
         span: Span,
@@ -139,6 +147,12 @@ pub enum Expr {
     },
     /// EXTRACT(IntervalKind FROM <expr>)
     Extract {
+        span: Span,
+        kind: IntervalKind,
+        expr: Box<Expr>,
+    },
+    /// DATE_PART(IntervalKind, <expr>)
+    DatePart {
         span: Span,
         kind: IntervalKind,
         expr: Box<Expr>,
@@ -426,7 +440,6 @@ pub enum BinaryOperator {
     BitwiseXor,
     BitwiseShiftLeft,
     BitwiseShiftRight,
-
     L2Distance,
 }
 
@@ -459,6 +472,44 @@ impl BinaryOperator {
                 let name = format!("{:?}", self);
                 name.to_lowercase()
             }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum JsonOperator {
+    /// -> keeps the value as json
+    Arrow,
+    /// ->> keeps the value as text or int.
+    LongArrow,
+    /// #> Extracts JSON sub-object at the specified path
+    HashArrow,
+    /// #>> Extracts JSON sub-object at the specified path as text
+    HashLongArrow,
+    /// ? Checks whether text key exist as top-level key or array element.
+    Question,
+    /// ?| Checks whether any of the text keys exist as top-level keys or array elements.
+    QuestionOr,
+    /// ?& Checks whether all of the text keys exist as top-level keys or array elements.
+    QuestionAnd,
+    /// @> Checks whether left json contains the right json
+    AtArrow,
+    /// <@ Checks whether right json contains the left json
+    ArrowAt,
+}
+
+impl JsonOperator {
+    pub fn to_func_name(&self) -> String {
+        match self {
+            JsonOperator::Arrow => "get".to_string(),
+            JsonOperator::LongArrow => "get_string".to_string(),
+            JsonOperator::HashArrow => "get_by_keypath".to_string(),
+            JsonOperator::HashLongArrow => "get_by_keypath_string".to_string(),
+            JsonOperator::Question => "json_exists_key".to_string(),
+            JsonOperator::QuestionOr => "json_exists_any_keys".to_string(),
+            JsonOperator::QuestionAnd => "json_exists_all_keys".to_string(),
+            JsonOperator::AtArrow => "json_contains_in_left".to_string(),
+            JsonOperator::ArrowAt => "json_contains_in_right".to_string(),
         }
     }
 }
@@ -499,10 +550,12 @@ impl Expr {
             | Expr::InSubquery { span, .. }
             | Expr::Between { span, .. }
             | Expr::BinaryOp { span, .. }
+            | Expr::JsonOp { span, .. }
             | Expr::UnaryOp { span, .. }
             | Expr::Cast { span, .. }
             | Expr::TryCast { span, .. }
             | Expr::Extract { span, .. }
+            | Expr::DatePart { span, .. }
             | Expr::Position { span, .. }
             | Expr::Substring { span, .. }
             | Expr::Trim { span, .. }
@@ -522,6 +575,21 @@ impl Expr {
             | Expr::DateTrunc { span, .. } => *span,
         }
     }
+
+    pub fn all_function_like_syntaxes() -> &'static [&'static str] {
+        &[
+            "CAST",
+            "TRY_CAST",
+            "EXTRACT",
+            "DATE_PART",
+            "POSITION",
+            "SUBSTRING",
+            "TRIM",
+            "DATE_ADD",
+            "DATE_SUB",
+            "DATE_TRUNC",
+        ]
+    }
 }
 
 impl Display for IntervalKind {
@@ -536,6 +604,7 @@ impl Display for IntervalKind {
             IntervalKind::Second => "SECOND",
             IntervalKind::Doy => "DOY",
             IntervalKind::Dow => "DOW",
+            IntervalKind::Week => "WEEK",
         })
     }
 }
@@ -676,6 +745,40 @@ impl Display for BinaryOperator {
             }
             BinaryOperator::L2Distance => {
                 write!(f, "<->")
+            }
+        }
+    }
+}
+
+impl Display for JsonOperator {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            JsonOperator::Arrow => {
+                write!(f, "->")
+            }
+            JsonOperator::LongArrow => {
+                write!(f, "->>")
+            }
+            JsonOperator::HashArrow => {
+                write!(f, "#>")
+            }
+            JsonOperator::HashLongArrow => {
+                write!(f, "#>>")
+            }
+            JsonOperator::Question => {
+                write!(f, "?")
+            }
+            JsonOperator::QuestionOr => {
+                write!(f, "?|")
+            }
+            JsonOperator::QuestionAnd => {
+                write!(f, "?&")
+            }
+            JsonOperator::AtArrow => {
+                write!(f, "@>")
+            }
+            JsonOperator::ArrowAt => {
+                write!(f, "<@")
             }
         }
     }
@@ -1005,6 +1108,11 @@ impl Display for Expr {
             } => {
                 write!(f, "({left} {op} {right})")?;
             }
+            Expr::JsonOp {
+                op, left, right, ..
+            } => {
+                write!(f, "({left} {op} {right})")?;
+            }
             Expr::Cast {
                 expr,
                 target_type,
@@ -1026,6 +1134,11 @@ impl Display for Expr {
                 kind: field, expr, ..
             } => {
                 write!(f, "EXTRACT({field} FROM {expr})")?;
+            }
+            Expr::DatePart {
+                kind: field, expr, ..
+            } => {
+                write!(f, "DATE_PART({field}, {expr})")?;
             }
             Expr::Position {
                 substr_expr,

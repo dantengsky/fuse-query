@@ -28,6 +28,7 @@ use futures::stream::StreamExt;
 use futures_util::TryStreamExt;
 use log::info;
 use log::warn;
+use minitrace::full_name;
 use minitrace::prelude::*;
 use opendal::EntryMode;
 use opendal::Metakey;
@@ -38,6 +39,7 @@ use storages_common_table_meta::meta::Location;
 use storages_common_table_meta::meta::SnapshotId;
 use storages_common_table_meta::meta::TableSnapshot;
 use storages_common_table_meta::meta::TableSnapshotLite;
+use storages_common_table_meta::meta::TableVersion;
 
 use crate::io::MetaReaders;
 use crate::io::SnapshotHistoryReader;
@@ -47,6 +49,7 @@ use crate::io::TableMetaLocationGenerator;
 pub struct SnapshotLiteExtended {
     pub format_version: u64,
     pub snapshot_id: SnapshotId,
+    pub table_version: Option<TableVersion>,
     pub timestamp: Option<DateTime<Utc>>,
     pub segments: HashSet<Location>,
     pub table_statistics_location: Option<String>,
@@ -120,8 +123,8 @@ impl SnapshotsIO {
         Ok(TableSnapshotLite::from((snapshot.as_ref(), ver)))
     }
 
-    #[minitrace::trace]
     #[async_backtrace::framed]
+    #[minitrace::trace]
     async fn read_snapshot_lites(
         &self,
         snapshot_files: &[String],
@@ -136,7 +139,7 @@ impl SnapshotsIO {
                     self.operator.clone(),
                     min_snapshot_timestamp,
                 )
-                .in_span(Span::enter_with_local_parent("read_snapshot"))
+                .in_span(Span::enter_with_local_parent(full_name!()))
             })
         });
 
@@ -281,6 +284,7 @@ impl SnapshotsIO {
         Ok(SnapshotLiteExtended {
             format_version: ver,
             snapshot_id: snapshot.snapshot_id,
+            table_version: snapshot.table_version,
             timestamp: snapshot.timestamp,
             segments,
             table_statistics_location,
@@ -288,8 +292,8 @@ impl SnapshotsIO {
     }
 
     // If `ignore_timestamp` is true, ignore filter out snapshots which have larger (artificial)timestamp
-    #[minitrace::trace]
     #[async_backtrace::framed]
+    #[minitrace::trace]
     pub async fn read_snapshot_lite_extends(
         &self,
         snapshot_files: &[String],
@@ -306,7 +310,7 @@ impl SnapshotsIO {
                     root_snapshot.clone(),
                     ignore_timestamp,
                 )
-                .in_span(Span::enter_with_local_parent("read_snapshot"))
+                .in_span(Span::enter_with_local_parent(full_name!()))
             })
         });
 
@@ -334,7 +338,7 @@ impl SnapshotsIO {
         let root_snapshot_lite = TableSnapshotLite::from((root_snapshot, format_version));
         let mut prev_snapshot_id_tuple = root_snapshot_lite.prev_snapshot_id;
         chained_snapshot_lites.push(root_snapshot_lite);
-        while let Some((prev_snapshot_id, _)) = prev_snapshot_id_tuple {
+        while let Some((prev_snapshot_id, _, _)) = prev_snapshot_id_tuple {
             let prev_snapshot_lite = snapshot_map.remove(&prev_snapshot_id);
             match prev_snapshot_lite {
                 None => {

@@ -24,10 +24,10 @@ use common_exception::ErrorCode;
 use common_exception::Result;
 use common_expression::DataBlock;
 use common_expression::TopKSorter;
-use common_pipeline_core::processors::port::OutputPort;
-use common_pipeline_core::processors::processor::Event;
-use common_pipeline_core::processors::processor::ProcessorPtr;
+use common_pipeline_core::processors::Event;
+use common_pipeline_core::processors::OutputPort;
 use common_pipeline_core::processors::Processor;
+use common_pipeline_core::processors::ProcessorPtr;
 use common_storage::CopyStatus;
 use common_storage::FileStatus;
 
@@ -75,7 +75,7 @@ impl ParquetSource {
         topk: Arc<Option<TopK>>,
     ) -> Result<ProcessorPtr> {
         let scan_progress = ctx.get_scan_progress();
-        let is_copy = matches!(ctx.get_query_kind(), QueryKind::Copy);
+        let is_copy = matches!(ctx.get_query_kind(), QueryKind::CopyIntoTable);
         let copy_status = ctx.get_copy_status();
 
         let topk_sorter = topk

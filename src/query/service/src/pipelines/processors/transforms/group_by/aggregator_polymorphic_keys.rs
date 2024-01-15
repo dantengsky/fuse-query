@@ -48,23 +48,23 @@ use log::info;
 use super::aggregator_keys_builder::LargeFixedKeysColumnBuilder;
 use super::aggregator_keys_iter::LargeFixedKeysColumnIter;
 use super::BUCKETS_LG2;
-use crate::pipelines::processors::transforms::group_by::aggregator_groups_builder::DictionarySerializedKeysGroupColumnsBuilder;
-use crate::pipelines::processors::transforms::group_by::aggregator_groups_builder::FixedKeysGroupColumnsBuilder;
-use crate::pipelines::processors::transforms::group_by::aggregator_groups_builder::GroupColumnsBuilder;
-use crate::pipelines::processors::transforms::group_by::aggregator_groups_builder::SerializedKeysGroupColumnsBuilder;
-use crate::pipelines::processors::transforms::group_by::aggregator_keys_builder::DictionaryStringKeysColumnBuilder;
-use crate::pipelines::processors::transforms::group_by::aggregator_keys_builder::FixedKeysColumnBuilder;
-use crate::pipelines::processors::transforms::group_by::aggregator_keys_builder::KeysColumnBuilder;
-use crate::pipelines::processors::transforms::group_by::aggregator_keys_builder::StringKeysColumnBuilder;
-use crate::pipelines::processors::transforms::group_by::aggregator_keys_iter::DictionarySerializedKeysColumnIter;
-use crate::pipelines::processors::transforms::group_by::aggregator_keys_iter::FixedKeysColumnIter;
-use crate::pipelines::processors::transforms::group_by::aggregator_keys_iter::KeysColumnIter;
-use crate::pipelines::processors::transforms::group_by::aggregator_keys_iter::SerializedKeysColumnIter;
+use crate::pipelines::processors::transforms::aggregator::AggregatorParams;
+use crate::pipelines::processors::transforms::aggregator::HashTableCell;
+use crate::pipelines::processors::transforms::aggregator::PartitionedHashTableDropper;
 use crate::pipelines::processors::transforms::group_by::Area;
 use crate::pipelines::processors::transforms::group_by::ArenaHolder;
-use crate::pipelines::processors::transforms::HashTableCell;
-use crate::pipelines::processors::transforms::PartitionedHashTableDropper;
-use crate::pipelines::processors::AggregatorParams;
+use crate::pipelines::processors::transforms::group_by::DictionarySerializedKeysColumnIter;
+use crate::pipelines::processors::transforms::group_by::DictionarySerializedKeysGroupColumnsBuilder;
+use crate::pipelines::processors::transforms::group_by::DictionaryStringKeysColumnBuilder;
+use crate::pipelines::processors::transforms::group_by::FixedKeysColumnBuilder;
+use crate::pipelines::processors::transforms::group_by::FixedKeysColumnIter;
+use crate::pipelines::processors::transforms::group_by::FixedKeysGroupColumnsBuilder;
+use crate::pipelines::processors::transforms::group_by::GroupColumnsBuilder;
+use crate::pipelines::processors::transforms::group_by::KeysColumnBuilder;
+use crate::pipelines::processors::transforms::group_by::KeysColumnIter;
+use crate::pipelines::processors::transforms::group_by::SerializedKeysColumnIter;
+use crate::pipelines::processors::transforms::group_by::SerializedKeysGroupColumnsBuilder;
+use crate::pipelines::processors::transforms::group_by::StringKeysColumnBuilder;
 
 // Provide functions for all HashMethod to help implement polymorphic group by key
 //
@@ -582,7 +582,6 @@ impl<Method: HashMethodBounds> PartitionedHashMethod<Method> {
 
         let arena = std::mem::replace(&mut cell.arena, Area::create());
         cell.arena_holders.push(ArenaHolder::create(Some(arena)));
-        let temp_values = cell.temp_values.to_vec();
         let arena_holders = cell.arena_holders.to_vec();
 
         let _old_dropper = cell._dropper.clone().unwrap();
@@ -594,7 +593,6 @@ impl<Method: HashMethodBounds> PartitionedHashMethod<Method> {
         // create new HashTableCell before take_old_dropper - may double free memory
         let _old_dropper = cell._dropper.take();
         let mut cell = HashTableCell::create(partitioned_hashtable, _new_dropper);
-        cell.temp_values = temp_values;
         cell.arena_holders = arena_holders;
         Ok(cell)
     }

@@ -27,7 +27,9 @@ mod user_mgr;
 mod user_setting;
 mod user_stage;
 mod user_udf;
+mod visibility_checker;
 
+pub mod connection;
 pub mod file_format;
 pub mod idm_config;
 pub mod role_cache_mgr;
@@ -39,3 +41,4 @@ pub use role_mgr::BUILTIN_ROLE_ACCOUNT_ADMIN;
 pub use role_mgr::BUILTIN_ROLE_PUBLIC;
 pub use user::CertifiedInfo;
 pub use user_api::UserApiProvider;
+pub use visibility_checker::GrantObjectVisibilityChecker;

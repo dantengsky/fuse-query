@@ -17,8 +17,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use backoff::backoff::Backoff;
-use backoff::ExponentialBackoff;
-use backoff::ExponentialBackoffBuilder;
 use chrono::Utc;
 use common_catalog::table::Table;
 use common_catalog::table::TableExt;
@@ -31,16 +29,18 @@ use common_meta_app::schema::TableStatistics;
 use common_meta_app::schema::UpdateTableMetaReq;
 use common_meta_app::schema::UpsertTableCopiedFileReq;
 use common_meta_types::MatchSeq;
-use common_pipeline_core::processors::processor::ProcessorPtr;
+use common_metrics::storage::*;
+use common_pipeline_core::processors::ProcessorPtr;
 use common_pipeline_core::Pipeline;
-use common_pipeline_transforms::processors::transforms::AsyncAccumulatingTransformer;
-use common_sql::executor::MutationKind;
+use common_pipeline_transforms::processors::AsyncAccumulatingTransformer;
+use common_sql::executor::physical_plans::MutationKind;
 use log::debug;
 use log::info;
 use log::warn;
 use opendal::Operator;
 use storages_common_cache::CacheAccessor;
 use storages_common_cache_manager::CachedObject;
+use storages_common_locks::set_backoff;
 use storages_common_table_meta::meta::Location;
 use storages_common_table_meta::meta::SegmentInfo;
 use storages_common_table_meta::meta::SnapshotId;
@@ -54,10 +54,6 @@ use storages_common_table_meta::table::OPT_KEY_SNAPSHOT_LOCATION;
 use crate::io::MetaWriter;
 use crate::io::SegmentsIO;
 use crate::io::TableMetaLocationGenerator;
-use crate::metrics::metrics_inc_commit_mutation_latest_snapshot_append_only;
-use crate::metrics::metrics_inc_commit_mutation_retry;
-use crate::metrics::metrics_inc_commit_mutation_success;
-use crate::metrics::metrics_inc_commit_mutation_unresolvable_conflict;
 use crate::operations::common::AbortOperation;
 use crate::operations::common::AppendGenerator;
 use crate::operations::common::CommitSink;
@@ -66,10 +62,6 @@ use crate::operations::common::TableMutationAggregator;
 use crate::operations::common::TransformSerializeSegment;
 use crate::statistics::merge_statistics;
 use crate::FuseTable;
-
-const OCC_DEFAULT_BACKOFF_INIT_DELAY_MS: Duration = Duration::from_millis(5);
-const OCC_DEFAULT_BACKOFF_MAX_DELAY_MS: Duration = Duration::from_millis(20 * 1000);
-const OCC_DEFAULT_BACKOFF_MAX_ELAPSED_MS: Duration = Duration::from_millis(120 * 1000);
 
 impl FuseTable {
     #[async_backtrace::framed]
@@ -99,7 +91,8 @@ impl FuseTable {
             )))
         })?;
 
-        let snapshot_gen = AppendGenerator::new(ctx.clone(), overwrite);
+        let snapshot_gen =
+            AppendGenerator::new(ctx.clone(), overwrite, Some(self.current_table_version()));
         pipeline.add_sink(|input| {
             CommitSink::try_create(
                 self,
@@ -116,22 +109,90 @@ impl FuseTable {
         Ok(())
     }
 
-    #[async_backtrace::framed]
-    pub async fn commit_to_meta_server(
+    async fn check_lvt_conflict(
+        &self,
         ctx: &dyn TableContext,
         table_info: &TableInfo,
-        location_generator: &TableMetaLocationGenerator,
+        snapshot: &TableSnapshot,
+    ) -> Result<()> {
+        let catalog = table_info.catalog();
+        let catalog = ctx.get_catalog(catalog).await?;
+        let lvt = catalog.get_table_lvt(table_info.ident.table_id).await?;
+
+        if let Some(lvt) = lvt.time {
+            let prev_snapshot_opt = {
+                let prev_snapshot_opt = self.prev_snapshot.read().await;
+                prev_snapshot_opt.to_owned()
+            };
+            let prev_snapshot = if let Some(prev_snapshot) = prev_snapshot_opt.to_owned() {
+                Some(prev_snapshot)
+            } else if let Some((prev_snapshot_id, format_version, table_version)) =
+                snapshot.prev_snapshot_id
+            {
+                let location_generator = &self.meta_location_generator;
+                let prev_snapshot_loc = location_generator.gen_snapshot_location(
+                    &prev_snapshot_id,
+                    format_version,
+                    table_version,
+                )?;
+                let read_prev_snapshot_opt = self
+                    .read_table_snapshot_by_location(prev_snapshot_loc.clone())
+                    .await?;
+                if let Some(prev_snapshot) = read_prev_snapshot_opt {
+                    let mut prev_snapshot_opt = self.prev_snapshot.write().await;
+                    *prev_snapshot_opt = Some(prev_snapshot.clone());
+                    Some(prev_snapshot)
+                } else {
+                    return Err(ErrorCode::StorageOther(format!(
+                        "read prev snapshot at {:?} fail",
+                        prev_snapshot_loc
+                    )));
+                }
+            } else {
+                None
+            };
+
+            if let Some(prev_snapshot) = prev_snapshot {
+                let now_ms = if let Some(snapshot_time) = prev_snapshot.timestamp {
+                    snapshot_time
+                } else {
+                    chrono::Utc::now()
+                };
+                if lvt > now_ms {
+                    info!(
+                        "when commit table {:?}, lvt {} conflict",
+                        table_info.name, lvt
+                    );
+                    return Err(ErrorCode::StorageOther(
+                        "commit fail by lvt conflict".to_string(),
+                    ));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    #[async_backtrace::framed]
+    pub async fn commit_to_meta_server(
+        &self,
+        ctx: &dyn TableContext,
+        table_info: &TableInfo,
         snapshot: TableSnapshot,
         table_statistics: Option<TableSnapshotStatistics>,
         copied_files: &Option<UpsertTableCopiedFileReq>,
-        operator: &Operator,
     ) -> Result<()> {
-        let snapshot_location = location_generator
-            .snapshot_location_from_uuid(&snapshot.snapshot_id, TableSnapshot::VERSION)?;
+        let location_generator = &self.meta_location_generator;
+        let snapshot_location = location_generator.gen_snapshot_location(
+            &snapshot.snapshot_id,
+            TableSnapshot::VERSION,
+            snapshot.table_version,
+        )?;
         let need_to_save_statistics =
             snapshot.table_statistics_location.is_some() && table_statistics.is_some();
 
         // 1. write down snapshot
+        let operator = &self.operator;
         snapshot.write_meta(operator, &snapshot_location).await?;
         if need_to_save_statistics {
             table_statistics
@@ -146,16 +207,17 @@ impl FuseTable {
 
         let table_statistics_location = snapshot.table_statistics_location.clone();
         // 2. update table meta
-        let res = Self::update_table_meta(
-            ctx,
-            table_info,
-            location_generator,
-            snapshot,
-            snapshot_location,
-            copied_files,
-            operator,
-        )
-        .await;
+        let res = self
+            .update_table_meta(
+                ctx,
+                table_info,
+                location_generator,
+                snapshot,
+                snapshot_location,
+                copied_files,
+                operator,
+            )
+            .await;
         if need_to_save_statistics {
             let table_statistics_location = table_statistics_location.unwrap();
             match &res {
@@ -174,7 +236,9 @@ impl FuseTable {
     }
 
     #[async_backtrace::framed]
+    #[allow(clippy::too_many_arguments)]
     pub async fn update_table_meta(
+        &self,
         ctx: &dyn TableContext,
         table_info: &TableInfo,
         location_generator: &TableMetaLocationGenerator,
@@ -183,6 +247,8 @@ impl FuseTable {
         copied_files: &Option<UpsertTableCopiedFileReq>,
         operator: &Operator,
     ) -> Result<()> {
+        self.check_lvt_conflict(ctx, table_info, &snapshot).await?;
+
         // 1. prepare table meta
         let mut new_table_meta = table_info.meta.clone();
         // 1.1 set new snapshot location
@@ -277,7 +343,7 @@ impl FuseTable {
             });
     }
 
-    // TODO refactor, it is called by segment compaction and re-cluster now
+    // TODO refactor, it is called by segment compaction
     #[async_backtrace::framed]
     pub async fn commit_mutation(
         &self,
@@ -289,7 +355,7 @@ impl FuseTable {
         max_retry_elapsed: Option<Duration>,
     ) -> Result<()> {
         let mut retries = 0;
-        let mut backoff = Self::set_backoff(max_retry_elapsed);
+        let mut backoff = set_backoff(None, None, max_retry_elapsed);
 
         let mut latest_snapshot = base_snapshot.clone();
         let mut latest_table_info = &self.table_info;
@@ -303,10 +369,11 @@ impl FuseTable {
 
         // Status
         ctx.set_status_info("mutation: begin try to commit");
+        let table_version = self.current_table_version();
 
         loop {
             let mut snapshot_tobe_committed =
-                TableSnapshot::from_previous(latest_snapshot.as_ref());
+                TableSnapshot::from_previous(latest_snapshot.as_ref(), Some(table_version));
 
             let schema = self.schema();
             let (segments_tobe_committed, statistics_tobe_committed) = Self::merge_with_base(
@@ -322,16 +389,15 @@ impl FuseTable {
             snapshot_tobe_committed.segments = segments_tobe_committed;
             snapshot_tobe_committed.summary = statistics_tobe_committed;
 
-            match Self::commit_to_meta_server(
-                ctx.as_ref(),
-                latest_table_info,
-                &self.meta_location_generator,
-                snapshot_tobe_committed,
-                None,
-                &None,
-                &self.operator,
-            )
-            .await
+            match self
+                .commit_to_meta_server(
+                    ctx.as_ref(),
+                    latest_table_info,
+                    snapshot_tobe_committed,
+                    None,
+                    &None,
+                )
+                .await
             {
                 Err(e) if e.code() == ErrorCode::TABLE_VERSION_MISMATCHED => {
                     match backoff.next_backoff() {
@@ -344,6 +410,7 @@ impl FuseTable {
                                 self.table_info.ident
                             );
 
+                            common_base::base::tokio::time::sleep(d).await;
                             latest_table_ref = self.refresh(ctx.as_ref()).await?;
                             let latest_fuse_table =
                                 FuseTable::try_from_table(latest_table_ref.as_ref())?;
@@ -463,31 +530,6 @@ impl FuseTable {
         // currently, the only error that we know,  which indicates there are no side effects
         // is TABLE_VERSION_MISMATCHED
         e.code() == ErrorCode::TABLE_VERSION_MISMATCHED
-    }
-
-    #[inline]
-    pub fn set_backoff(max_retry_elapsed: Option<Duration>) -> ExponentialBackoff {
-        // The initial retry delay in millisecond. By default,  it is 5 ms.
-        let init_delay = OCC_DEFAULT_BACKOFF_INIT_DELAY_MS;
-
-        // The maximum  back off delay in millisecond, once the retry interval reaches this value, it stops increasing.
-        // By default, it is 20 seconds.
-        let max_delay = OCC_DEFAULT_BACKOFF_MAX_DELAY_MS;
-
-        // The maximum elapsed time after the occ starts, beyond which there will be no more retries.
-        // By default, it is 2 minutes
-        let max_elapsed = max_retry_elapsed.unwrap_or(OCC_DEFAULT_BACKOFF_MAX_ELAPSED_MS);
-
-        // TODO(xuanwo): move to backon instead.
-        //
-        // To simplify the settings, using fixed common values for randomization_factor and multiplier
-        ExponentialBackoffBuilder::new()
-            .with_initial_interval(init_delay)
-            .with_max_interval(max_delay)
-            .with_randomization_factor(0.5)
-            .with_multiplier(2.0)
-            .with_max_elapsed_time(Some(max_elapsed))
-            .build()
     }
 
     // check if there are any fuse table legacy options

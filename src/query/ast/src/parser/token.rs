@@ -72,7 +72,7 @@ impl<'a> Iterator for Tokenizer<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         match self.lexer.next() {
-            Some(kind) if kind == TokenKind::Error => Some(Err(ErrorCode::SyntaxException(
+            Some(TokenKind::Error) => Some(Err(ErrorCode::SyntaxException(
                 "unable to recognize the rest tokens".to_string(),
             )
             .set_span(Some((self.lexer.span().start..self.source.len()).into())))),
@@ -232,8 +232,14 @@ pub enum TokenKind {
     RBrace,
     #[token("->")]
     RArrow,
+    #[token("->>")]
+    LongRArrow,
     #[token("=>")]
     FatRArrow,
+    #[token("#>")]
+    HashRArrow,
+    #[token("#>>")]
+    HashLongRArrow,
     /// A case insensitive match regular expression operator in PostgreSQL
     #[token("~*")]
     TildeAsterisk,
@@ -277,8 +283,21 @@ pub enum TokenKind {
     #[token("||/")]
     CubeRoot,
     /// Placeholder used in prepared stmt
+    /// Also used as JSON operator.
     #[token("?")]
     Placeholder,
+    /// Used as JSON operator.
+    #[token("?|")]
+    QuestionOr,
+    /// Used as JSON operator.
+    #[token("?&")]
+    QuestionAnd,
+    /// Used as JSON operator.
+    #[token("<@")]
+    ArrowAt,
+    /// Used as JSON operator.
+    #[token("@>")]
+    AtArrow,
 
     // Keywords
     //
@@ -371,6 +390,8 @@ pub enum TokenKind {
     COMPACT,
     #[token("CONNECTION", ignore(ascii_case))]
     CONNECTION,
+    #[token("CONNECTIONS", ignore(ascii_case))]
+    CONNECTIONS,
     #[token("CONTENT_TYPE", ignore(ascii_case))]
     CONTENT_TYPE,
     #[token("CHAR", ignore(ascii_case))]
@@ -415,6 +436,8 @@ pub enum TokenKind {
     DATE,
     #[token("DATE_ADD", ignore(ascii_case))]
     DATE_ADD,
+    #[token("DATE_PART", ignore(ascii_case))]
+    DATE_PART,
     #[token("DATE_SUB", ignore(ascii_case))]
     DATE_SUB,
     #[token("DATE_TRUNC", ignore(ascii_case))]
@@ -449,6 +472,8 @@ pub enum TokenKind {
     DOUBLE,
     #[token("DOW", ignore(ascii_case))]
     DOW,
+    #[token("WEEK", ignore(ascii_case))]
+    WEEK,
     #[token("DOY", ignore(ascii_case))]
     DOY,
     #[token("DOWNLOAD", ignore(ascii_case))]
@@ -611,8 +636,12 @@ pub enum TokenKind {
     KEY,
     #[token("KILL", ignore(ascii_case))]
     KILL,
+    #[token("LATERAL", ignore(ascii_case))]
+    LATERAL,
     #[token("LOCATION_PREFIX", ignore(ascii_case))]
     LOCATION_PREFIX,
+    #[token("SECONDARY", ignore(ascii_case))]
+    SECONDARY,
     #[token("ROLES", ignore(ascii_case))]
     ROLES,
     /// L2DISTANCE op, from https://github.com/pgvector/pgvector
@@ -732,6 +761,8 @@ pub enum TokenKind {
     RANGE,
     #[token("RAWDEFLATE", ignore(ascii_case))]
     RAWDEFLATE,
+    #[token("READ_ONLY", ignore(ascii_case))]
+    READ_ONLY,
     #[token("RECLUSTER", ignore(ascii_case))]
     RECLUSTER,
     #[token("RECORD_DELIMITER", ignore(ascii_case))]
@@ -752,6 +783,10 @@ pub enum TokenKind {
     MERGE,
     #[token("MATCHED", ignore(ascii_case))]
     MATCHED,
+    #[token("MISSING_FIELD_AS", ignore(ascii_case))]
+    MISSING_FIELD_AS,
+    #[token("NULL_FIELD_AS", ignore(ascii_case))]
+    NULL_FIELD_AS,
     #[token("UNMATCHED", ignore(ascii_case))]
     UNMATCHED,
     #[token("ROW", ignore(ascii_case))]
@@ -794,6 +829,8 @@ pub enum TokenKind {
     RLIKE,
     #[token("RAW", ignore(ascii_case))]
     RAW,
+    #[token("OPTIMIZED", ignore(ascii_case))]
+    OPTIMIZED,
     #[token("SCHEMA", ignore(ascii_case))]
     SCHEMA,
     #[token("SCHEMAS", ignore(ascii_case))]
@@ -872,6 +909,8 @@ pub enum TokenKind {
     SOUNDS,
     #[token("SYNC", ignore(ascii_case))]
     SYNC,
+    #[token("STORAGE_TYPE", ignore(ascii_case))]
+    STORAGE_TYPE,
     #[token("TABLE", ignore(ascii_case))]
     TABLE,
     #[token("TABLES", ignore(ascii_case))]
@@ -960,8 +999,6 @@ pub enum TokenKind {
     VIEW,
     #[token("VIRTUAL", ignore(ascii_case))]
     VIRTUAL,
-    #[token("WEEK", ignore(ascii_case))]
-    WEEK,
     #[token("WHEN", ignore(ascii_case))]
     WHEN,
     #[token("WHERE", ignore(ascii_case))]
@@ -1010,10 +1047,46 @@ pub enum TokenKind {
     ADDRESS,
     #[token("OWNERSHIP", ignore(ascii_case))]
     OWNERSHIP,
+    #[token("READ", ignore(ascii_case))]
+    READ,
+    #[token("WRITE", ignore(ascii_case))]
+    WRITE,
+    #[token("UDF", ignore(ascii_case))]
+    UDF,
+    #[token("USAGEUDF", ignore(ascii_case))]
+    USAGEUDF,
     #[token("HANDLER", ignore(ascii_case))]
     HANDLER,
     #[token("LANGUAGE", ignore(ascii_case))]
     LANGUAGE,
+    #[token("TASK", ignore(ascii_case))]
+    TASK,
+    #[token("TASKS", ignore(ascii_case))]
+    TASKS,
+    #[token("WAREHOUSE", ignore(ascii_case))]
+    WAREHOUSE,
+    #[token("SCHEDULE", ignore(ascii_case))]
+    SCHEDULE,
+    #[token("SUSPEND_TASK_AFTER_NUM_FAILURES", ignore(ascii_case))]
+    SUSPEND_TASK_AFTER_NUM_FAILURES,
+    #[token("CRON", ignore(ascii_case))]
+    CRON,
+    #[token("EXECUTE", ignore(ascii_case))]
+    EXECUTE,
+    #[token("SUSPEND", ignore(ascii_case))]
+    SUSPEND,
+    #[token("RESUME", ignore(ascii_case))]
+    RESUME,
+    #[token("PIPE", ignore(ascii_case))]
+    PIPE,
+    #[token("AUTO_INGEST", ignore(ascii_case))]
+    AUTO_INGEST,
+    #[token("PIPE_EXECUTION_PAUSED", ignore(ascii_case))]
+    PIPE_EXECUTION_PAUSED,
+    #[token("PREFIX", ignore(ascii_case))]
+    PREFIX,
+    #[token("MODIFIED_AFTER", ignore(ascii_case))]
+    MODIFIED_AFTER,
 }
 
 // Reference: https://www.postgresql.org/docs/current/sql-keywords-appendix.html
@@ -1068,6 +1141,9 @@ impl TokenKind {
                 | LBrace
                 | RBrace
                 | RArrow
+                | LongRArrow
+                | HashRArrow
+                | HashLongRArrow
                 | FatRArrow
                 | BitWiseXor
                 | BitWiseNot
@@ -1082,6 +1158,8 @@ impl TokenKind {
                 | CubeRoot
                 | L2DISTANCE
                 | Placeholder
+                | QuestionOr
+                | QuestionAnd
                 | EOI
         )
     }
@@ -1125,6 +1203,7 @@ impl TokenKind {
             | TokenKind::END
             | TokenKind::EXISTS
             | TokenKind::EXTRACT
+            | TokenKind::DATE_PART
             | TokenKind::FALSE
             | TokenKind::FLOAT
             // | TokenKind::FOREIGN
@@ -1139,7 +1218,7 @@ impl TokenKind {
             | TokenKind::INT
             | TokenKind::INTEGER
             | TokenKind::INTERVAL
-            // | TokenKind::LATERAL
+            | TokenKind::LATERAL
             | TokenKind::LEADING
             // | TokenKind::LEAST
             // | TokenKind::LOCALTIME
@@ -1256,6 +1335,7 @@ impl TokenKind {
             // | TokenKind::COLUMN
             // | TokenKind::CONCURRENTLY
             // | TokenKind::CONSTRAINT
+            | TokenKind::CONNECTION
             | TokenKind::CROSS
             // | TokenKind::CURRENT_CATALOG
             // | TokenKind::CURRENT_DATE
@@ -1280,7 +1360,7 @@ impl TokenKind {
             | TokenKind::INNER
             | TokenKind::IS
             | TokenKind::JOIN
-            // | TokenKind::LATERAL
+            | TokenKind::LATERAL
             | TokenKind::LEADING
             | TokenKind::LEFT
             | TokenKind::LIKE
@@ -1291,7 +1371,7 @@ impl TokenKind {
             | TokenKind::NULL
             // | TokenKind::ONLY
             | TokenKind::OR
-            | TokenKind::OUTER
+            // | TokenKind::OUTER
             // | TokenKind::PLACING
             // | TokenKind::PRIMARY
             // | TokenKind::REFERENCES
@@ -1354,6 +1434,8 @@ impl TokenKind {
             | TokenKind::IGNORE_RESULT
             | TokenKind::MASKING
             | TokenKind::POLICY
+            | TokenKind::TASK
+            | TokenKind::PIPE
             if !after_as => true,
             _ => false
         }

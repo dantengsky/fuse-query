@@ -30,24 +30,22 @@ use common_functions::aggregates::StateAddr;
 use common_functions::aggregates::StateAddrs;
 use common_hashtable::HashtableEntryMutRefLike;
 use common_hashtable::HashtableLike;
-use common_pipeline_core::processors::port::InputPort;
-use common_pipeline_core::processors::port::OutputPort;
+use common_metrics::transform::*;
+use common_pipeline_core::processors::InputPort;
+use common_pipeline_core::processors::OutputPort;
 use common_pipeline_core::processors::Processor;
-use common_pipeline_transforms::processors::transforms::AccumulatingTransform;
-use common_pipeline_transforms::processors::transforms::AccumulatingTransformer;
+use common_pipeline_transforms::processors::AccumulatingTransform;
+use common_pipeline_transforms::processors::AccumulatingTransformer;
 use log::info;
 
 use crate::pipelines::processors::transforms::aggregator::aggregate_cell::AggregateHashTableDropper;
 use crate::pipelines::processors::transforms::aggregator::aggregate_meta::AggregateMeta;
+use crate::pipelines::processors::transforms::aggregator::AggregatorParams;
+use crate::pipelines::processors::transforms::aggregator::HashTableCell;
+use crate::pipelines::processors::transforms::aggregator::PartitionedHashTableDropper;
 use crate::pipelines::processors::transforms::group_by::HashMethodBounds;
 use crate::pipelines::processors::transforms::group_by::PartitionedHashMethod;
 use crate::pipelines::processors::transforms::group_by::PolymorphicKeysHelper;
-use crate::pipelines::processors::transforms::metrics::metrics_inc_aggregate_partial_hashtable_allocated_bytes;
-use crate::pipelines::processors::transforms::metrics::metrics_inc_aggregate_partial_spill_cell_count;
-use crate::pipelines::processors::transforms::metrics::metrics_inc_aggregate_partial_spill_count;
-use crate::pipelines::processors::transforms::HashTableCell;
-use crate::pipelines::processors::transforms::PartitionedHashTableDropper;
-use crate::pipelines::processors::AggregatorParams;
 use crate::sessions::QueryContext;
 
 #[allow(clippy::enum_variant_names)]
@@ -110,9 +108,6 @@ pub struct TransformPartialAggregate<Method: HashMethodBounds> {
     hash_table: HashTable<Method>,
 
     params: Arc<AggregatorParams>,
-
-    /// A temporary place to hold aggregating state from index data.
-    temp_place: StateAddr,
 }
 
 impl<Method: HashMethodBounds> TransformPartialAggregate<Method> {
@@ -143,7 +138,6 @@ impl<Method: HashMethodBounds> TransformPartialAggregate<Method> {
                 params,
                 hash_table,
                 settings: AggregateSettings::try_from(ctx)?,
-                temp_place: StateAddr::new(0),
             },
         ))
     }
@@ -213,27 +207,9 @@ impl<Method: HashMethodBounds> TransformPartialAggregate<Method> {
             let agg_index = block.num_columns() - aggregate_functions.len() + index;
             let function = &aggregate_functions[index];
             let offset = offsets_aggregate_states[index];
-            let agg_state = block
-                .get_by_offset(agg_index)
-                .value
-                .as_column()
-                .unwrap()
-                .as_string()
-                .unwrap();
-            let state_place = self.temp_place.next(offset);
-            for (row, mut raw_state) in agg_state.iter().enumerate() {
-                let place = &places[row];
-                function.deserialize(state_place, &mut raw_state)?;
-                function.merge(place.next(offset), state_place)?;
-                if function.need_manual_drop_state() {
-                    unsafe {
-                        // State may allocate memory out of the arena,
-                        // drop state to avoid memory leak.
-                        function.drop_state(state_place);
-                    }
-                    function.init_state(state_place);
-                }
-            }
+            let agg_state = block.get_by_offset(agg_index).value.as_column().unwrap();
+
+            function.batch_merge(places, offset, agg_state)?;
         }
 
         Ok(())
@@ -277,9 +253,6 @@ impl<Method: HashMethodBounds> TransformPartialAggregate<Method> {
                     }
 
                     if is_agg_index_block {
-                        if self.temp_place.addr() == 0 {
-                            self.temp_place = self.params.alloc_layout(&mut hashtable.arena);
-                        }
                         self.execute_agg_index_block(&block, &places)
                     } else {
                         Self::execute(&self.params, &block, &places)
@@ -300,9 +273,6 @@ impl<Method: HashMethodBounds> TransformPartialAggregate<Method> {
                     }
 
                     if is_agg_index_block {
-                        if self.temp_place.addr() == 0 {
-                            self.temp_place = self.params.alloc_layout(&mut hashtable.arena);
-                        }
                         self.execute_agg_index_block(&block, &places)
                     } else {
                         Self::execute(&self.params, &block, &places)

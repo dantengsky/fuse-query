@@ -29,8 +29,9 @@ use common_expression::TableField;
 use common_expression::TableSchema;
 use common_expression::ROW_ID_COL_NAME;
 use common_functions::BUILTIN_FUNCTIONS;
+use common_pipeline_core::Pipeline;
 use common_sql::evaluator::BlockOperator;
-use common_sql::executor::MutationKind;
+use common_sql::executor::physical_plans::MutationKind;
 use common_sql::plans::PREDICATE_COLUMN_NAME;
 use log::info;
 use storages_common_table_meta::meta::TableSnapshot;
@@ -39,7 +40,6 @@ use super::delete::MutationBlockPruningContext;
 use crate::operations::common::TransformSerializeBlock;
 use crate::operations::mutation::MutationAction;
 use crate::operations::mutation::MutationSource;
-use crate::pipelines::Pipeline;
 use crate::pruning::create_segment_location_vector;
 use crate::FuseTable;
 
@@ -101,7 +101,7 @@ impl FuseTable {
         let block_thresholds = self.get_block_thresholds();
         // sort
         let cluster_stats_gen =
-            self.cluster_gen_for_append(ctx.clone(), pipeline, block_thresholds)?;
+            self.cluster_gen_for_append(ctx.clone(), pipeline, block_thresholds, None)?;
 
         pipeline.add_transform(|input, output| {
             let proc = TransformSerializeBlock::try_create(
@@ -114,7 +114,7 @@ impl FuseTable {
             proc.into_processor()
         })?;
 
-        self.chain_mutation_pipes(&ctx, pipeline, snapshot, MutationKind::Update, false)
+        self.chain_mutation_pipes(&ctx, pipeline, snapshot, MutationKind::Update, false, false)
     }
 
     #[async_backtrace::framed]
@@ -174,9 +174,10 @@ impl FuseTable {
                 });
 
                 let reader = self.create_block_reader(
+                    ctx.clone(),
                     Projection::Columns(remain_col_indices),
                     false,
-                    ctx.clone(),
+                    false,
                 )?;
                 fields.extend_from_slice(reader.schema().fields());
                 remain_reader = Some((*reader).clone());
@@ -235,7 +236,8 @@ impl FuseTable {
             projection: offset_map.values().cloned().collect(),
         });
 
-        let block_reader = self.create_block_reader(projection.clone(), false, ctx.clone())?;
+        let block_reader =
+            self.create_block_reader(ctx.clone(), projection.clone(), false, false)?;
         let mut schema = block_reader.schema().as_ref().clone();
         if query_row_id_col {
             schema.add_internal_field(

@@ -17,7 +17,7 @@ use std::sync::Arc;
 use common_base::base::tokio::sync::Semaphore;
 use common_catalog::table_context::TableContext;
 use common_exception::Result;
-use common_pipeline_core::pipe::PipeItem;
+use common_pipeline_core::PipeItem;
 use storages_common_table_meta::meta::Location;
 
 use super::merge_into::MatchedAggregator;
@@ -28,6 +28,49 @@ use crate::FuseTable;
 
 impl FuseTable {
     // todo: (JackTan25) add pipeline picture
+    // The big picture of the merge into pipeline:
+    //
+    //                                                                                                                                                +-------------------+
+    //                                                                                         +-----------------------------+    output_port_row_id  |                   |
+    //                                            +-----------------------+     Matched        |                             +------------------------>-ResizeProcessor(1)+---------------+
+    //                                            |                       +---+--------------->|    MatchedSplitProcessor    |                        |                   |               |
+    //                                            |                       |   |                |                             +----------+             +-------------------+               |
+    //         +----------------------+           |                       +---+                +-----------------------------+          |                                                 |
+    //         |   MergeIntoSource    +---------->|MergeIntoSplitProcessor|                                                       output_port_updated                                     |
+    //         +----------------------+           |                       +---+                +-----------------------------+          |             +-------------------+               |
+    //                                            |                       |   | NotMatched     |                             |          |             |                   |               |
+    //                                            |                       +---+--------------->| MergeIntoNotMatchedProcessor+----------+------------->-ResizeProcessor(1)+-----------+   |
+    //                                            +-----------------------+                    |                             |                        |                   |           |   |
+    //                                                                                         +-----------------------------+                        +-------------------+           |   |
+    //                                                                                                                                                                                |   |
+    //                                                                                                                                                                                |   |
+    //                                                                                                                                                                                |   |
+    //                                                                                                                                                                                |   |
+    //                                                                                                                                                                                |   |
+    //                                                                               +-------------------------------------------------+                                              |   |
+    //                                                                               |                                                 |                                              |   |
+    //                                                                               |                                                 |                                              |   |
+    //           +--------------------------+        +-------------------------+     |         ++---------------------------+          |     +--------------------------------------+ |   |
+    // +---------+ TransformSerializeSegment<--------+ TransformSerializeBlock <-----+---------+|TransformAddComputedColumns|<---------+-----+TransformResortAddOnWithoutSourceSchema<-+   |
+    // |         +--------------------------+        +-------------------------+     |         ++---------------------------+          |     +--------------------------------------+     |
+    // |                                                                             |                                                 |                                                  |
+    // |                                                                             |                                                 |                                                  |
+    // |                                                                             |                                                 |                                                  |
+    // |                                                                             |                                                 |                                                  |
+    // |          +---------------+                 +------------------------------+ |               ++---------------+                |               +---------------+                  |
+    // +----------+ TransformDummy|<----------------+ AsyncAccumulatingTransformer <-+---------------+|TransformDummy |<---------------+---------------+TransformDummy <------------------+
+    // |          +---------------+                 +------------------------------+ |               ++---------------+                |               +---------------+
+    // |                                                                             |                                                 |
+    // |                                                                             |  If it includes 'computed', this section        |
+    // |                                                                             |  of code will be executed, otherwise it won't   |
+    // |                                                                             |                                                 |
+    // |                                                                            -+-------------------------------------------------+
+    // |
+    // |
+    // |
+    // |        +------------------+            +-----------------------+        +-----------+
+    // +------->|ResizeProcessor(1)+----------->|TableMutationAggregator+------->|CommitSink |
+    //          +------------------+            +-----------------------+        +-----------+
     pub fn rowid_aggregate_mutator(
         &self,
         ctx: Arc<dyn TableContext>,

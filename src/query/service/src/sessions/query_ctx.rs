@@ -14,6 +14,7 @@
 
 use std::any::Any;
 use std::cmp::min;
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
@@ -23,8 +24,10 @@ use std::str::FromStr;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::Duration;
 use std::time::Instant;
 use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use chrono_tz::Tz;
 use common_base::base::tokio::task::JoinHandle;
@@ -52,15 +55,17 @@ use common_meta_app::principal::FileFormatParams;
 use common_meta_app::principal::OnErrorMode;
 use common_meta_app::principal::RoleInfo;
 use common_meta_app::principal::StageFileFormatType;
+use common_meta_app::principal::UserDefinedConnection;
 use common_meta_app::principal::UserInfo;
 use common_meta_app::schema::CatalogInfo;
 use common_meta_app::schema::GetTableCopiedFileReq;
 use common_meta_app::schema::TableInfo;
+use common_metrics::storage::*;
+use common_pipeline_core::processors::profile::Profile;
 use common_pipeline_core::InputError;
 use common_settings::ChangeValue;
 use common_settings::Settings;
 use common_sql::IndexType;
-use common_storage::metrics::copy::metrics_inc_filter_out_copied_files_request_milliseconds;
 use common_storage::CopyStatus;
 use common_storage::DataOperator;
 use common_storage::FileStatus;
@@ -71,6 +76,7 @@ use common_storages_parquet::Parquet2Table;
 use common_storages_parquet::ParquetRSTable;
 use common_storages_result_cache::ResultScan;
 use common_storages_stage::StageTable;
+use common_users::GrantObjectVisibilityChecker;
 use common_users::UserApiProvider;
 use dashmap::mapref::multiple::RefMulti;
 use dashmap::DashMap;
@@ -105,7 +111,7 @@ pub struct QueryContext {
     query_settings: Arc<Settings>,
     fragment_id: Arc<AtomicUsize>,
     // Used by synchronized generate aggregating indexes when new data written.
-    inserted_segment_locs: Arc<RwLock<Vec<Location>>>,
+    inserted_segment_locs: Arc<RwLock<HashSet<Location>>>,
 }
 
 impl QueryContext {
@@ -126,7 +132,7 @@ impl QueryContext {
             shared,
             query_settings,
             fragment_id: Arc::new(AtomicUsize::new(0)),
-            inserted_segment_locs: Arc::new(RwLock::new(Vec::new())),
+            inserted_segment_locs: Arc::new(RwLock::new(HashSet::new())),
         })
     }
 
@@ -263,8 +269,20 @@ impl QueryContext {
         ua.clone()
     }
 
+    pub fn get_query_duration_ms(&self) -> i64 {
+        let query_start_time = convert_query_log_timestamp(self.shared.created_time);
+        let finish_time = *self.shared.finish_time.read();
+        let finish_time = finish_time.unwrap_or_else(SystemTime::now);
+        let finish_time = convert_query_log_timestamp(finish_time);
+        (finish_time - query_start_time) / 1_000
+    }
+
     pub fn get_created_time(&self) -> SystemTime {
         self.shared.created_time
+    }
+
+    pub fn set_finish_time(&self, time: SystemTime) {
+        *self.shared.finish_time.write() = Some(time)
     }
 
     pub fn evict_table_from_cache(&self, catalog: &str, database: &str, table: &str) -> Result<()> {
@@ -487,9 +505,16 @@ impl TableContext for QueryContext {
     fn get_current_role(&self) -> Option<RoleInfo> {
         self.shared.get_current_role()
     }
+    async fn get_available_roles(&self) -> Result<Vec<RoleInfo>> {
+        self.get_current_session().get_all_available_roles().await
+    }
 
-    async fn get_current_available_roles(&self) -> Result<Vec<RoleInfo>> {
-        self.shared.session.get_all_available_roles().await
+    fn get_current_session_id(&self) -> String {
+        self.get_current_session().get_id()
+    }
+
+    async fn get_visibility_checker(&self) -> Result<GrantObjectVisibilityChecker> {
+        self.shared.session.get_visibility_checker().await
     }
 
     fn get_fuse_version(&self) -> String {
@@ -519,13 +544,23 @@ impl TableContext for QueryContext {
     }
 
     fn get_function_context(&self) -> Result<FunctionContext> {
+        let external_server_connect_timeout_secs = self
+            .get_settings()
+            .get_external_server_connect_timeout_secs()?;
+        let external_server_request_timeout_secs = self
+            .get_settings()
+            .get_external_server_request_timeout_secs()?;
+
         let tz = self.get_settings().get_timezone()?;
         let tz = TzFactory::instance().get_by_name(&tz)?;
+        let numeric_cast_option = self.get_settings().get_numeric_cast_option()?;
+        let rounding_mode = numeric_cast_option.as_str() == "rounding";
 
         let query_config = &GlobalConfig::instance().query;
 
         Ok(FunctionContext {
             tz,
+            rounding_mode,
 
             openai_api_key: query_config.openai_api_key.clone(),
             openai_api_version: query_config.openai_api_version.clone(),
@@ -533,6 +568,9 @@ impl TableContext for QueryContext {
             openai_api_embedding_base_url: query_config.openai_api_embedding_base_url.clone(),
             openai_api_embedding_model: query_config.openai_api_embedding_model.clone(),
             openai_api_completion_model: query_config.openai_api_completion_model.clone(),
+
+            external_server_connect_timeout_secs,
+            external_server_request_timeout_secs,
         })
     }
 
@@ -550,7 +588,7 @@ impl TableContext for QueryContext {
         self.query_settings.clone()
     }
 
-    fn get_shard_settings(&self) -> Arc<Settings> {
+    fn get_shared_settings(&self) -> Arc<Settings> {
         self.shared.get_settings()
     }
 
@@ -656,6 +694,11 @@ impl TableContext for QueryContext {
             }
         }
     }
+    async fn get_connection(&self, name: &str) -> Result<UserDefinedConnection> {
+        let user_mgr = UserApiProvider::instance();
+        let tenant = self.get_tenant();
+        user_mgr.get_connection(&tenant, name).await
+    }
 
     /// Fetch a Table by db and table name.
     ///
@@ -705,7 +748,7 @@ impl TableContext for QueryContext {
                 .await?
                 .file_info;
 
-            metrics_inc_filter_out_copied_files_request_milliseconds(
+            metrics_inc_copy_filter_out_copied_files_request_milliseconds(
                 Instant::now().duration_since(start_request).as_millis() as u64,
             );
             // Colored
@@ -746,16 +789,21 @@ impl TableContext for QueryContext {
 
     fn add_segment_location(&self, segment_loc: Location) -> Result<()> {
         let mut segment_locations = self.inserted_segment_locs.write();
-        segment_locations.push(segment_loc);
+        segment_locations.insert(segment_loc);
         Ok(())
     }
 
     fn get_segment_locations(&self) -> Result<Vec<Location>> {
-        Ok(self.inserted_segment_locs.read().to_vec())
+        Ok(self
+            .inserted_segment_locs
+            .read()
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>())
     }
 
     fn add_file_status(&self, file_path: &str, file_status: FileStatus) -> Result<()> {
-        if matches!(self.get_query_kind(), QueryKind::Copy) {
+        if matches!(self.get_query_kind(), QueryKind::CopyIntoTable) {
             self.shared.copy_status.add_chunk(file_path, file_status);
         }
         Ok(())
@@ -764,17 +812,42 @@ impl TableContext for QueryContext {
     fn get_copy_status(&self) -> Arc<CopyStatus> {
         self.shared.copy_status.clone()
     }
+
+    fn get_license_key(&self) -> String {
+        self.get_settings()
+            .get_enterprise_license()
+            .unwrap_or_default()
+    }
+
+    fn get_queries_profile(&self) -> HashMap<String, Vec<Arc<Profile>>> {
+        let mut queries_profile = SessionManager::instance().get_queries_profile();
+
+        let exchange_profiles = DataExchangeManager::instance().get_queries_profile();
+
+        for (query_id, profiles) in exchange_profiles {
+            match queries_profile.entry(query_id) {
+                Entry::Vacant(v) => {
+                    v.insert(profiles);
+                }
+                Entry::Occupied(mut v) => {
+                    v.get_mut().extend(profiles);
+                }
+            }
+        }
+
+        queries_profile
+    }
 }
 
 impl TrySpawn for QueryContext {
     /// Spawns a new asynchronous task, returning a tokio::JoinHandle for it.
     /// The task will run in the current context thread_pool not the global.
-    fn try_spawn<T>(&self, task: T) -> Result<JoinHandle<T::Output>>
+    fn try_spawn<T>(&self, name: impl Into<String>, task: T) -> Result<JoinHandle<T::Output>>
     where
         T: Future + Send + 'static,
         T::Output: Send + 'static,
     {
-        Ok(self.shared.try_get_runtime()?.spawn(task))
+        Ok(self.shared.try_get_runtime()?.spawn(name, task))
     }
 }
 
@@ -782,4 +855,10 @@ impl std::fmt::Debug for QueryContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}", self.get_current_user())
     }
+}
+
+pub fn convert_query_log_timestamp(time: SystemTime) -> i64 {
+    time.duration_since(UNIX_EPOCH)
+        .unwrap_or(Duration::new(0, 0))
+        .as_micros() as i64
 }

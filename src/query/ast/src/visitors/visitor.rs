@@ -158,6 +158,17 @@ pub trait Visitor<'ast>: Sized {
         walk_expr(self, right);
     }
 
+    fn visit_json_op(
+        &mut self,
+        _span: Span,
+        _op: &'ast JsonOperator,
+        left: &'ast Expr,
+        right: &'ast Expr,
+    ) {
+        walk_expr(self, left);
+        walk_expr(self, right);
+    }
+
     fn visit_unary_op(&mut self, _span: Span, _op: &'ast UnaryOperator, expr: &'ast Expr) {
         walk_expr(self, expr);
     }
@@ -366,29 +377,30 @@ pub trait Visitor<'ast>: Sized {
 
     fn visit_explain(&mut self, _kind: &'ast ExplainKind, _query: &'ast Statement) {}
 
-    fn visit_copy(&mut self, _copy: &'ast CopyStmt) {}
-
-    fn visit_copy_unit(&mut self, _copy_unit: &'ast CopyUnit) {}
+    fn visit_copy_into_table(&mut self, _copy: &'ast CopyIntoTableStmt) {}
+    fn visit_copy_into_location(&mut self, _copy: &'ast CopyIntoLocationStmt) {}
 
     fn visit_call(&mut self, _call: &'ast CallStmt) {}
 
-    fn visit_show_settings(&mut self, _like: &'ast Option<String>) {}
+    fn visit_show_settings(&mut self, _show_options: &'ast Option<ShowOptions>) {}
 
     fn visit_unset_variable(&mut self, _stmt: &'ast UnSetStmt) {}
 
-    fn visit_show_process_list(&mut self) {}
+    fn visit_show_process_list(&mut self, _show_options: &'ast Option<ShowOptions>) {}
 
-    fn visit_show_metrics(&mut self) {}
+    fn visit_show_metrics(&mut self, _show_options: &'ast Option<ShowOptions>) {}
 
-    fn visit_show_engines(&mut self) {}
+    fn visit_show_engines(&mut self, _show_options: &'ast Option<ShowOptions>) {}
 
-    fn visit_show_functions(&mut self, _limit: &'ast Option<ShowLimit>) {}
+    fn visit_show_functions(&mut self, _show_options: &'ast Option<ShowOptions>) {}
 
-    fn visit_show_table_functions(&mut self, _limit: &'ast Option<ShowLimit>) {}
+    fn visit_show_table_functions(&mut self, _show_options: &'ast Option<ShowOptions>) {}
+
+    fn visit_show_options(&mut self, _show_options: &'ast Option<ShowOptions>, _name: String) {}
 
     fn visit_show_limit(&mut self, _limit: &'ast ShowLimit) {}
 
-    fn visit_show_indexes(&mut self) {}
+    fn visit_show_indexes(&mut self, _show_options: &'ast Option<ShowOptions>) {}
 
     fn visit_kill(&mut self, _kill_target: &'ast KillTarget, _object_id: &'ast str) {}
 
@@ -401,18 +413,14 @@ pub trait Visitor<'ast>: Sized {
     }
 
     fn visit_set_role(&mut self, _is_default: bool, _role_name: &'ast str) {}
+    fn visit_set_secondary_roles(&mut self, _option: &SecondaryRolesOption) {}
 
     fn visit_insert(&mut self, _insert: &'ast InsertStmt) {}
     fn visit_replace(&mut self, _replace: &'ast ReplaceStmt) {}
     fn visit_merge_into(&mut self, _merge_into: &'ast MergeIntoStmt) {}
     fn visit_insert_source(&mut self, _insert_source: &'ast InsertSource) {}
 
-    fn visit_delete(
-        &mut self,
-        _table_reference: &'ast TableReference,
-        _selection: &'ast Option<Expr>,
-    ) {
-    }
+    fn visit_delete(&mut self, _delete: &'ast DeleteStmt) {}
 
     fn visit_update(&mut self, _update: &'ast UpdateStmt) {}
 
@@ -587,6 +595,18 @@ pub trait Visitor<'ast>: Sized {
 
     fn visit_show_network_policies(&mut self) {}
 
+    fn visit_create_task(&mut self, _stmt: &'ast CreateTaskStmt) {}
+
+    fn visit_drop_task(&mut self, _stmt: &'ast DropTaskStmt) {}
+
+    fn visit_show_tasks(&mut self, _stmt: &'ast ShowTasksStmt) {}
+
+    fn visit_execute_task(&mut self, _stmt: &'ast ExecuteTaskStmt) {}
+
+    fn visit_describe_task(&mut self, _stmt: &'ast DescribeTaskStmt) {}
+
+    fn visit_alter_task(&mut self, _stmt: &'ast AlterTaskStmt) {}
+
     fn visit_with(&mut self, with: &'ast With) {
         let With { ctes, .. } = with;
         for cte in ctes.iter() {
@@ -681,4 +701,9 @@ pub trait Visitor<'ast>: Sized {
     fn visit_window_definition(&mut self, window_definition: &'ast WindowDefinition) {
         walk_window_definition(self, window_definition);
     }
+
+    fn visit_create_connection(&mut self, _stmt: &'ast CreateConnectionStmt) {}
+    fn visit_drop_connection(&mut self, _stmt: &'ast DropConnectionStmt) {}
+    fn visit_describe_connection(&mut self, _stmt: &'ast DescribeConnectionStmt) {}
+    fn visit_show_connections(&mut self, _stmt: &'ast ShowConnectionsStmt) {}
 }

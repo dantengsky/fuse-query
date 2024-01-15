@@ -68,6 +68,9 @@ fn test_statement() {
         r#"show databases"#,
         r#"show databases format TabSeparatedWithNamesAndTypes;"#,
         r#"show tables"#,
+        r#"show drop tables"#,
+        r#"show drop tables like 't%'"#,
+        r#"show drop tables where name='t'"#,
         r#"show tables format TabSeparatedWithNamesAndTypes;"#,
         r#"describe "name""with""quote";"#,
         r#"describe "name""""with""""quote";"#,
@@ -77,7 +80,8 @@ fn test_statement() {
         r#"show full columns in t in db"#,
         r#"show columns in t from ctl.db"#,
         r#"show full columns from t from db like 'id%'"#,
-        r#"show processlist;"#,
+        r#"show processlist like 't%' limit 2;"#,
+        r#"show processlist where database='default' limit 2;"#,
         r#"show create table a.b;"#,
         r#"show create table a.b format TabSeparatedWithNamesAndTypes;"#,
         r#"explain pipeline select a from b;"#,
@@ -169,6 +173,7 @@ fn test_statement() {
         r#"insert into table t select * from t2;"#,
         r#"select parse_json('{"k1": [0, 1, 2]}').k1[0];"#,
         r#"CREATE STAGE ~"#,
+        r#"CREATE STAGE IF NOT EXISTS test_stage 's3://load/files/' credentials=(aws_key_id='1a2b3c', aws_secret_key='4x5y6z') file_format=(type = CSV, compression = GZIP record_delimiter=',')"#,
         r#"CREATE STAGE IF NOT EXISTS test_stage url='s3://load/files/' credentials=(aws_key_id='1a2b3c', aws_secret_key='4x5y6z') file_format=(type = CSV, compression = GZIP record_delimiter=',')"#,
         r#"CREATE STAGE IF NOT EXISTS test_stage url='azblob://load/files/' connection=(account_name='1a2b3c' account_key='4x5y6z') file_format=(type = CSV compression = GZIP record_delimiter=',')"#,
         r#"DROP STAGE abc"#,
@@ -210,6 +215,7 @@ fn test_statement() {
         r#"VACUUM DROP TABLE RETAIN 20 HOURS;"#,
         r#"VACUUM DROP TABLE RETAIN 30 HOURS DRY RUN;"#,
         r#"VACUUM DROP TABLE FROM db RETAIN 40 HOURS;"#,
+        r#"VACUUM DROP TABLE FROM db RETAIN 40 HOURS LIMIT 10;"#,
         r#"CREATE TABLE t (a INT COMMENT 'col comment') COMMENT='table comment';"#,
         r#"GRANT CREATE, CREATE USER ON * TO 'test-grant';"#,
         r#"GRANT SELECT, CREATE ON * TO 'test-grant';"#,
@@ -323,11 +329,9 @@ fn test_statement() {
                     field_delimiter = ','
                     record_delimiter = '\n'
                     skip_header = 1
-                )
-                size_limit=10;"#,
+                )"#,
         r#"COPY INTO '@my_stage/my data'
-                FROM mytable
-                size_limit=10;"#,
+                FROM mytable;"#,
         r#"COPY INTO @my_stage
                 FROM mytable
                 FILE_FORMAT = (
@@ -335,8 +339,7 @@ fn test_statement() {
                     field_delimiter = ','
                     record_delimiter = '\n'
                     skip_header = 1
-                )
-                size_limit=10;"#,
+                );"#,
         r#"COPY INTO mytable
                 FROM 's3://mybucket/data.csv'
                 CREDENTIALS = (
@@ -387,8 +390,7 @@ fn test_statement() {
                 )
                 size_limit=10
                 disable_variant_check=true;"#,
-        r#"copy into t1 from "" FILE_FORMAT = (TYPE = TSV, COMPRESSION = GZIP)"#,
-        r#"COPY INTO books FROM 's3://databend/books.csv' 
+        r#"COPY INTO books FROM 's3://databend/books.csv'
                 CONNECTION = (
                     ENDPOINT_URL = 'http://localhost:9000/',
                     ACCESS_KEY_ID = 'ROOTUSER',
@@ -408,7 +410,18 @@ fn test_statement() {
         //         size_limit=10;"#,
         r#"CALL system$test(a)"#,
         r#"CALL system$test('a')"#,
-        r#"show settings like 'enable%'"#,
+        r#"show settings like 'enable%' limit 1"#,
+        r#"show settings where name='max_memory_usage' limit 1"#,
+        r#"show functions like 'today%' limit 1"#,
+        r#"show functions where name='to_day_of_year' limit 1"#,
+        r#"show engines like 'FU%' limit 1"#,
+        r#"show engines where engine='MEMORY' limit 1"#,
+        r#"show metrics like '%parse%' limit 1"#,
+        r#"show metrics where metric='session_connect_numbers' limit 1"#,
+        r#"show table_functions like 'fuse%' limit 1"#,
+        r#"show table_functions where name='fuse_snapshot' limit 1"#,
+        r#"show indexes like 'test%' limit 1"#,
+        r#"show indexes where name='test_idx' limit 1"#,
         r#"PRESIGN @my_stage"#,
         r#"PRESIGN @my_stage/path/to/dir/"#,
         r#"PRESIGN @my_stage/path/to/file"#,
@@ -427,6 +440,9 @@ fn test_statement() {
         r#"DROP SHARE IF EXISTS a;"#,
         r#"GRANT USAGE ON DATABASE db1 TO SHARE a;"#,
         r#"GRANT SELECT ON TABLE db1.tb1 TO SHARE a;"#,
+        r#"GRANT all ON stage s1 TO a;"#,
+        r#"GRANT read ON stage s1 TO a;"#,
+        r#"GRANT write ON stage s1 TO a;"#,
         r#"REVOKE USAGE ON DATABASE db1 FROM SHARE a;"#,
         r#"REVOKE SELECT ON TABLE db1.tb1 FROM SHARE a;"#,
         r#"ALTER SHARE a ADD TENANTS = b,c;"#,
@@ -449,7 +465,7 @@ fn test_statement() {
         r#"select table0.c1, table1.c2 from
             @stage1/dir/file ( FILE_FORMAT => 'parquet', FILES => ('file1', 'file2')) table0
             left join table1;"#,
-        r#"SELECT c1 FROM 's3://test/bucket' (ENDPOINT_URL => 'xxx', PATTERN => '*.parquet') t;"#,
+        r#"SELECT c1 FROM 's3://test/bucket' (PATTERN => '*.parquet', connection => (ENDPOINT_URL = 'xxx')) t;"#,
         r#"CREATE FILE FORMAT my_csv
             type = CSV field_delimiter = ',' record_delimiter = '\n' skip_header = 1;"#,
         r#"SHOW FILE FORMATS"#,
@@ -469,6 +485,33 @@ fn test_statement() {
         r#"REFRESH VIRTUAL COLUMN FOR t"#,
         r#"CREATE NETWORK POLICY mypolicy ALLOWED_IP_LIST=('192.168.10.0/24') BLOCKED_IP_LIST=('192.168.10.99') COMMENT='test'"#,
         r#"ALTER NETWORK POLICY mypolicy SET ALLOWED_IP_LIST=('192.168.10.0/24','192.168.255.1') BLOCKED_IP_LIST=('192.168.1.99') COMMENT='test'"#,
+        // tasks
+        r#"CREATE TASK IF NOT EXISTS MyTask1 WAREHOUSE = 'MyWarehouse' SCHEDULE = 15 MINUTE SUSPEND_TASK_AFTER_NUM_FAILURES = 3 COMMENT = 'This is test task 1' AS SELECT * FROM MyTable1"#,
+        r#"CREATE TASK IF NOT EXISTS MyTask1 SCHEDULE = USING CRON '0 6 * * *' 'America/Los_Angeles' COMMENT = 'serverless + cron' AS insert into t (c1, c2) values (1, 2), (3, 4)"#,
+        r#"CREATE TASK IF NOT EXISTS MyTask1 SCHEDULE = USING CRON '0 12 * * *' AS VACUUM TABLE t"#,
+        r#"ALTER TASK MyTask1 RESUME"#,
+        r#"ALTER TASK MyTask1 SUSPEND"#,
+        r#"ALTER TASK MyTask1 SET WAREHOUSE= 'MyWarehouse' SCHEDULE = USING CRON '0 6 * * *' 'America/Los_Angeles' COMMENT = 'serverless + cron'"#,
+        r#"ALTER TASK MyTask1 SET WAREHOUSE= 'MyWarehouse' SCHEDULE = 13 MINUTE SUSPEND_TASK_AFTER_NUM_FAILURES = 10 COMMENT = 'serverless + cron'"#,
+        r#"ALTER TASK MyTask2 MODIFY AS SELECT CURRENT_VERSION()"#,
+        r#"DROP TASK MyTask1"#,
+        r#"SHOW TASKS"#,
+        r#"EXECUTE TASK MyTask"#,
+        r#"DESC TASK MyTask"#,
+        r#"CREATE CONNECTION IF NOT EXISTS my_conn STORAGE_TYPE='s3'"#,
+        r#"CREATE CONNECTION IF NOT EXISTS my_conn STORAGE_TYPE='s3' any_arg='any_value'"#,
+        r#"DROP CONNECTION IF EXISTS my_conn;"#,
+        r#"DESC CONNECTION my_conn;"#,
+        r#"SHOW CONNECTIONS;"#,
+        // pipes
+        r#"CREATE PIPE IF NOT EXISTS MyPipe1 AUTO_INGEST = TRUE COMMENT = 'This is test pipe 1' AS COPY INTO MyTable1 FROM '@~/MyStage1' FILE_FORMAT = (TYPE = 'CSV')"#,
+        r#"CREATE PIPE pipe1 AS COPY INTO db1.MyTable1 FROM @~/mybucket/data.csv"#,
+        r#"ALTER PIPE mypipe REFRESH"#,
+        r#"ALTER PIPE mypipe REFRESH PREFIX='d1/'"#,
+        r#"ALTER PIPE mypipe REFRESH PREFIX='d1/' MODIFIED_AFTER='2018-07-30T13:56:46-07:00'"#,
+        r#"ALTER PIPE mypipe SET PIPE_EXECUTION_PAUSED = true"#,
+        r#"DROP PIPE mypipe"#,
+        r#"DESC PIPE mypipe"#,
         "--各环节转各环节转各环节转各环节转各\n  select 34343",
         "-- 96477300355	31379974136	3.074486292973661\nselect 34343",
         "-- xxxxx\n  select 34343;",
@@ -521,6 +564,8 @@ fn test_statement_error() {
         r#"GRANT ROLE 'test' TO ROLE test-user;"#,
         r#"GRANT SELECT, ALL PRIVILEGES, CREATE ON * TO 'test-grant';"#,
         r#"GRANT SELECT, CREATE ON *.c TO 'test-grant';"#,
+        r#"GRANT all ON UDF a TO 'test-grant';"#,
+        r#"GRANT usage ON UDF a TO 'test-grant';"#,
         r#"REVOKE SELECT, CREATE, ALL PRIVILEGES ON * FROM 'test-grant';"#,
         r#"REVOKE SELECT, CREATE ON * TO 'test-grant';"#,
         r#"COPY INTO mytable FROM 's3://bucket' CREDENTIAL = ();"#,
@@ -529,6 +574,8 @@ fn test_statement_error() {
         r#"CALL system$test(a"#,
         r#"show settings ilike 'enable%'"#,
         r#"PRESIGN INVALID @my_stage/path/to/file"#,
+        r#"SELECT c a as FROM t"#,
+        r#"SELECT c a as b FROM t"#,
         r#"SELECT * FROM t GROUP BY GROUPING SETS a, b"#,
         r#"SELECT * FROM t GROUP BY GROUPING SETS ()"#,
         r#"select * from aa.bb limit 10 order by bb;"#,
@@ -540,7 +587,9 @@ fn test_statement_error() {
         r#"select * from aa.bb limit 10,2 offset 2;"#,
         r#"select * from aa.bb limit 10,2,3;"#,
         r#"with a as (select 1) with b as (select 2) select * from aa.bb;"#,
+        r#"with as t2(tt) as (select a from t) select t2.tt from t2"#,
         r#"copy into t1 from "" FILE"#,
+        r#"select $1 from @data/csv/books.csv (file_format => 'aa' bad_arg => 'x', pattern => 'bb')"#,
         r#"copy into t1 from "" FILE_FORMAT"#,
         r#"copy into t1 from "" FILE_FORMAT = "#,
         r#"copy into t1 from "" FILE_FORMAT = ("#,
@@ -554,6 +603,7 @@ fn test_statement_error() {
                     type = CSV,
                     error_on_column_count_mismatch = 1
                 )"#,
+        r#"CREATE CONNECTION IF NOT EXISTS my_conn"#,
     ];
 
     for case in cases {
@@ -619,6 +669,8 @@ fn test_query() {
         r#"SELECT * FROM ((SELECT * FROM xyu ORDER BY x, y)) AS xyu"#,
         r#"SELECT * FROM (VALUES(1,1),(2,null),(null,5)) AS t(a,b)"#,
         r#"VALUES(1,'a'),(2,'b'),(null,'c') order by col0 limit 2"#,
+        r#"select * from t left join lateral(select 1) on true, lateral(select 2)"#,
+        r#"select * from t, lateral flatten(input => u.col) f"#,
     ];
 
     for case in cases {
@@ -691,6 +743,7 @@ fn test_expr() {
         r#"TRY_CAST(col1 AS TUPLE(BIGINT UNSIGNED NULL, BOOLEAN))"#,
         r#"trim(leading 'abc' from 'def')"#,
         r#"extract(year from d)"#,
+        r#"date_part(year, d)"#,
         r#"position('a' in str)"#,
         r#"substring(a from b for c)"#,
         r#"substring(a, b, c)"#,

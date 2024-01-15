@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -198,7 +199,7 @@ impl SubqueryRewriter {
         for pred in filter.predicates.iter() {
             let join_condition = JoinPredicate::new(pred, &input_prop, &filter_prop);
             match join_condition {
-                JoinPredicate::Left(filter) => {
+                JoinPredicate::Left(filter) | JoinPredicate::ALL(filter) => {
                     left_filters.push(filter.clone());
                 }
                 JoinPredicate::Right(filter) => {
@@ -236,6 +237,7 @@ impl SubqueryRewriter {
             marker_index: None,
             from_correlated_subquery: true,
             contain_runtime_filter: false,
+            need_hold_hash_table: false,
         };
 
         // Rewrite plan to semi-join.
@@ -306,6 +308,7 @@ impl SubqueryRewriter {
                     marker_index: None,
                     from_correlated_subquery: true,
                     contain_runtime_filter: false,
+                    need_hold_hash_table: false,
                 };
                 let s_expr = SExpr::create_binary(
                     Arc::new(join_plan.into()),
@@ -349,6 +352,7 @@ impl SubqueryRewriter {
                     marker_index: Some(marker_index),
                     from_correlated_subquery: true,
                     contain_runtime_filter: false,
+                    need_hold_hash_table: false,
                 };
                 let s_expr = SExpr::create_binary(
                     Arc::new(join_plan.into()),
@@ -407,6 +411,7 @@ impl SubqueryRewriter {
                     marker_index: Some(marker_index),
                     from_correlated_subquery: true,
                     contain_runtime_filter: false,
+                    need_hold_hash_table: false,
                 }
                 .into();
                 Ok((
@@ -422,7 +427,7 @@ impl SubqueryRewriter {
         }
     }
 
-    fn flatten(
+    pub fn flatten(
         &mut self,
         plan: &SExpr,
         correlated_columns: &ColumnSet,
@@ -494,6 +499,7 @@ impl SubqueryRewriter {
                 ),
                 Arc::new(logical_get),
             );
+
             let cross_join = Join {
                 left_conditions: vec![],
                 right_conditions: vec![],
@@ -502,8 +508,10 @@ impl SubqueryRewriter {
                 marker_index: None,
                 from_correlated_subquery: false,
                 contain_runtime_filter: false,
+                need_hold_hash_table: false,
             }
             .into();
+
             return Ok(SExpr::create_binary(
                 Arc::new(cross_join),
                 Arc::new(duplicate_delete_get),
@@ -582,36 +590,112 @@ impl SubqueryRewriter {
                 ))
             }
             RelOperator::Join(join) => {
-                // Currently, we don't support join conditions contain subquery
-                if join
-                    .used_columns()?
-                    .iter()
-                    .any(|index| correlated_columns.contains(index))
-                {
-                    need_cross_join = true;
+                // Helper function to check if conditions need a cross join
+                fn needs_cross_join(
+                    conditions: &[ScalarExpr],
+                    correlated_columns: &HashSet<IndexType>,
+                ) -> bool {
+                    conditions.iter().any(|condition| {
+                        condition
+                            .used_columns()
+                            .iter()
+                            .any(|col| correlated_columns.contains(col))
+                    })
                 }
+
+                // Helper function to process conditions
+                fn process_conditions(
+                    conditions: &[ScalarExpr],
+                    correlated_columns: &HashSet<IndexType>,
+                    derived_columns: &HashMap<IndexType, IndexType>,
+                    need_cross_join: bool,
+                ) -> Result<Vec<ScalarExpr>> {
+                    if need_cross_join {
+                        conditions
+                            .iter()
+                            .map(|condition| {
+                                let mut new_condition = condition.clone();
+                                for col in condition.used_columns() {
+                                    if correlated_columns.contains(&col) {
+                                        let new_col =
+                                            derived_columns.get(&col).ok_or_else(|| {
+                                                ErrorCode::Internal("Missing derived columns")
+                                            })?;
+                                        new_condition.replace_column(col, *new_col)?;
+                                    }
+                                }
+                                Ok(new_condition)
+                            })
+                            .collect()
+                    } else {
+                        Ok(conditions.to_vec())
+                    }
+                }
+
+                let mut left_need_cross_join =
+                    needs_cross_join(&join.left_conditions, correlated_columns);
+                let mut right_need_cross_join =
+                    needs_cross_join(&join.right_conditions, correlated_columns);
+
+                let join_rel_expr = RelExpr::with_s_expr(plan);
+                let left_prop = join_rel_expr.derive_relational_prop_child(0)?;
+                let right_prop = join_rel_expr.derive_relational_prop_child(1)?;
+
+                for condition in join.non_equi_conditions.iter() {
+                    for col in condition.used_columns() {
+                        if correlated_columns.contains(&col) {
+                            if left_prop.output_columns.contains(&col) {
+                                left_need_cross_join = true;
+                            } else if right_prop.output_columns.contains(&col) {
+                                right_need_cross_join = true;
+                            }
+                        }
+                    }
+                }
+
                 let left_flatten_plan = self.flatten(
                     plan.child(0)?,
                     correlated_columns,
                     flatten_info,
-                    need_cross_join,
+                    left_need_cross_join,
                 )?;
                 let right_flatten_plan = self.flatten(
                     plan.child(1)?,
                     correlated_columns,
                     flatten_info,
-                    need_cross_join,
+                    right_need_cross_join,
                 )?;
+
+                let left_conditions = process_conditions(
+                    &join.left_conditions,
+                    correlated_columns,
+                    &self.derived_columns,
+                    left_need_cross_join,
+                )?;
+                let right_conditions = process_conditions(
+                    &join.right_conditions,
+                    correlated_columns,
+                    &self.derived_columns,
+                    right_need_cross_join,
+                )?;
+                let non_equi_conditions = process_conditions(
+                    &join.non_equi_conditions,
+                    correlated_columns,
+                    &self.derived_columns,
+                    true,
+                )?;
+
                 Ok(SExpr::create_binary(
                     Arc::new(
                         Join {
-                            left_conditions: join.left_conditions.clone(),
-                            right_conditions: join.right_conditions.clone(),
-                            non_equi_conditions: join.non_equi_conditions.clone(),
+                            left_conditions,
+                            right_conditions,
+                            non_equi_conditions,
                             join_type: join.join_type.clone(),
                             marker_index: join.marker_index,
                             from_correlated_subquery: false,
                             contain_runtime_filter: false,
+                            need_hold_hash_table: false,
                         }
                         .into(),
                     ),
@@ -682,7 +766,12 @@ impl SubqueryRewriter {
                     if let ScalarExpr::AggregateFunction(AggregateFunction { func_name, .. }) =
                         &scalar
                     {
-                        if func_name.eq_ignore_ascii_case("count") || func_name.eq("count_distinct")
+                        // For scalar subquery, we'll convert it to single join.
+                        // Single join is similar to left outer join, if there isn't matched row in the right side, we'll add NULL value for the right side.
+                        // But for count aggregation function, NULL values should be 0.
+                        if aggregate.aggregate_functions.len() == 1
+                            && (func_name.eq_ignore_ascii_case("count")
+                                || func_name.eq("count_distinct"))
                         {
                             flatten_info.from_count_func = true;
                         }
@@ -839,6 +928,7 @@ impl SubqueryRewriter {
                 Ok(ScalarExpr::UDFServerCall(UDFServerCall {
                     span: udf.span,
                     func_name: udf.func_name.clone(),
+                    display_name: udf.display_name.clone(),
                     server_addr: udf.server_addr.clone(),
                     arg_types: udf.arg_types.clone(),
                     return_type: udf.return_type.clone(),
@@ -851,7 +941,7 @@ impl SubqueryRewriter {
         }
     }
 
-    fn add_equi_conditions(
+    pub fn add_equi_conditions(
         &self,
         span: Span,
         correlated_columns: &HashSet<IndexType>,

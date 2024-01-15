@@ -17,6 +17,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
 use common_base::base::tokio::sync::Notify;
+use common_catalog::table_context::TableContext;
 use common_exception::Result;
 use common_expression::types::DataType;
 use common_expression::types::NumberDataType;
@@ -28,13 +29,13 @@ use common_expression::FunctionContext;
 use common_expression::RemoteExpr;
 use common_expression::ScalarRef;
 use common_functions::BUILTIN_FUNCTIONS;
-use common_sql::executor::RangeJoin;
-use common_sql::executor::RangeJoinCondition;
-use common_sql::executor::RangeJoinType;
+use common_sql::executor::physical_plans::RangeJoin;
+use common_sql::executor::physical_plans::RangeJoinCondition;
+use common_sql::executor::physical_plans::RangeJoinType;
 use parking_lot::Mutex;
 use parking_lot::RwLock;
 
-use crate::pipelines::processors::transforms::range_join::ie_join_state::IEJoinState;
+use crate::pipelines::processors::transforms::range_join::IEJoinState;
 use crate::sessions::QueryContext;
 
 pub struct RangeJoinState {
@@ -171,8 +172,29 @@ impl RangeJoinState {
     }
 
     pub(crate) fn partition(&self) -> Result<()> {
+        let max_threads = self.ctx.get_settings().get_max_threads()? as usize;
         let left_table = self.left_table.read();
-        let right_table = self.right_table.read();
+        // Right table is bigger than left table
+        let mut right_table = self.right_table.write();
+        if !left_table.is_empty()
+            && !right_table.is_empty()
+            && left_table.len() * right_table.len() < max_threads
+        {
+            let num_parts = max_threads / left_table.len() + 1;
+            // Spit right_table to num_parts equally
+            let merged_right_table = DataBlock::concat(&right_table)?;
+            let mut indices = Vec::with_capacity(merged_right_table.num_rows());
+            for idx in 0..merged_right_table.num_rows() {
+                indices.push((idx % num_parts) as u32);
+            }
+            let scatter_blocks = DataBlock::scatter(&merged_right_table, &indices, num_parts)?;
+            right_table.clear();
+            for block in scatter_blocks.iter() {
+                if !block.is_empty() {
+                    right_table.push(block.clone());
+                }
+            }
+        }
 
         let mut left_sorted_blocks = self.left_sorted_blocks.write();
         let mut right_sorted_blocks = self.right_sorted_blocks.write();

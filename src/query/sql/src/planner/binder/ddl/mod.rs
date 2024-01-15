@@ -15,6 +15,7 @@
 mod account;
 mod catalog;
 mod column;
+mod connection;
 mod data_mask;
 mod database;
 mod index;
@@ -23,5 +24,6 @@ mod role;
 mod share;
 mod stage;
 mod table;
+mod task;
 mod view;
 mod virtual_column;

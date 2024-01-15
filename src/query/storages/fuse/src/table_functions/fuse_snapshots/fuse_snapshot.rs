@@ -21,7 +21,6 @@ use common_expression::types::StringType;
 use common_expression::types::TimestampType;
 use common_expression::DataBlock;
 use common_expression::FromData;
-use common_expression::FromOptData;
 use common_expression::TableDataType;
 use common_expression::TableField;
 use common_expression::TableSchema;
@@ -110,12 +109,18 @@ impl<'a> FuseSnapshot<'a> {
             snapshot_ids.push(s.snapshot_id.simple().to_string().into_bytes());
             snapshot_locations.push(
                 location_generator
-                    .snapshot_location_from_uuid(&s.snapshot_id, current_snapshot_version)?
+                    .gen_snapshot_location(
+                        &s.snapshot_id,
+                        current_snapshot_version,
+                        s.table_version,
+                    )?
                     .into_bytes(),
             );
-            let (id, ver) = s.prev_snapshot_id.map_or((None, 0), |(id, v)| {
-                (Some(id.simple().to_string().into_bytes()), v)
-            });
+            let (id, ver, _table_version) =
+                s.prev_snapshot_id
+                    .map_or((None, 0, None), |(id, v, table_version)| {
+                        (Some(id.simple().to_string().into_bytes()), v, table_version)
+                    });
             prev_snapshot_ids.push(id);
             format_versions.push(s.format_version);
             segment_count.push(s.segment_count);

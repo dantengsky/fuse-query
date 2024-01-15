@@ -25,7 +25,7 @@ use common_meta_app::principal::OnErrorMode;
 use common_meta_app::principal::StageInfo;
 use common_storage::init_operator;
 
-use super::super::copy::resolve_stage_location;
+use super::super::copy_into_table::resolve_stage_location;
 use crate::binder::location::parse_uri_location;
 use crate::binder::Binder;
 use crate::plans::CreateStagePlan;
@@ -82,7 +82,7 @@ impl Binder {
                     connection: uri.connection.clone(),
                 };
 
-                let (stage_storage, path) = parse_uri_location(&mut uri).await?;
+                let (stage_storage, path) = parse_uri_location(&mut uri, Some(&self.ctx)).await?;
 
                 if !path.ends_with('/') {
                     return Err(ErrorCode::SyntaxException(

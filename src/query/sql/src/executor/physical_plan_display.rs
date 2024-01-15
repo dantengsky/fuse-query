@@ -18,40 +18,45 @@ use std::fmt::Formatter;
 use common_functions::BUILTIN_FUNCTIONS;
 use itertools::Itertools;
 
-use crate::executor::AggregateExpand;
-use crate::executor::AggregateFinal;
-use crate::executor::AggregatePartial;
-use crate::executor::AsyncSourcerPlan;
-use crate::executor::CommitSink;
-use crate::executor::CompactPartial;
-use crate::executor::ConstantTableScan;
-use crate::executor::CopyIntoTable;
-use crate::executor::CteScan;
-use crate::executor::Deduplicate;
-use crate::executor::DeletePartial;
-use crate::executor::DistributedInsertSelect;
-use crate::executor::EvalScalar;
-use crate::executor::Exchange;
-use crate::executor::ExchangeSink;
-use crate::executor::ExchangeSource;
-use crate::executor::Filter;
-use crate::executor::HashJoin;
-use crate::executor::Lambda;
-use crate::executor::Limit;
-use crate::executor::MaterializedCte;
-use crate::executor::MergeInto;
-use crate::executor::MergeIntoSource;
-use crate::executor::PhysicalPlan;
-use crate::executor::Project;
-use crate::executor::ProjectSet;
-use crate::executor::RangeJoin;
-use crate::executor::ReplaceInto;
-use crate::executor::RowFetch;
-use crate::executor::RuntimeFilterSource;
-use crate::executor::Sort;
-use crate::executor::TableScan;
-use crate::executor::UnionAll;
-use crate::executor::Window;
+use crate::executor::physical_plan::PhysicalPlan;
+use crate::executor::physical_plans::AggregateExpand;
+use crate::executor::physical_plans::AggregateFinal;
+use crate::executor::physical_plans::AggregatePartial;
+use crate::executor::physical_plans::CommitSink;
+use crate::executor::physical_plans::CompactSource;
+use crate::executor::physical_plans::ConstantTableScan;
+use crate::executor::physical_plans::CopyIntoTable;
+use crate::executor::physical_plans::CteScan;
+use crate::executor::physical_plans::DeleteSource;
+use crate::executor::physical_plans::DistributedInsertSelect;
+use crate::executor::physical_plans::EvalScalar;
+use crate::executor::physical_plans::Exchange;
+use crate::executor::physical_plans::ExchangeSink;
+use crate::executor::physical_plans::ExchangeSource;
+use crate::executor::physical_plans::Filter;
+use crate::executor::physical_plans::HashJoin;
+use crate::executor::physical_plans::Lambda;
+use crate::executor::physical_plans::Limit;
+use crate::executor::physical_plans::MaterializedCte;
+use crate::executor::physical_plans::MergeInto;
+use crate::executor::physical_plans::MergeIntoAddRowNumber;
+use crate::executor::physical_plans::MergeIntoAppendNotMatched;
+use crate::executor::physical_plans::MergeIntoSource;
+use crate::executor::physical_plans::Project;
+use crate::executor::physical_plans::ProjectSet;
+use crate::executor::physical_plans::RangeJoin;
+use crate::executor::physical_plans::ReclusterSink;
+use crate::executor::physical_plans::ReclusterSource;
+use crate::executor::physical_plans::ReplaceAsyncSourcer;
+use crate::executor::physical_plans::ReplaceDeduplicate;
+use crate::executor::physical_plans::ReplaceInto;
+use crate::executor::physical_plans::RowFetch;
+use crate::executor::physical_plans::RuntimeFilterSource;
+use crate::executor::physical_plans::Sort;
+use crate::executor::physical_plans::TableScan;
+use crate::executor::physical_plans::Udf;
+use crate::executor::physical_plans::UnionAll;
+use crate::executor::physical_plans::Window;
 use crate::plans::JoinType;
 
 impl PhysicalPlan {
@@ -87,22 +92,29 @@ impl<'a> Display for PhysicalPlanIndentFormatDisplay<'a> {
             PhysicalPlan::ExchangeSink(sink) => write!(f, "{}", sink)?,
             PhysicalPlan::UnionAll(union_all) => write!(f, "{}", union_all)?,
             PhysicalPlan::DistributedInsertSelect(insert_select) => write!(f, "{}", insert_select)?,
-            PhysicalPlan::CompactPartial(compact_partial) => write!(f, "{}", compact_partial)?,
-            PhysicalPlan::DeletePartial(delete) => write!(f, "{}", delete)?,
+            PhysicalPlan::CompactSource(compact) => write!(f, "{}", compact)?,
+            PhysicalPlan::DeleteSource(delete) => write!(f, "{}", delete)?,
             PhysicalPlan::CommitSink(commit) => write!(f, "{}", commit)?,
             PhysicalPlan::ProjectSet(unnest) => write!(f, "{}", unnest)?,
             PhysicalPlan::Lambda(lambda) => write!(f, "{}", lambda)?,
             PhysicalPlan::RuntimeFilterSource(plan) => write!(f, "{}", plan)?,
             PhysicalPlan::RangeJoin(plan) => write!(f, "{}", plan)?,
             PhysicalPlan::CopyIntoTable(copy_into_table) => write!(f, "{}", copy_into_table)?,
-            PhysicalPlan::AsyncSourcer(async_sourcer) => write!(f, "{}", async_sourcer)?,
-            PhysicalPlan::Deduplicate(deduplicate) => write!(f, "{}", deduplicate)?,
+            PhysicalPlan::ReplaceAsyncSourcer(async_sourcer) => write!(f, "{}", async_sourcer)?,
+            PhysicalPlan::ReplaceDeduplicate(deduplicate) => write!(f, "{}", deduplicate)?,
             PhysicalPlan::ReplaceInto(replace) => write!(f, "{}", replace)?,
             PhysicalPlan::MergeIntoSource(merge_into_source) => write!(f, "{}", merge_into_source)?,
             PhysicalPlan::MergeInto(merge_into) => write!(f, "{}", merge_into)?,
+            PhysicalPlan::MergeIntoAppendNotMatched(merge_into_row_id_apply) => {
+                write!(f, "{}", merge_into_row_id_apply)?
+            }
+            PhysicalPlan::MergeIntoAddRowNumber(add_row_number) => write!(f, "{}", add_row_number)?,
             PhysicalPlan::CteScan(cte_scan) => write!(f, "{}", cte_scan)?,
             PhysicalPlan::MaterializedCte(plan) => write!(f, "{}", plan)?,
             PhysicalPlan::ConstantTableScan(scan) => write!(f, "{}", scan)?,
+            PhysicalPlan::ReclusterSource(plan) => write!(f, "{}", plan)?,
+            PhysicalPlan::ReclusterSink(plan) => write!(f, "{}", plan)?,
+            PhysicalPlan::Udf(udf) => write!(f, "{}", udf)?,
         }
 
         for node in self.node.children() {
@@ -401,15 +413,15 @@ impl Display for DistributedInsertSelect {
     }
 }
 
-impl Display for CompactPartial {
+impl Display for CompactSource {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "CompactPartial")
+        write!(f, "CompactSource")
     }
 }
 
-impl Display for DeletePartial {
+impl Display for DeleteSource {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "DeletePartial")
+        write!(f, "DeleteSource")
     }
 }
 
@@ -446,13 +458,13 @@ impl Display for ProjectSet {
     }
 }
 
-impl Display for AsyncSourcerPlan {
+impl Display for ReplaceAsyncSourcer {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "AsyncSourcer")
     }
 }
 
-impl Display for Deduplicate {
+impl Display for ReplaceDeduplicate {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "Deduplicate")
     }
@@ -467,6 +479,18 @@ impl Display for ReplaceInto {
 impl Display for MergeInto {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "MergeInto")
+    }
+}
+
+impl Display for MergeIntoAddRowNumber {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "MergeIntoAddRowNumber")
+    }
+}
+
+impl Display for MergeIntoAppendNotMatched {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "MergeIntoAppendNotMatched")
     }
 }
 
@@ -492,5 +516,31 @@ impl Display for Lambda {
             })
             .collect::<Vec<String>>();
         write!(f, "Lambda functions: {}", scalars.join(", "))
+    }
+}
+
+impl Display for ReclusterSource {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ReclusterSource")
+    }
+}
+
+impl Display for ReclusterSink {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ReclusterSink")
+    }
+}
+
+impl Display for Udf {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let scalars = self
+            .udf_funcs
+            .iter()
+            .map(|func| {
+                let arg_exprs = func.arg_exprs.join(", ");
+                format!("{}({})", func.func_name, arg_exprs)
+            })
+            .collect::<Vec<String>>();
+        write!(f, "Udf functions: {}", scalars.join(", "))
     }
 }

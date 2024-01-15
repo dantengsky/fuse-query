@@ -19,12 +19,13 @@ use common_catalog::table::Table;
 use common_catalog::table_context::TableContext;
 use common_exception::Result;
 use common_expression::FieldIndex;
-use common_pipeline_core::pipe::PipeItem;
-use common_pipeline_core::processors::processor::ProcessorPtr;
-use common_pipeline_transforms::processors::transforms::AccumulatingTransformer;
-use common_pipeline_transforms::processors::transforms::AsyncAccumulatingTransformer;
-use common_sql::executor::MutationKind;
-use common_sql::executor::OnConflictField;
+use common_pipeline_core::processors::ProcessorPtr;
+use common_pipeline_core::PipeItem;
+use common_pipeline_core::Pipeline;
+use common_pipeline_transforms::processors::AccumulatingTransformer;
+use common_pipeline_transforms::processors::AsyncAccumulatingTransformer;
+use common_sql::executor::physical_plans::MutationKind;
+use common_sql::executor::physical_plans::OnConflictField;
 use rand::prelude::SliceRandom;
 use storages_common_index::BloomIndex;
 use storages_common_table_meta::meta::BlockSlotDescription;
@@ -38,8 +39,7 @@ use crate::operations::common::CommitSink;
 use crate::operations::common::MutationGenerator;
 use crate::operations::common::TableMutationAggregator;
 use crate::operations::mutation::SegmentIndex;
-use crate::operations::replace_into::MergeIntoOperationAggregator;
-use crate::pipelines::Pipeline;
+use crate::operations::replace_into::mutator::MergeIntoOperationAggregator;
 use crate::FuseTable;
 
 impl FuseTable {
@@ -183,6 +183,7 @@ impl FuseTable {
         base_snapshot: Arc<TableSnapshot>,
         mutation_kind: MutationKind,
         merge_meta: bool,
+        need_lock: bool,
     ) -> Result<()> {
         let cluster_key_id = self.cluster_key_id();
         pipeline.try_resize(1)?;
@@ -210,7 +211,8 @@ impl FuseTable {
             })?;
         }
 
-        let snapshot_gen = MutationGenerator::new(base_snapshot);
+        let snapshot_gen =
+            MutationGenerator::new(base_snapshot, Some(self.current_table_version()));
         pipeline.add_sink(|input| {
             CommitSink::try_create(
                 self,
@@ -219,7 +221,7 @@ impl FuseTable {
                 snapshot_gen.clone(),
                 input,
                 None,
-                false,
+                need_lock,
                 None,
             )
         })

@@ -16,6 +16,8 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
+use chrono::DateTime;
+use chrono::Utc;
 use common_exception::ErrorCode;
 use common_exception::Result;
 use common_meta_app::schema::CatalogInfo;
@@ -25,11 +27,13 @@ use common_meta_app::schema::CreateDatabaseReply;
 use common_meta_app::schema::CreateDatabaseReq;
 use common_meta_app::schema::CreateIndexReply;
 use common_meta_app::schema::CreateIndexReq;
-use common_meta_app::schema::CreateTableLockRevReply;
+use common_meta_app::schema::CreateLockRevReply;
+use common_meta_app::schema::CreateLockRevReq;
 use common_meta_app::schema::CreateTableReply;
 use common_meta_app::schema::CreateTableReq;
 use common_meta_app::schema::CreateVirtualColumnReply;
 use common_meta_app::schema::CreateVirtualColumnReq;
+use common_meta_app::schema::DeleteLockRevReq;
 use common_meta_app::schema::DropDatabaseReply;
 use common_meta_app::schema::DropDatabaseReq;
 use common_meta_app::schema::DropIndexReply;
@@ -39,21 +43,26 @@ use common_meta_app::schema::DropTableReply;
 use common_meta_app::schema::DropVirtualColumnReply;
 use common_meta_app::schema::DropVirtualColumnReq;
 use common_meta_app::schema::DroppedId;
+use common_meta_app::schema::ExtendLockRevReq;
 use common_meta_app::schema::GcDroppedTableReq;
 use common_meta_app::schema::GcDroppedTableResp;
 use common_meta_app::schema::GetIndexReply;
 use common_meta_app::schema::GetIndexReq;
+use common_meta_app::schema::GetLVTReply;
 use common_meta_app::schema::GetTableCopiedFileReply;
 use common_meta_app::schema::GetTableCopiedFileReq;
 use common_meta_app::schema::IndexMeta;
 use common_meta_app::schema::ListDroppedTableReq;
 use common_meta_app::schema::ListIndexesByIdReq;
 use common_meta_app::schema::ListIndexesReq;
+use common_meta_app::schema::ListLockRevReq;
 use common_meta_app::schema::ListVirtualColumnsReq;
+use common_meta_app::schema::LockMeta;
 use common_meta_app::schema::RenameDatabaseReply;
 use common_meta_app::schema::RenameDatabaseReq;
 use common_meta_app::schema::RenameTableReply;
 use common_meta_app::schema::RenameTableReq;
+use common_meta_app::schema::SetLVTReply;
 use common_meta_app::schema::SetTableColumnMaskPolicyReply;
 use common_meta_app::schema::SetTableColumnMaskPolicyReq;
 use common_meta_app::schema::TableIdent;
@@ -259,22 +268,13 @@ pub trait Catalog: DynClone + Send + Sync + Debug {
         req: TruncateTableReq,
     ) -> Result<TruncateTableReply>;
 
-    async fn list_table_lock_revs(&self, table_id: u64) -> Result<Vec<u64>>;
+    async fn list_lock_revisions(&self, req: ListLockRevReq) -> Result<Vec<(u64, LockMeta)>>;
 
-    async fn create_table_lock_rev(
-        &self,
-        expire_secs: u64,
-        table_info: &TableInfo,
-    ) -> Result<CreateTableLockRevReply>;
+    async fn create_lock_revision(&self, req: CreateLockRevReq) -> Result<CreateLockRevReply>;
 
-    async fn extend_table_lock_rev(
-        &self,
-        expire_secs: u64,
-        table_info: &TableInfo,
-        revision: u64,
-    ) -> Result<()>;
+    async fn extend_lock_revision(&self, req: ExtendLockRevReq) -> Result<()>;
 
-    async fn delete_table_lock_rev(&self, table_info: &TableInfo, revision: u64) -> Result<()>;
+    async fn delete_lock_revision(&self, req: DeleteLockRevReq) -> Result<()>;
 
     /// Table function
 
@@ -303,5 +303,13 @@ pub trait Catalog: DynClone + Send + Sync + Debug {
     // Get table engines
     fn get_table_engines(&self) -> Vec<StorageDescription> {
         unimplemented!()
+    }
+
+    async fn set_table_lvt(&self, _table_id: u64, _time: DateTime<Utc>) -> Result<SetLVTReply> {
+        Err(ErrorCode::Unimplemented("'set_table_lvt' not implemented"))
+    }
+
+    async fn get_table_lvt(&self, _table_id: u64) -> Result<GetLVTReply> {
+        Err(ErrorCode::Unimplemented("'get_table_lvt' not implemented"))
     }
 }

@@ -86,9 +86,9 @@ impl Column {
     pub fn take<I>(&self, indices: &[I], string_items_buf: &mut Option<Vec<(u64, usize)>>) -> Self
     where I: common_arrow::arrow::types::Index {
         match self {
-            Column::Null { .. } | Column::EmptyArray { .. } | Column::EmptyMap { .. } => {
-                self.slice(0..indices.len())
-            }
+            Column::Null { .. } => Column::Null { len: indices.len() },
+            Column::EmptyArray { .. } => Column::EmptyArray { len: indices.len() },
+            Column::EmptyMap { .. } => Column::EmptyMap { len: indices.len() },
             Column::Number(column) => with_number_mapped_type!(|NUM_TYPE| match column {
                 NumberColumn::NUM_TYPE(values) => {
                     let builder = Self::take_primitive_types(values, indices);
@@ -262,6 +262,15 @@ impl Column {
     pub fn take_boolean_types<I>(col: &Bitmap, indices: &[I]) -> Bitmap
     where I: common_arrow::arrow::types::Index {
         let num_rows = indices.len();
+        // Fast path: avoid iterating column to generate a new bitmap.
+        // If this [`Bitmap`] is all true or all false and `num_rows <= bitmap.len()``,
+        // we can just slice it.
+        if num_rows <= col.len() && (col.unset_bits() == 0 || col.unset_bits() == col.len()) {
+            let mut bitmap = col.clone();
+            bitmap.slice(0, num_rows);
+            return bitmap;
+        }
+
         let capacity = num_rows.saturating_add(7) / 8;
         let mut builder: Vec<u8> = Vec::with_capacity(capacity);
         let mut builder_len = 0;

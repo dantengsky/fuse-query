@@ -23,22 +23,21 @@ use common_meta_types::MatchSeq;
 use storages_common_table_meta::meta::TableSnapshot;
 use storages_common_table_meta::meta::Versioned;
 use storages_common_table_meta::table::OPT_KEY_SNAPSHOT_LOCATION;
-use uuid::Uuid;
 
 use crate::FuseTable;
 
 impl FuseTable {
     #[inline]
     #[async_backtrace::framed]
-    pub async fn do_truncate(&self, ctx: Arc<dyn TableContext>) -> Result<()> {
+    pub async fn do_truncate(&self, ctx: Arc<dyn TableContext>, purge: bool) -> Result<()> {
         if let Some(prev_snapshot) = self.read_table_snapshot().await? {
             // 1. prepare new snapshot
             let prev_id = prev_snapshot.snapshot_id;
             let prev_format_version = self.snapshot_format_version(None).await?;
             let new_snapshot = TableSnapshot::new(
-                Uuid::new_v4(),
                 &prev_snapshot.timestamp,
-                Some((prev_id, prev_format_version)),
+                Some((prev_id, prev_format_version, prev_snapshot.table_version)),
+                Some(self.current_table_version()),
                 prev_snapshot.schema.clone(),
                 Default::default(),
                 vec![],
@@ -49,8 +48,11 @@ impl FuseTable {
 
             // 2. write down new snapshot
             let loc = self.meta_location_generator();
-            let new_snapshot_loc =
-                loc.snapshot_location_from_uuid(&new_snapshot.snapshot_id, TableSnapshot::VERSION)?;
+            let new_snapshot_loc = loc.gen_snapshot_location(
+                &new_snapshot.snapshot_id,
+                TableSnapshot::VERSION,
+                new_snapshot.table_version,
+            )?;
             let bytes = new_snapshot.to_bytes()?;
             self.operator.write(&new_snapshot_loc, bytes).await?;
 
@@ -82,7 +84,6 @@ impl FuseTable {
                 })
                 .await?;
 
-            // best effort to remove the table's copied files.
             catalog
                 .truncate_table(&self.table_info, TruncateTableReq {
                     table_id,
@@ -97,6 +98,23 @@ impl FuseTable {
                 new_snapshot_loc,
             )
             .await;
+
+            // best effort to remove historical data. if failed, let `vacuum` to do the job.
+            // TODO: consider remove the `purge` option from `truncate`
+            // - it is not a safe operation, there is NO retention interval protection here
+            // - it is incompatible with time travel features
+            if purge {
+                let snapshot_files = self.list_snapshot_files().await?;
+                let keep_last_snapshot = false;
+                let ret = self
+                    .do_purge(&ctx, snapshot_files, None, keep_last_snapshot, false)
+                    .await;
+                if let Err(e) = ret {
+                    return Err(e);
+                } else {
+                    return Ok(());
+                }
+            }
         }
 
         Ok(())

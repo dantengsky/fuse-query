@@ -36,8 +36,8 @@ use crate::storages::fuse::operations::mutation::compact_segment;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_fuse_purge_normal_case() -> Result<()> {
-    let fixture = TestFixture::new().await;
-    let ctx = fixture.ctx();
+    let fixture = TestFixture::new().await?;
+    let ctx = fixture.new_query_ctx().await?;
     fixture.create_default_table().await?;
 
     // ingests some test data
@@ -71,8 +71,8 @@ async fn test_fuse_purge_normal_case() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_fuse_purge_normal_orphan_snapshot() -> Result<()> {
-    let fixture = TestFixture::new().await;
-    let ctx = fixture.ctx();
+    let fixture = TestFixture::new().await?;
+    let ctx = fixture.new_query_ctx().await?;
     fixture.create_default_table().await?;
 
     // ingests some test data
@@ -87,11 +87,17 @@ async fn test_fuse_purge_normal_orphan_snapshot() -> Result<()> {
         let operator = fuse_table.get_operator();
         let location_gen = fuse_table.meta_location_generator();
         let orphan_snapshot_id = Uuid::new_v4();
-        let orphan_snapshot_location = location_gen
-            .snapshot_location_from_uuid(&orphan_snapshot_id, TableSnapshot::VERSION)?;
+        let orphan_snapshot_location = location_gen.gen_snapshot_location(
+            &orphan_snapshot_id,
+            TableSnapshot::VERSION,
+            None,
+        )?;
         // orphan_snapshot is created by using `from_previous`, which guarantees
         // that the timestamp of snapshot returned is larger than `current_snapshot`'s.
-        let orphan_snapshot = TableSnapshot::from_previous(current_snapshot.as_ref());
+        let orphan_snapshot = TableSnapshot::from_previous(
+            current_snapshot.as_ref(),
+            Some(fuse_table.current_table_version()),
+        );
         orphan_snapshot
             .write_meta(&operator, &orphan_snapshot_location)
             .await?;
@@ -114,9 +120,9 @@ async fn test_fuse_purge_normal_orphan_snapshot() -> Result<()> {
         "do_gc: there should be 1 snapshot, 0 segment/block",
         expected_num_of_snapshot,
         0, // 0 snapshot statistic
-        1, // 1 segments
-        1, // 1 blocks
-        1, // 1 index
+        1, // 0 segments
+        1, // 0 blocks
+        1, // 0 index
         Some(()),
         None,
     )
@@ -173,8 +179,8 @@ async fn test_fuse_purge_orphan_retention() -> Result<()> {
     //  - 3 segments left: seg_c, seg_2, seg_1
     //  - 3 blocks left: block_c, block_2, block_1
 
-    let fixture = TestFixture::new().await;
-    let ctx = fixture.ctx();
+    let fixture = TestFixture::new().await?;
+    let ctx = fixture.new_query_ctx().await?;
     fixture.create_default_table().await?;
 
     // 1. prepare `S_1`
@@ -198,9 +204,13 @@ async fn test_fuse_purge_orphan_retention() -> Result<()> {
 
     // 2. prepare S_2
     let new_timestamp = base_timestamp + Duration::minutes(1);
-    let _snapshot_location =
-        generate_snapshot_with_segments(fuse_table, segment_locations.clone(), Some(new_timestamp))
-            .await?;
+    let _snapshot_location = generate_snapshot_with_segments(
+        fuse_table,
+        segment_locations.clone(),
+        Some(new_timestamp),
+        true,
+    )
+    .await?;
 
     // 2. prepare S_0
     {
@@ -213,6 +223,7 @@ async fn test_fuse_purge_orphan_retention() -> Result<()> {
             fuse_table,
             segment_locations.clone(),
             Some(new_timestamp),
+            true,
         )
         .await?;
     }
@@ -246,10 +257,10 @@ async fn test_fuse_purge_orphan_retention() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_fuse_purge_older_version() -> Result<()> {
-    let fixture = TestFixture::new().await;
+    let fixture = TestFixture::new().await?;
     fixture.create_normal_table().await?;
     generate_snapshots(&fixture).await?;
-    let ctx = fixture.ctx();
+    let ctx = fixture.new_query_ctx().await?;
     let table_ctx: Arc<dyn TableContext> = ctx.clone();
     let now = Utc::now();
 

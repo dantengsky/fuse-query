@@ -17,6 +17,8 @@ use std::ops::Range;
 
 use common_arrow::arrow::buffer::Buffer;
 use common_arrow::arrow::trusted_len::TrustedLen;
+use common_exception::ErrorCode;
+use common_exception::Result;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -230,6 +232,27 @@ impl StringColumn {
             offsets: self.offsets.windows(2),
         }
     }
+
+    pub fn check_valid(&self) -> Result<()> {
+        let offsets = self.offsets.as_slice();
+        let len = offsets.len();
+        if len < 1 {
+            return Err(ErrorCode::Internal(format!(
+                "StringColumn offsets length must be equal or greater than 1, but got {}",
+                len
+            )));
+        }
+
+        for i in 1..len {
+            if offsets[i] < offsets[i - 1] {
+                return Err(ErrorCode::Internal(format!(
+                    "StringColumn offsets value must be equal or greater than previous value, but got {}",
+                    offsets[i]
+                )));
+            }
+        }
+        Ok(())
+    }
 }
 
 pub struct StringIterator<'a> {
@@ -307,6 +330,10 @@ impl StringColumnBuilder {
 
     pub fn len(&self) -> usize {
         self.offsets.len() - 1
+    }
+
+    pub fn memory_size(&self) -> usize {
+        self.offsets.len() * 8 + self.data.len()
     }
 
     pub fn put_u8(&mut self, item: u8) {
