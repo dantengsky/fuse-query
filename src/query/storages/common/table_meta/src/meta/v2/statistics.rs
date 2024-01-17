@@ -97,13 +97,15 @@ impl ColumnStatistics {
         }
     }
 
-    pub fn fix_binary_to_string(&mut self) {
+    pub fn fix_binary_to_string(&mut self) -> bool {
+        let mut fixed = false;
         if let Scalar::Binary(data) = &self.min {
             log::warn!(
                 "Fixed reading binary min to string of binary data {:?}",
                 data
             );
             self.min = Scalar::String(data.clone());
+            fixed = true;
         }
         if let Scalar::Binary(data) = &self.max {
             log::warn!(
@@ -111,7 +113,10 @@ impl ColumnStatistics {
                 data
             );
             self.max = Scalar::String(data.clone());
+            fixed = true;
         }
+
+        fixed
     }
 }
 
@@ -189,9 +194,14 @@ impl Statistics {
         }
     }
 
-    pub fn fix_binary_to_string(&mut self) {
+    pub fn fix_binary_to_string(&mut self) -> bool {
+        let mut read_fixed = false;
         for (_, col_stats) in self.col_stats.iter_mut() {
-            col_stats.fix_binary_to_string()
+            let fixed = col_stats.fix_binary_to_string();
+            if !read_fixed && fixed {
+                read_fixed = true
+            }
         }
+        read_fixed
     }
 }

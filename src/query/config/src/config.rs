@@ -97,6 +97,18 @@ pub struct Config {
     #[clap(long)]
     pub cmd: Option<String>,
 
+    #[clap(long, default_value_t)]
+    pub revise_db: String,
+
+    #[clap(long, default_value_t)]
+    pub revise_tables: String,
+
+    #[clap(long, default_value = "/tmp/output")]
+    pub revise_output_file: String,
+
+    #[clap(long, default_value = "100")]
+    pub revise_parallel: u32,
+
     #[clap(long, short = 'c', value_name = "VALUE", default_value_t)]
     pub config_file: String,
 
@@ -188,7 +200,7 @@ impl Config {
         }
 
         if arg_conf.subcommand.is_some() {
-            return Ok(arg_conf);
+            // return Ok(arg_conf);
         }
 
         let mut builder: serfig::Builder<Self> = serfig::Builder::default();
@@ -2748,6 +2760,12 @@ mod cache_config_converters {
                     .collect(),
                 cache: inner.cache.into(),
                 background: inner.background.into(),
+
+                revise_db: inner.revise_db,
+                revise_tables: inner.revise_tables,
+
+                revise_output_file: inner.revise_output_file,
+                revise_parallel: inner.revise_parallel,
             }
         }
     }
@@ -2780,6 +2798,10 @@ mod cache_config_converters {
                 catalogs,
                 cache: self.cache.try_into()?,
                 background: self.background.try_into()?,
+                revise_db: self.revise_db,
+                revise_tables: self.revise_tables,
+                revise_output_file: self.revise_output_file,
+                revise_parallel: self.revise_parallel,
             })
         }
     }

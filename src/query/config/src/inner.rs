@@ -64,6 +64,14 @@ pub struct InnerConfig {
 
     // Background Config
     pub background: InnerBackgroundConfig,
+
+    pub revise_db: String,
+
+    pub revise_tables: String,
+
+    pub revise_output_file: String,
+
+    pub revise_parallel: u32,
 }
 
 impl InnerConfig {

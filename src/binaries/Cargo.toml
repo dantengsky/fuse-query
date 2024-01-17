@@ -120,6 +120,13 @@ doctest = false
 test = false
 
 [[bin]]
+name = "databend-revise"
+path = "query/revise_main.rs"
+doctest = false
+test = false
+
+
+[[bin]]
 name = "open-sharing"
 path = "opensharing/main.rs"
 doctest = false

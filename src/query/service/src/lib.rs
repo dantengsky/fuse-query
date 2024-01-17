@@ -63,3 +63,6 @@ mod global_services;
 pub use databend_common_sql as sql;
 pub use databend_common_storages_factory as storages;
 pub use global_services::GlobalServices;
+
+
+pub mod table_meta_data_revise;

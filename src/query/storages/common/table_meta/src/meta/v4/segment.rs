@@ -87,9 +87,9 @@ impl SegmentInfo {
             .iter()
             .map(|b| {
                 let mut c = b.as_ref().clone();
-                c.col_stats
-                    .iter_mut()
-                    .for_each(|(_, x)| x.fix_binary_to_string());
+                c.col_stats.iter_mut().for_each(|(_, x)| {
+                    let _ = x.fix_binary_to_string();
+                });
 
                 Arc::new(c)
             })
@@ -235,6 +235,8 @@ pub struct CompactSegmentInfo {
     pub format_version: FormatVersion,
     pub summary: Statistics,
     pub raw_block_metas: RawBlockMeta,
+    #[serde(skip)]
+    pub fixed: bool,
 }
 
 impl CompactSegmentInfo {
@@ -254,7 +256,7 @@ impl CompactSegmentInfo {
         let mut summary: Statistics =
             read_and_deserialize(&mut cursor, summary_size, &encoding, &compression)?;
 
-        summary.fix_binary_to_string();
+        let read_fixed = summary.fix_binary_to_string();
 
         let segment = CompactSegmentInfo {
             format_version: version,
@@ -264,6 +266,7 @@ impl CompactSegmentInfo {
                 encoding,
                 compression,
             },
+            fixed: read_fixed,
         };
         Ok(segment)
     }
@@ -281,9 +284,9 @@ impl CompactSegmentInfo {
             .iter()
             .map(|b| {
                 let mut c = b.as_ref().clone();
-                c.col_stats
-                    .iter_mut()
-                    .for_each(|(_, x)| x.fix_binary_to_string());
+                c.col_stats.iter_mut().for_each(|(_, x)| {
+                    x.fix_binary_to_string();
+                });
 
                 Arc::new(c)
             })
@@ -325,6 +328,9 @@ impl TryFrom<&SegmentInfo> for CompactSegmentInfo {
             format_version: value.format_version,
             summary: value.summary.clone(),
             raw_block_metas: bytes,
+            // for revise tool, we need not  to track if segment has been read-fixed in the case
+            // since we detect the read-fix at CompactSegmentInfo level
+            fixed: false,
         })
     }
 }
@@ -338,6 +344,9 @@ impl TryFrom<SegmentInfo> for CompactSegmentInfo {
             format_version: value.format_version,
             summary: value.summary,
             raw_block_metas: bytes,
+            // for revise tool, we need not  to track if segment has been read-fixed in the case
+            // since we detect the read-fix at CompactSegmentInfo level
+            fixed: false,
         })
     }
 }
