@@ -67,11 +67,7 @@ pub fn deserialize_column_chunks(
         ParquetCompression::from(*compression),
     );
 
-    for (col_desc, table_field) in parquet_schema
-        .columns()
-        .iter()
-        .zip(filtered_schema.fields.iter())
-    {
+    for table_field in &filtered_schema.fields {
         let data_item = column_chunks.get(&table_field.column_id).unwrap();
         match data_item {
             DataItem::RawData(bytes) => {
@@ -89,8 +85,15 @@ pub fn deserialize_column_chunks(
         .zip(filtered_schema.fields.iter())
     {
         use parquet_rs::arrow::schema::complex::convert_type;
-        let parquet_field = convert_type(&col_desc.self_type_ptr())?;
+        let mut parquet_field = convert_type(&col_desc.self_type_ptr())?;
         let projection_mask = ProjectionMask::all();
+
+        use parquet_rs::arrow::schema::complex::ParquetFieldType;
+
+        if let ParquetFieldType::Primitive { col_idx, .. } = &mut parquet_field.field_type {
+            *col_idx = table_field.column_id as usize;
+        }
+
         let mut reader =
             build_array_reader(Some(&parquet_field), &projection_mask, row_group.as_ref())?;
         let array = reader.next_batch(num_rows)?;
