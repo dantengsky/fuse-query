@@ -16,6 +16,7 @@ use std::collections::HashMap;
 
 use arrow_array::ArrayRef;
 use arrow_array::RecordBatch;
+use databend_common_arrow::parquet::encoding::bitpacked::encode_pack;
 use databend_common_expression::converts::arrow::table_schema_to_arrow_schema_ignore_inside_nullable;
 use databend_common_expression::Column;
 use databend_common_expression::ColumnId;
@@ -40,40 +41,23 @@ pub fn deserialize_column_chunks(
     compression: &Compression,
     //) -> databend_common_exception::Result<RecordBatch> {
 ) -> databend_common_exception::Result<HashMap<ColumnId, ArrayRef>> {
-    // TODO projection not handled correctly (leaf nodes)
-    let filtered_fields = original_schema
-        .fields
-        .iter()
-        .filter(|id| column_chunks.contains_key(&id.column_id))
-        .map(|c| c.clone())
-        .collect::<Vec<_>>();
-
-    let filtered_schema = TableSchema::new_from(filtered_fields, original_schema.metadata.clone());
-
-    // let arrow_schema = table_schema_to_arrow_schema_ignore_inside_nullable(original_schema);
-    let arrow_schema = table_schema_to_arrow_schema_ignore_inside_nullable(&filtered_schema);
+    let arrow_schema = table_schema_to_arrow_schema_ignore_inside_nullable(original_schema);
     let parquet_schema = arrow_to_parquet_schema(&arrow_schema)?;
 
-    // let column_id_to_dfs_id = original_schema
-    //    .to_leaf_column_ids()
-    //    .iter()
-    //    .enumerate()
-    //    .map(|(dfs_id, column_id)| (*column_id, dfs_id))
-    //    .collect::<HashMap<_, _>>();
-    // let mut projection_mask = Vec::with_capacity(column_chunks.len());
     let mut builder = RowGroupImplBuilder::new(
         num_rows,
         &parquet_schema,
         ParquetCompression::from(*compression),
     );
 
-    for table_field in &filtered_schema.fields {
-        let data_item = column_chunks.get(&table_field.column_id).unwrap();
-        match data_item {
-            DataItem::RawData(bytes) => {
-                builder.add_column_chunk(table_field.column_id as usize, bytes.clone());
+    for table_field in &original_schema.fields {
+        if let Some(data_item) = column_chunks.get(&table_field.column_id) {
+            match data_item {
+                DataItem::RawData(bytes) => {
+                    builder.add_column_chunk(table_field.column_id as usize, bytes.clone());
+                }
+                DataItem::ColumnArray(_) => {}
             }
-            DataItem::ColumnArray(_) => {}
         }
     }
 
@@ -82,8 +66,12 @@ pub fn deserialize_column_chunks(
     for (col_desc, table_field) in parquet_schema
         .columns()
         .iter()
-        .zip(filtered_schema.fields.iter())
+        .zip(original_schema.fields.iter())
     {
+        if !column_chunks.contains_key(&table_field.column_id) {
+            continue;
+        }
+
         use parquet_rs::arrow::schema::complex::convert_type;
         let mut parquet_field = convert_type(&col_desc.self_type_ptr())?;
         let projection_mask = ProjectionMask::all();
