@@ -435,7 +435,7 @@ impl DataBlock {
     }
 
     // If default_vals[i].is_some(), then DataBlock.column[i] = num_rows * default_vals[i].
-    // Else, DataBlock.column[i] = chuck.column.
+    // Else, DataBlock.column[i] = chunk.column.
     // For example, Schema.field is [a,b,c] and default_vals is [Some("a"), None, Some("c")],
     // then the return block column will be ["a"*num_rows, chunk.column[0], "c"*num_rows].
     pub fn create_with_default_value_and_chunk<A: AsRef<dyn Array>>(
