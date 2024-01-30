@@ -113,7 +113,9 @@ impl ReclusterMutator {
         let max_threads = self.ctx.get_settings().get_max_threads()? as usize;
         let max_blocks_num = std::cmp::max(
             memory_threshold / self.block_thresholds.max_bytes_per_block,
-            max_threads,
+            // specify a rather small value, so that setting `recluster_block_size`
+            // might be tuned to lower value.
+            2,
         ) * self.max_tasks;
 
         let arrow_schema = self.schema.as_ref().into();
