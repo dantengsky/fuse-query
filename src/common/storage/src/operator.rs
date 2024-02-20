@@ -58,6 +58,8 @@ use opendal::services;
 use opendal::Builder;
 use opendal::Operator;
 use reqwest_hickory_resolver::HickoryResolver;
+use serde::Deserialize;
+use serde::Serialize;
 
 use crate::runtime_layer::RuntimeLayer;
 use crate::StorageConfig;
@@ -506,5 +508,75 @@ impl DataOperator {
 
     pub fn instance() -> DataOperator {
         GlobalInstance::get()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fmt::Debug;
+    use std::fmt::Formatter;
+    use std::task::Context;
+    use std::task::Poll;
+
+    use databend_common_base::base::tokio;
+    use futures::TryStreamExt;
+    use opendal::raw::oio::Entry;
+    use opendal::raw::oio::List;
+    use opendal::raw::Accessor;
+    use opendal::raw::AccessorInfo;
+    use opendal::raw::Layer;
+    use opendal::raw::OpList;
+    use opendal::raw::RpList;
+
+    use super::*;
+
+    #[derive(Debug)]
+    struct DummyAccessor {}
+
+    struct DummyLister {}
+
+    impl List for DummyLister {
+        fn poll_next(&mut self, cx: &mut Context<'_>) -> Poll<opendal::Result<Option<Entry>>> {
+            // never ready
+            Poll::Pending
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Accessor for DummyAccessor {
+        type Reader = ();
+        type Writer = ();
+        type Lister = DummyLister;
+        type BlockingReader = ();
+        type BlockingWriter = ();
+        type BlockingLister = ();
+
+        fn info(&self) -> AccessorInfo {
+            // AccessorInfo::default()
+            todo!()
+        }
+
+        async fn list(&self, path: &str, args: OpList) -> opendal::Result<(RpList, Self::Lister)> {
+            let (_, _) = (path, args);
+
+            Ok((RpList::default(), DummyLister {}))
+        }
+    }
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_list_timeout() -> databend_common_exception::Result<()> {
+        let timeout_layer = TimeoutLayer::new()
+            .with_io_timeout(Duration::from_secs(1))
+            .with_timeout(Duration::from_secs(1));
+
+        let inner = DummyAccessor {};
+        let timeout_accessor = timeout_layer.layer(inner);
+
+        let (_, mut lister) = timeout_accessor.list("/", OpList::default()).await?;
+
+        use opendal::raw::oio::ListExt;
+        while let Some(obj) = lister.next().await? {
+            break;
+        }
+        Ok(())
     }
 }
