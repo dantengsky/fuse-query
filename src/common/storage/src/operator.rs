@@ -515,18 +515,25 @@ impl DataOperator {
 mod tests {
     use std::fmt::Debug;
     use std::fmt::Formatter;
+    use std::io::SeekFrom;
     use std::task::Context;
     use std::task::Poll;
 
+    use bytes::Bytes;
     use databend_common_base::base::tokio;
     use futures::TryStreamExt;
+    use log::info;
     use opendal::raw::oio::Entry;
     use opendal::raw::oio::List;
+    use opendal::raw::oio::Read;
+    use opendal::raw::oio::ReadExt;
     use opendal::raw::Accessor;
     use opendal::raw::AccessorInfo;
     use opendal::raw::Layer;
     use opendal::raw::OpList;
+    use opendal::raw::OpRead;
     use opendal::raw::RpList;
+    use opendal::raw::RpRead;
 
     use super::*;
 
@@ -537,14 +544,37 @@ mod tests {
 
     impl List for DummyLister {
         fn poll_next(&mut self, cx: &mut Context<'_>) -> Poll<opendal::Result<Option<Entry>>> {
+            eprintln!(">>list poll_next return pending");
             // never ready
+            Poll::Pending
+        }
+    }
+
+    struct DummyRead {}
+
+    impl Read for DummyRead {
+        fn poll_read(
+            &mut self,
+            cx: &mut Context<'_>,
+            buf: &mut [u8],
+        ) -> Poll<opendal::Result<usize>> {
+            eprintln!(">> Read  poll_read return pending");
+            Poll::Pending
+        }
+
+        fn poll_seek(&mut self, cx: &mut Context<'_>, pos: SeekFrom) -> Poll<opendal::Result<u64>> {
+            todo!()
+        }
+
+        fn poll_next(&mut self, cx: &mut Context<'_>) -> Poll<Option<opendal::Result<Bytes>>> {
+            eprintln!(">> Read  poll_next return pending");
             Poll::Pending
         }
     }
 
     #[async_trait::async_trait]
     impl Accessor for DummyAccessor {
-        type Reader = ();
+        type Reader = DummyRead;
         type Writer = ();
         type Lister = DummyLister;
         type BlockingReader = ();
@@ -561,7 +591,13 @@ mod tests {
 
             Ok((RpList::default(), DummyLister {}))
         }
+
+        async fn read(&self, path: &str, args: OpRead) -> opendal::Result<(RpRead, Self::Reader)> {
+            let (_, _) = (path, args);
+            Ok((RpRead::default(), DummyRead {}))
+        }
     }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn test_list_timeout() -> databend_common_exception::Result<()> {
         let timeout_layer = TimeoutLayer::new()
@@ -577,6 +613,30 @@ mod tests {
         while let Some(obj) = lister.next().await? {
             break;
         }
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_read_timeout() -> databend_common_exception::Result<()> {
+        let timeout_layer = TimeoutLayer::new()
+            .with_io_timeout(Duration::from_secs(1))
+            .with_timeout(Duration::from_secs(1));
+
+        let inner = DummyAccessor {};
+        let timeout_accessor = timeout_layer.layer(inner);
+
+        let (_, mut reader) = timeout_accessor
+            .read("/do_not_matter", OpRead::new())
+            .await?;
+
+        let mut buffer = Vec::with_capacity(1024);
+
+        // no timeout
+        let _ = reader.read(&mut buffer).await?;
+
+        // not timeout for `poll_next` either
+        // while let Some(item) = reader.next().await {}
+
         Ok(())
     }
 }
