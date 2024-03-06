@@ -98,6 +98,7 @@ impl Binder {
             error_integration,
             sql,
             session_parameters,
+            ..
         } = stmt;
         if (schedule_opts.is_none() && after.is_empty())
             || (schedule_opts.is_some() && !after.is_empty())

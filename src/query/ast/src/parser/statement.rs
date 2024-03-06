@@ -106,6 +106,41 @@ pub fn statement(i: Input) -> IResult<StatementWithFormat> {
         },
     );
 
+    // TODO add more allowed stmts
+    let allowed_stmts = alt((
+        begin_txn,
+        commit,
+        rollback,
+        plain_insert,
+        merge,
+        delete,
+        vacuum_temp_files,
+        vacuum_table,
+    ));
+
+    enum TaskBody {
+        Statement(StatementWithFormat),
+        Block(Vec<Statement>),
+    }
+
+    let task_block = map(
+        rule! {
+            BEGIN
+            ~ #task_statements(allowed_stmts)
+            ~ END
+        },
+        |(_, stmts, _)| TaskBody::Block(stmts),
+    );
+
+    let task_stmt = map(
+        rule! {
+            #statement
+        },
+        |stmt| TaskBody::Statement(stmt),
+    );
+
+    let task_body = alt((task_stmt, task_block));
+
     let create_task = map(
         rule! {
             CREATE ~ TASK ~ ( IF ~ ^NOT ~ ^EXISTS )?
@@ -118,7 +153,8 @@ pub fn statement(i: Input) -> IResult<StatementWithFormat> {
             ~ ( ERROR_INTEGRATION ~  ^"=" ~ ^#literal_string )?
             ~ ( (COMMENT | COMMENTS) ~ ^"=" ~ ^#literal_string )?
             ~ (#set_table_option)?
-            ~ AS ~ #statement
+            ~ AS
+            ~ #task_body
         },
         |(
             _,
@@ -134,9 +170,17 @@ pub fn statement(i: Input) -> IResult<StatementWithFormat> {
             comment_opt,
             session_opts,
             _,
-            sql,
+            task_body,
         )| {
-            let sql = format!("{}", sql.stmt);
+            // demo only, should not impl in this way
+            let (sql, sqls) = match task_body {
+                TaskBody::Statement(v) => (format!("{}", v.stmt), None),
+                TaskBody::Block(stmts) => {
+                    let sqls = stmts.iter().map(|stmt| format!("{}", stmt)).collect();
+                    ("".to_owned(), Some(sqls))
+                }
+            };
+
             let session_opts = session_opts.unwrap_or_default();
             Statement::CreateTask(CreateTaskStmt {
                 if_not_exists: opt_if_not_exists.is_some(),
@@ -153,6 +197,7 @@ pub fn statement(i: Input) -> IResult<StatementWithFormat> {
                 when_condition: when_conditions.map(|(_, cond)| cond.to_string()),
                 sql,
                 session_parameters: session_opts,
+                sqls,
             })
         },
     );
@@ -264,50 +309,6 @@ pub fn statement(i: Input) -> IResult<StatementWithFormat> {
                     .unwrap_or_default(),
                 source,
                 delete_when: opt_delete_when.map(|(_, _, expr)| expr),
-            })
-        },
-    );
-
-    let merge = map(
-        rule! {
-            MERGE ~ #hint? ~ INTO ~ #dot_separated_idents_1_to_3 ~ #table_alias? ~ USING
-            ~ #merge_source ~ ON ~ #expr ~ (#match_clause | #unmatch_clause)*
-        },
-        |(
-            _,
-            opt_hints,
-            _,
-            (catalog, database, table),
-            target_alias,
-            _,
-            source,
-            _,
-            join_expr,
-            merge_options,
-        )| {
-            Statement::MergeInto(MergeIntoStmt {
-                hints: opt_hints,
-                catalog,
-                database,
-                table_ident: table,
-                source,
-                target_alias,
-                join_expr,
-                merge_options,
-            })
-        },
-    );
-
-    let delete = map(
-        rule! {
-            DELETE ~ #hint? ~ FROM ~ #table_reference_with_alias
-            ~ ( WHERE ~ ^#expr )?
-        },
-        |(_, hints, _, table, opt_selection)| {
-            Statement::Delete(DeleteStmt {
-                hints,
-                table,
-                selection: opt_selection.map(|(_, selection)| selection),
             })
         },
     );
@@ -845,30 +846,7 @@ pub fn statement(i: Input) -> IResult<StatementWithFormat> {
             })
         },
     );
-    let vacuum_temp_files = map(
-        rule! {
-            VACUUM ~ TEMPORARY ~ FILES ~ (RETAIN ~ #literal_duration)? ~ (LIMIT ~ #literal_u64)?
-        },
-        |(_, _, _, retain, opt_limit)| {
-            Statement::VacuumTemporaryFiles(VacuumTemporaryFiles {
-                limit: opt_limit.map(|(_, limit)| limit),
-                retain: retain.map(|(_, reatin)| reatin),
-            })
-        },
-    );
-    let vacuum_table = map(
-        rule! {
-            VACUUM ~ TABLE ~ #dot_separated_idents_1_to_3 ~ #vacuum_table_option
-        },
-        |(_, _, (catalog, database, table), option)| {
-            Statement::VacuumTable(VacuumTableStmt {
-                catalog,
-                database,
-                table,
-                option,
-            })
-        },
-    );
+
     let vacuum_drop_table = map(
         rule! {
             VACUUM ~ DROP ~ TABLE ~ (FROM ~ ^#dot_separated_idents_1_to_2)? ~ #vacuum_drop_table_option
@@ -2323,6 +2301,23 @@ pub fn insert_source(i: Input) -> IResult<InsertSource> {
     )(i)
 }
 
+pub fn insert_source_in_task(i: Input) -> IResult<InsertSource> {
+    let values = map(
+        rule! {
+            VALUES ~ #rest_str_in_task
+        },
+        |(_, (rest_str, start))| InsertSource::Values { rest_str, start },
+    );
+    let query = map(query, |query| InsertSource::Select {
+        query: Box::new(query),
+    });
+
+    rule!(
+        #values
+        | #query
+    )(i)
+}
+
 pub fn merge_source(i: Input) -> IResult<MergeSource> {
     let streaming_v2 = map(
         rule! {
@@ -2416,6 +2411,27 @@ pub fn rest_str(i: Input) -> IResult<(String, usize)> {
             first_token.span.start(),
         ),
     ))
+}
+
+pub fn rest_str_in_task(i: Input) -> IResult<(String, usize)> {
+    let first_token = i.0.first().unwrap();
+    for (idx, x) in i.0.iter().enumerate() {
+        if x.kind == RParen {
+            let last_token = x;
+            return Ok((
+                i.slice(idx + 1..),
+                (
+                    first_token.source[first_token.span.start()..last_token.span.end()].to_string(),
+                    first_token.span.start(),
+                ),
+            ));
+        }
+    }
+
+    Err(nom::Err::Error(Error::from_error_kind(
+        i,
+        ErrorKind::Other("right paren not found while parsing values"),
+    )))
 }
 
 pub fn column_def(i: Input) -> IResult<ColumnDefinition> {
@@ -3880,6 +3896,121 @@ pub fn explain_option(i: Input) -> IResult<ExplainOption> {
             LOGICAL => ExplainOption::Logical(true),
             OPTIMIZED => ExplainOption::Optimized(true),
             _ => unreachable!(),
+        },
+    )(i)
+}
+
+pub fn begin_txn(i: Input) -> IResult<Statement> {
+    value(Statement::Begin, rule! { BEGIN })(i)
+}
+
+pub fn commit(i: Input) -> IResult<Statement> {
+    value(Statement::Commit, rule! { COMMIT})(i)
+}
+
+pub fn rollback(i: Input) -> IResult<Statement> {
+    value(Statement::Abort, rule! { ABORT | ROLLBACK })(i)
+}
+
+pub fn vacuum_table(i: Input) -> IResult<Statement> {
+    map(
+        rule! {
+            VACUUM ~ TABLE ~ #dot_separated_idents_1_to_3 ~ #vacuum_table_option
+        },
+        |(_, _, (catalog, database, table), option)| {
+            Statement::VacuumTable(VacuumTableStmt {
+                catalog,
+                database,
+                table,
+                option,
+            })
+        },
+    )(i)
+}
+
+pub fn vacuum_temp_files(i: Input) -> IResult<Statement> {
+    map(
+        rule! {
+            VACUUM ~ TEMPORARY ~ FILES ~ (RETAIN ~ #literal_duration)? ~ (LIMIT ~ #literal_u64)?
+        },
+        |(_, _, _, retain, opt_limit)| {
+            Statement::VacuumTemporaryFiles(VacuumTemporaryFiles {
+                limit: opt_limit.map(|(_, limit)| limit),
+                retain: retain.map(|(_, reatin)| reatin),
+            })
+        },
+    )(i)
+}
+
+pub fn merge(i: Input) -> IResult<Statement> {
+    map(
+        rule! {
+            MERGE ~ #hint? ~ INTO ~ #dot_separated_idents_1_to_3 ~ #table_alias? ~ USING
+            ~ #merge_source ~ ON ~ #expr ~ (#match_clause | #unmatch_clause)*
+        },
+        |(
+            _,
+            opt_hints,
+            _,
+            (catalog, database, table),
+            target_alias,
+            _,
+            source,
+            _,
+            join_expr,
+            merge_options,
+        )| {
+            Statement::MergeInto(MergeIntoStmt {
+                hints: opt_hints,
+                catalog,
+                database,
+                table_ident: table,
+                source,
+                target_alias,
+                join_expr,
+                merge_options,
+            })
+        },
+    )(i)
+}
+
+pub fn delete(i: Input) -> IResult<Statement> {
+    map(
+        rule! {
+            DELETE ~ #hint? ~ FROM ~ #table_reference_with_alias
+            ~ ( WHERE ~ ^#expr )?
+        },
+        |(_, hints, _, table, opt_selection)| {
+            Statement::Delete(DeleteStmt {
+                hints,
+                table,
+                selection: opt_selection.map(|(_, selection)| selection),
+            })
+        },
+    )(i)
+}
+
+// parse a plain insert statement which do not support streaming upload
+fn plain_insert(i: Input) -> IResult<Statement> {
+    map(
+        rule! {
+            INSERT ~ #hint? ~ ( INTO | OVERWRITE ) ~ TABLE?
+            ~ #dot_separated_idents_1_to_3
+            ~ ( "(" ~ #comma_separated_list1(ident) ~ ")" )?
+            ~ #insert_source_in_task
+        },
+        |(_, opt_hints, overwrite, _, (catalog, database, table), opt_columns, source)| {
+            Statement::Insert(InsertStmt {
+                hints: opt_hints,
+                catalog,
+                database,
+                table,
+                columns: opt_columns
+                    .map(|(_, columns, _)| columns)
+                    .unwrap_or_default(),
+                source,
+                overwrite: overwrite.kind == OVERWRITE,
+            })
         },
     )(i)
 }

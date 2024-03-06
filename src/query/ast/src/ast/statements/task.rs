@@ -44,6 +44,10 @@ pub struct CreateTaskStmt {
     pub when_condition: Option<String>,
     #[drive(skip)]
     pub sql: String,
+
+    // demo only, should not impl in this way
+    #[drive(skip)]
+    pub sqls: Option<Vec<String>>,
 }
 
 impl Display for CreateTaskStmt {
@@ -88,7 +92,15 @@ impl Display for CreateTaskStmt {
             )?;
         }
 
-        write!(f, " AS {}", self.sql)?;
+        match &self.sqls {
+            None => write!(f, " AS {}", self.sql)?,
+            Some(sqls) => {
+                write!(f, "\nBEGIN\n")?;
+                let stmts = sqls.join(";\n");
+                write!(f, "{}", stmts)?;
+                write!(f, "END")?;
+            }
+        }
         Ok(())
     }
 }

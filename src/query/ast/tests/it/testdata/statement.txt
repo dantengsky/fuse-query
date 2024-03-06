@@ -15342,6 +15342,7 @@ CreateTask(
         after: [],
         when_condition: None,
         sql: "SELECT * FROM MyTable1",
+        sqls: None,
     },
 )
 
@@ -15374,6 +15375,7 @@ CreateTask(
         after: [],
         when_condition: None,
         sql: "SELECT * FROM MyTable1",
+        sqls: None,
     },
 )
 
@@ -15406,6 +15408,7 @@ CreateTask(
         after: [],
         when_condition: None,
         sql: "SELECT * FROM MyTable1",
+        sqls: None,
     },
 )
 
@@ -15437,6 +15440,7 @@ CreateTask(
         after: [],
         when_condition: None,
         sql: "INSERT INTO t (c1, c2) VALUES (1, 2), (3, 4)",
+        sqls: None,
     },
 )
 
@@ -15466,6 +15470,7 @@ CreateTask(
         after: [],
         when_condition: None,
         sql: "COPY INTO streams_test.paper_table FROM @stream_stage FILE_FORMAT = (type = 'PARQUET') PURGE = true FORCE = false DISABLE_VARIANT_CHECK = false ON_ERROR = abort",
+        sqls: None,
     },
 )
 
@@ -15495,6 +15500,7 @@ CreateTask(
         after: [],
         when_condition: None,
         sql: "COPY INTO @my_internal_stage FROM canadian_city_population FILE_FORMAT = (type = 'PARQUET') SINGLE = false MAX_FILE_SIZE = 0 DETAILED_OUTPUT = false",
+        sqls: None,
     },
 )
 
@@ -15524,6 +15530,7 @@ CreateTask(
             "(SYSTEM$GET_PREDECESSOR_RETURN_VALUE('task_name') <> 'VALIDATION')",
         ),
         sql: "VACUUM TABLE t ",
+        sqls: None,
     },
 )
 
@@ -15551,6 +15558,59 @@ CreateTask(
         after: [],
         when_condition: None,
         sql: "VACUUM TABLE t ",
+        sqls: None,
+    },
+)
+
+
+---------- Input ----------
+CREATE TASK IF NOT EXISTS MyTask1 DATABASE = 'target', TIMEZONE = 'America/Los Angeles'  as
+            BEGIN
+              begin;
+              insert into t values('a;');
+              delete from t where c = ';';
+              vacuum table t;
+              merge into t using s on t.id = s.id when matched then update *;
+              commit;
+            END
+---------- Output ---------
+CREATE TASK IF NOT EXISTS MyTask1 database = 'target' timezone = 'America/Los Angeles'
+BEGIN
+BEGIN;
+INSERT INTO t VALUES ('a;');
+DELETE FROM t WHERE (c = ';');
+VACUUM TABLE t ;
+MERGE INTO t USING s ON (t.id = s.id) WHEN MATCHED THEN UPDATE *;
+COMMITEND
+---------- AST ------------
+CreateTask(
+    CreateTaskStmt {
+        if_not_exists: true,
+        name: "MyTask1",
+        warehouse_opts: WarehouseOptions {
+            warehouse: None,
+        },
+        schedule_opts: None,
+        session_parameters: {
+            "database": "target",
+            "timezone": "America/Los Angeles",
+        },
+        suspend_task_after_num_failures: None,
+        error_integration: None,
+        comments: "",
+        after: [],
+        when_condition: None,
+        sql: "",
+        sqls: Some(
+            [
+                "BEGIN",
+                "INSERT INTO t VALUES ('a;')",
+                "DELETE FROM t WHERE (c = ';')",
+                "VACUUM TABLE t ",
+                "MERGE INTO t USING s ON (t.id = s.id) WHEN MATCHED THEN UPDATE *",
+                "COMMIT",
+            ],
+        ),
     },
 )
 
