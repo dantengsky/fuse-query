@@ -47,7 +47,7 @@ impl Files {
         }
 
         let threads_nums = self.ctx.get_settings().get_max_threads()? as usize;
-        let batch_size = (locations.len() / threads_nums).min(1000);
+        let batch_size = (locations.len() / threads_nums).min(1000).max(1);
 
         info!("remove file in batch, batch_size: {}", batch_size);
         if locations.len() <= batch_size {
