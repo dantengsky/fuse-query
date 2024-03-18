@@ -77,13 +77,13 @@ impl Files {
             .map(|loc| loc.trim_start_matches('/').to_owned())
             .filter(|loc| !loc.is_empty())
             .collect::<Vec<_>>();
+        info!("deleting files {:?}", &locations);
+        op.remove(locations).await?;
         info!(
-            "deleting files, # of files {}, time used {:?},  files: {:?}",
+            "deleted files, # of files {}, time used {:?}",
             locations.len(),
             start.elapsed(),
-            &locations
         );
-        op.remove(locations).await?;
         Ok(())
     }
 }
