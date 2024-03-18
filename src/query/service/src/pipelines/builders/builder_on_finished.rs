@@ -24,6 +24,7 @@ use databend_common_pipeline_core::Pipeline;
 use databend_common_storages_fuse::io::Files;
 use databend_common_storages_stage::StageTable;
 use log::error;
+use log::info;
 
 use crate::pipelines::PipelineBuilder;
 use crate::sessions::QueryContext;
@@ -121,10 +122,13 @@ impl PipelineBuilder {
             }
         }
 
+        let elapsed = start.elapsed();
+        info!("purge {} files in {:?} ", files.len(), elapsed);
+
         // Perf.
         {
             metrics_inc_copy_purge_files_counter(files.len() as u32);
-            metrics_inc_copy_purge_files_cost_milliseconds(start.elapsed().as_millis() as u32);
+            metrics_inc_copy_purge_files_cost_milliseconds(elapsed.as_millis() as u32);
         }
     }
 }
