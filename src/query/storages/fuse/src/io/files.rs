@@ -78,10 +78,13 @@ impl Files {
             .filter(|loc| !loc.is_empty())
             .collect::<Vec<_>>();
         info!("deleting files {:?}", &locations);
+        let num_of_files = locations.len();
+
         op.remove(locations).await?;
+
         info!(
             "deleted files, # of files {}, time used {:?}",
-            locations.len(),
+            num_of_files,
             start.elapsed(),
         );
         Ok(())
