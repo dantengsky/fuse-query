@@ -40,10 +40,18 @@ impl Files {
         &self,
         file_locations: impl IntoIterator<Item = impl AsRef<str>>,
     ) -> Result<()> {
-        let batch_size = 1000;
         let locations = Vec::from_iter(file_locations.into_iter().map(|v| v.as_ref().to_string()));
 
+        if locations.len() == 0 {
+            return Ok(());
+        }
+
+        let threads_nums = self.ctx.get_settings().get_max_threads()? as usize;
+        let batch_size = (locations.len() / threads_nums).min(1000);
+
+        info!("remove file in batch, batch_size: {}", batch_size);
         if locations.len() <= batch_size {
+            info!("remove file in batch, parallel: 1");
             Self::delete_files(self.operator.clone(), locations).await?;
         } else {
             let mut chunks = locations.chunks(batch_size);
@@ -54,8 +62,10 @@ impl Files {
                     .map(|location| Self::delete_files(self.operator.clone(), location.to_vec()))
             });
 
-            let threads_nums = self.ctx.get_settings().get_max_threads()? as usize;
-
+            info!(
+                "remove file in batch, parallel: {}",
+                locations.len() / batch_size
+            );
             execute_futures_in_parallel(
                 tasks,
                 threads_nums,
