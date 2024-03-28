@@ -1000,6 +1000,23 @@ impl TableContext for QueryContext {
                 for filter in filters.1.get_min_max() {
                     v.get_mut().add_min_max(filter.clone());
                 }
+
+                // add merge into source build siphashkeys
+                // NOTE: this is a Proof of Concept, please consider
+                // - refactor the type def of `MergeIntoSourceBuildSiphashkeys`
+                //     the Arc<RwLock<....>> container seems to be unnecessary
+                // - and the `RuntimeFilterInfo` as well
+                //     e.g. let the fields of `RuntimeFilterInfo` be public visible,
+                //     so that the ownership of the fields can be taken more easily,
+                //     avoid the unnecessary/inefficient cloning
+                let (keys, siphashkeys) = filters.1.get_merge_into_source_build_siphashkeys();
+                for (idx, key) in keys.into_iter().enumerate() {
+                    v.get_mut().add_merge_into_source_build_siphashkeys((
+                        key,
+                        siphashkeys.read()[idx].clone(),
+                    ));
+                }
+
                 for filter in filters.1.blooms() {
                     v.get_mut().add_bloom(filter);
                 }
