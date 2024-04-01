@@ -30,6 +30,7 @@ use databend_common_catalog::plan::DataSourcePlan;
 use databend_common_catalog::plan::PartInfoPtr;
 use databend_common_catalog::plan::Partitions;
 use databend_common_catalog::query_kind::QueryKind;
+use databend_common_catalog::runtime_filter_info::MergeIntoSourceBuildSiphashkeys;
 use databend_common_catalog::runtime_filter_info::RuntimeFilterInfo;
 use databend_common_catalog::statistics::data_cache_statistics::DataCacheMetrics;
 use databend_common_catalog::table::Table;
@@ -387,10 +388,7 @@ impl TableContext for CtxDelegation {
     fn get_merge_into_source_build_siphashkeys_with_id(
         &self,
         _: usize,
-    ) -> std::option::Option<(
-        Vec<std::string::String>,
-        Arc<parking_lot::lock_api::RwLock<parking_lot::RawRwLock, Vec<Vec<u64>>>>,
-    )> {
+    ) -> Option<MergeIntoSourceBuildSiphashkeys> {
         todo!()
     }
 

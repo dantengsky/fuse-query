@@ -21,6 +21,7 @@ use databend_common_base::runtime::profile::Profile;
 use databend_common_base::runtime::profile::ProfileStatisticsName;
 use databend_common_base::runtime::GlobalIORuntime;
 use databend_common_catalog::plan::PartInfoPtr;
+use databend_common_catalog::runtime_filter_info::MergeIntoSourceBuildSiphashkeys;
 use databend_common_catalog::table_context::TableContext;
 use databend_common_exception::ErrorCode;
 use databend_common_exception::Result;
@@ -121,14 +122,20 @@ pub fn runtime_filter_pruner(
     if can_do_merge_into_target_build_bloom_filter
         && ctx
             .get_merge_into_source_build_siphashkeys_with_id(id)
+            .as_ref()
             .is_some_and(|hash_keys| !hash_keys.0.is_empty())
     {
-        let pruned = try_prune_merge_into_target_table(
-            ctx.clone(),
-            part,
-            merge_into_source_build_bloom_info,
-            id,
-        )?;
+        let pruned = if let Some(merge_into_source_hashkeys) = ctx.get_merge_into_source_build_siphashkeys_with_id(id) {
+            try_prune_merge_into_target_table(
+                ctx.clone(),
+                part,
+                merge_into_source_build_bloom_info,
+                merge_into_source_hashkeys,
+            )?
+        } else {
+            false
+        };
+
         if pruned {
             Profile::record_usize_profile(
                 ProfileStatisticsName::RuntimeFilterMergeIntoSourceBuildBloomPruneParts,
@@ -145,7 +152,7 @@ pub(crate) fn try_prune_merge_into_target_table(
     ctx: Arc<dyn TableContext>,
     part: &FuseBlockPartInfo,
     merge_into_source_build_bloom_info: &mut MergeIntoSourceBuildBloomInfo,
-    id: usize,
+    merget_into_source_hashkeys: MergeIntoSourceBuildSiphashkeys,
 ) -> Result<bool> {
     assert!(part.block_meta_index().is_some());
     let block_meta_index = part.block_meta_index().unwrap();
@@ -239,13 +246,7 @@ pub(crate) fn try_prune_merge_into_target_table(
             )
             .await
         });
-        Ok(try_prune_use_bloom_filter(
-            filters,
-            &ctx.get_merge_into_source_build_siphashkeys_with_id(id)
-                .unwrap()
-                .1
-                .read(),
-        ))
+        Ok(try_prune_use_bloom_filter(filters, &merget_into_source_hashkeys.1))
     } else {
         Ok(false)
     }

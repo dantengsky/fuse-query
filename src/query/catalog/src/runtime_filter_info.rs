@@ -12,20 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::Arc;
-
 use databend_common_expression::Expr;
-use parking_lot::RwLock;
 use xorf::BinaryFuse16;
 
-pub type MergeIntoSourceBuildSiphashkeys = (Vec<String>, Arc<RwLock<Vec<Vec<u64>>>>);
+// pub type MergeIntoSourceBuildSiphashkeys = (Vec<String>, Arc<RwLock<Vec<Vec<u64>>>>);
+pub type MergeIntoSourceBuildSiphashkeys = (Vec<String>, Vec<Vec<u64>>);
 
 #[derive(Clone, Debug, Default)]
 pub struct RuntimeFilterInfo {
-    inlist: Vec<Expr<String>>,
-    min_max: Vec<Expr<String>>,
-    bloom: Vec<(String, BinaryFuse16)>,
-    siphashes: MergeIntoSourceBuildSiphashkeys,
+    pub inlist: Vec<Expr<String>>,
+    pub min_max: Vec<Expr<String>>,
+    pub bloom: Vec<(String, BinaryFuse16)>,
+    pub siphashes: MergeIntoSourceBuildSiphashkeys,
 }
 
 impl RuntimeFilterInfo {
@@ -37,14 +35,13 @@ impl RuntimeFilterInfo {
         self.bloom.push(bloom);
     }
 
-    pub fn get_merge_into_source_build_siphashkeys(&self) -> MergeIntoSourceBuildSiphashkeys {
-        self.siphashes.clone()
+    pub fn get_merge_into_source_build_siphashkeys(&self) -> &MergeIntoSourceBuildSiphashkeys {
+        &self.siphashes
     }
 
     pub fn add_merge_into_source_build_siphashkeys(&mut self, digests: (String, Vec<u64>)) {
         self.siphashes.0.push(digests.0);
-        let mut borrow_hash_keys = self.siphashes.1.write();
-        borrow_hash_keys.push(digests.1)
+        self.siphashes.1.push(digests.1)
     }
 
     pub fn add_min_max(&mut self, expr: Expr<String>) {

@@ -987,37 +987,31 @@ impl TableContext for QueryContext {
         *merge_into_join = join;
     }
 
-    fn set_runtime_filter(&self, filters: (IndexType, RuntimeFilterInfo)) {
+    fn set_runtime_filter(&self, (index, filters): (IndexType, RuntimeFilterInfo)) {
         let mut runtime_filters = self.shared.runtime_filters.write();
-        match runtime_filters.entry(filters.0) {
+        match runtime_filters.entry(index) {
             Entry::Vacant(v) => {
-                v.insert(filters.1);
+                v.insert(filters);
             }
             Entry::Occupied(mut v) => {
-                for filter in filters.1.get_inlist() {
-                    v.get_mut().add_inlist(filter.clone());
+                let RuntimeFilterInfo {
+                    inlist,
+                    min_max,
+                    bloom,
+                    siphashes,
+                } = filters;
+                for filter in inlist.into_iter() {
+                    v.get_mut().add_inlist(filter);
                 }
-                for filter in filters.1.get_min_max() {
-                    v.get_mut().add_min_max(filter.clone());
-                }
-
-                // add merge into source build siphashkeys
-                // NOTE: this is a Proof of Concept, please consider
-                // - refactor the type def of `MergeIntoSourceBuildSiphashkeys`
-                //     the Arc<RwLock<....>> container seems to be unnecessary
-                // - and the `RuntimeFilterInfo` as well
-                //     e.g. let the fields of `RuntimeFilterInfo` be public visible,
-                //     so that the ownership of the fields can be taken more easily,
-                //     avoid the unnecessary/inefficient cloning
-                let (keys, siphashkeys) = filters.1.get_merge_into_source_build_siphashkeys();
-                for (idx, key) in keys.into_iter().enumerate() {
-                    v.get_mut().add_merge_into_source_build_siphashkeys((
-                        key,
-                        siphashkeys.read()[idx].clone(),
-                    ));
+                for filter in min_max.into_iter() {
+                    v.get_mut().add_min_max(filter);
                 }
 
-                for filter in filters.1.blooms() {
+                for (k, h) in siphashes.0.into_iter().zip(siphashes.1) {
+                    v.get_mut().add_merge_into_source_build_siphashkeys((k, h));
+                }
+
+                for filter in bloom.into_iter() {
                     v.get_mut().add_bloom(filter);
                 }
             }
@@ -1049,7 +1043,7 @@ impl TableContext for QueryContext {
         let runtime_filters = self.shared.runtime_filters.read();
         runtime_filters
             .get(&id)
-            .map(|v| v.get_merge_into_source_build_siphashkeys())
+            .map(|v| v.get_merge_into_source_build_siphashkeys().clone())
     }
 
     fn get_merge_into_source_build_bloom_probe_keys(&self, id: usize) -> Vec<String> {
