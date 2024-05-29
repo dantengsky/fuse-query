@@ -129,11 +129,24 @@ mod add {
         // already exists
         {
             let test_key = test_key.clone();
+            let user_info = UserInfo::new(test_user_name, test_hostname, default_test_auth_info());
+
+            let value = Operation::Update(serialize_struct(
+                &user_info,
+                ErrorCode::IllegalUserInfoFormat,
+                || "",
+            )?);
+
             let mut api = MockKV::new();
             api.expect_upsert_kv()
                 .with(predicate::eq(UpsertKVReq::new(
                     &test_key,
                     test_seq,
+                    // here we use the new value that serialized from the new `user_info`,
+                    // otherwise this predicate will fail.
+                    // if we do not care about checking the `UpsertKVReq` we passed
+                    // to the method `upsert_kv` that being tested, we could also use
+                    // `api.expect_upsert_kv().with(predicate::function(|_|true))....`
                     value.clone(),
                     None,
                 )))
@@ -147,8 +160,6 @@ mod add {
 
             let api = Arc::new(api);
             let user_mgr = UserMgr::create(api, &Tenant::new_literal("tenant1"));
-
-            let user_info = UserInfo::new(test_user_name, test_hostname, default_test_auth_info());
 
             let res = user_mgr.add_user(user_info, &CreateOption::Create).await;
 
