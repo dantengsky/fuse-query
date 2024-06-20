@@ -15,6 +15,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use databend_common_catalog::catalog::Catalog;
 use databend_common_catalog::catalog::StorageDescription;
 use databend_common_catalog::plan::DataSourcePlan;
 use databend_common_catalog::plan::PartStatistics;
@@ -35,11 +36,13 @@ use databend_common_expression::ORIGIN_BLOCK_ROW_NUM_COL_NAME;
 use databend_common_expression::ORIGIN_VERSION_COL_NAME;
 use databend_common_expression::ROW_VERSION_COL_NAME;
 use databend_common_meta_app::schema::TableInfo;
+use databend_common_meta_app::tenant::Tenant;
 use databend_common_pipeline_core::Pipeline;
 use databend_common_sql::binder::STREAM_COLUMN_FACTORY;
 use databend_common_storages_fuse::FuseTable;
 use databend_storages_common_table_meta::table::ChangeType;
 use databend_storages_common_table_meta::table::StreamMode;
+use databend_storages_common_table_meta::table::OPT_KEY_DATABASE_ID;
 use databend_storages_common_table_meta::table::OPT_KEY_DATABASE_NAME;
 use databend_storages_common_table_meta::table::OPT_KEY_MODE;
 use databend_storages_common_table_meta::table::OPT_KEY_SNAPSHOT_LOCATION;
@@ -58,8 +61,8 @@ pub struct StreamTable {
     stream_info: TableInfo,
 
     table_id: u64,
-    table_name: String,
-    table_database: String,
+    original_base_table_name: String,
+    original_base_table_database: String,
     table_version: u64,
     mode: StreamMode,
     snapshot_location: Option<String>,
@@ -91,8 +94,8 @@ impl StreamTable {
         let snapshot_location = options.get(OPT_KEY_SNAPSHOT_LOCATION).cloned();
         Ok(Box::new(StreamTable {
             stream_info: table_info,
-            table_name,
-            table_database,
+            original_base_table_name: table_name,
+            original_base_table_database: table_database,
             table_id,
             table_version,
             mode,
@@ -118,27 +121,28 @@ impl StreamTable {
     }
 
     pub async fn source_table(&self, ctx: Arc<dyn TableContext>) -> Result<Arc<dyn Table>> {
+        let tenant = ctx.get_tenant();
+        let catalog = ctx.get_catalog(self.stream_info.catalog()).await?;
+        let table_name = self.source_table_name(&tenant, catalog.as_ref()).await?;
+        let table_database = self
+            .source_table_database(&tenant, catalog.as_ref())
+            .await?;
+
         let table = ctx
-            .get_table(
-                self.stream_info.catalog(),
-                &self.table_database,
-                &self.table_name,
-            )
+            .get_table(self.stream_info.catalog(), &table_database, &table_name)
             .await?;
 
         if table.get_table_info().ident.table_id != self.table_id {
             return Err(ErrorCode::IllegalStream(format!(
                 "Base table '{}'.'{}' dropped, cannot read from stream {}",
-                self.table_database, self.table_name, self.stream_info.desc,
+                self.original_base_table_database,
+                self.original_base_table_name,
+                self.stream_info.desc,
             )));
         }
 
         let fuse_table = FuseTable::try_from_table(table.as_ref())?;
-        fuse_table.check_changes_valid(
-            &self.table_database,
-            &self.table_name,
-            self.table_version,
-        )?;
+        fuse_table.check_changes_valid(&table_database, &table_name, self.table_version)?;
 
         Ok(table)
     }
@@ -155,16 +159,62 @@ impl StreamTable {
         self.snapshot_location.clone()
     }
 
-    pub fn source_table_name(&self) -> &str {
-        &self.table_name
+    pub async fn source_table_name(
+        &self,
+        tenant: &Tenant,
+        catalog: &dyn Catalog,
+    ) -> Result<String> {
+        let table_names = catalog
+            .mget_table_names_by_ids(tenant, &[self.table_id])
+            .await?;
+
+        let Some(table_name) = &table_names[0] else {
+            return Err(ErrorCode::IllegalStream(format!(
+                "Invalid base table, name of source table id {} not found, original table name {}, ",
+                self.table_id, self.original_base_table_name
+            )));
+        };
+        Ok(table_name.to_owned())
     }
 
     pub fn source_table_id(&self) -> u64 {
         self.table_id
     }
 
-    pub fn source_table_database(&self) -> &str {
-        &self.table_database
+    pub async fn source_table_database(
+        &self,
+        tenant: &Tenant,
+        catalog: &dyn Catalog,
+    ) -> Result<String> {
+        let table_meta = {
+            let seqv = catalog.get_table_meta_by_id(self.table_id).await?.unwrap(); // TODO
+            seqv.data
+        };
+
+        let db_id_str = table_meta.options.get(OPT_KEY_DATABASE_ID).ok_or_else(|| {
+            ErrorCode::Internal(format!(
+                "Invalid fuse table, table option {} not found",
+                OPT_KEY_DATABASE_ID
+            ))
+        })?;
+
+        let db_id = db_id_str.parse::<u64>().map_err(|e| {
+            ErrorCode::Internal(format!(
+                "Invalid base table, illegal db id {}, {}",
+                db_id_str, e
+            ))
+        })?;
+
+        let db_names = catalog.mget_database_names_by_ids(tenant, &[db_id]).await?;
+
+        let Some(database) = &db_names[0] else {
+            return Err(ErrorCode::IllegalStream(format!(
+                "Invalid base table, name of source db id {} not found, original db name {}, ",
+                db_id, self.original_base_table_database
+            )));
+        };
+
+        Ok(database.to_owned())
     }
 
     #[async_backtrace::framed]
@@ -250,11 +300,16 @@ impl Table for StreamTable {
         pipeline: &mut Pipeline,
         put_cache: bool,
     ) -> Result<()> {
-        let table = databend_common_base::runtime::block_on(ctx.get_table(
-            self.stream_info.catalog(),
-            &self.table_database,
-            &self.table_name,
-        ))?;
+        let table = databend_common_base::runtime::block_on(async {
+            let tenant = ctx.get_tenant();
+            let catalog = ctx.get_default_catalog()?;
+            let table_database = self
+                .source_table_database(&tenant, catalog.as_ref())
+                .await?;
+            let table_name = self.source_table_name(&tenant, catalog.as_ref()).await?;
+            ctx.get_table(self.stream_info.catalog(), &table_database, &table_name)
+                .await
+        })?;
         table.read_data(ctx, plan, pipeline, put_cache)
     }
 

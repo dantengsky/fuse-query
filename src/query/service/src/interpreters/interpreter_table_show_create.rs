@@ -15,6 +15,7 @@
 use std::sync::Arc;
 
 use databend_common_ast::parser::Dialect;
+use databend_common_catalog::catalog::Catalog;
 use databend_common_catalog::table::Table;
 use databend_common_exception::ErrorCode;
 use databend_common_exception::Result;
@@ -24,6 +25,7 @@ use databend_common_expression::ComputedExpr;
 use databend_common_expression::DataBlock;
 use databend_common_expression::Scalar;
 use databend_common_expression::Value;
+use databend_common_meta_app::tenant::Tenant;
 use databend_common_sql::plans::ShowCreateTablePlan;
 use databend_common_storages_stream::stream_table::StreamTable;
 use databend_common_storages_stream::stream_table::STREAM_ENGINE;
@@ -86,7 +88,15 @@ impl Interpreter for ShowCreateTableInterpreter {
                 .unwrap_or(false),
         };
 
-        let create_query = Self::show_create_query(&self.plan.database, table.as_ref(), &settings)?;
+        let tenant = self.ctx.get_tenant();
+        let create_query = Self::show_create_query(
+            &tenant,
+            catalog.as_ref(),
+            &self.plan.database,
+            table.as_ref(),
+            &settings,
+        )
+        .await?;
 
         let block = DataBlock::new(
             vec![
@@ -107,13 +117,15 @@ impl Interpreter for ShowCreateTableInterpreter {
 }
 
 impl ShowCreateTableInterpreter {
-    pub fn show_create_query(
+    pub async fn show_create_query(
+        tenant: &Tenant,
+        catalog: &dyn Catalog,
         database: &str,
         table: &dyn Table,
         settings: &ShowCreateQuerySettings,
     ) -> Result<String> {
         match table.engine() {
-            STREAM_ENGINE => Self::show_create_stream_query(table),
+            STREAM_ENGINE => Self::show_create_stream_query(tenant, catalog, table).await,
             VIEW_ENGINE => Self::show_create_view_query(table, database),
             _ => match table.options().get(OPT_KEY_STORAGE_PREFIX) {
                 Some(_) => Ok(Self::show_attach_table_query(table, database)),
@@ -283,13 +295,17 @@ impl ShowCreateTableInterpreter {
         Ok(view_create_sql)
     }
 
-    fn show_create_stream_query(table: &dyn Table) -> Result<String> {
+    async fn show_create_stream_query(
+        tenant: &Tenant,
+        catalog: &dyn Catalog,
+        table: &dyn Table,
+    ) -> Result<String> {
         let stream_table = StreamTable::try_from_table(table)?;
         let mut create_sql = format!(
             "CREATE STREAM `{}` ON TABLE `{}`.`{}`",
             stream_table.name(),
-            stream_table.source_table_database(),
-            stream_table.source_table_name()
+            stream_table.source_table_database(tenant, catalog).await?,
+            stream_table.source_table_name(tenant, catalog).await?
         );
 
         let comment = stream_table.get_table_info().meta.comment.clone();

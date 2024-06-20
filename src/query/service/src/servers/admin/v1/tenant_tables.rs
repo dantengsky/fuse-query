@@ -82,10 +82,13 @@ async fn load_tenant_tables(tenant: &Tenant) -> Result<TenantTablesResponse> {
         };
         for table in tables {
             let create_query = ShowCreateTableInterpreter::show_create_query(
+                tenant,
+                catalog.as_ref(),
                 database.name(),
                 table.as_ref(),
                 &settings,
-            )?;
+            )
+            .await?;
 
             let table_id = table.get_table_info().ident.table_id;
             let stats = &table.get_table_info().meta.statistics;

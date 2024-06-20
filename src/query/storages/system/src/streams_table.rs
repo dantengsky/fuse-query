@@ -198,10 +198,16 @@ impl<const T: bool> AsyncSystemTable for StreamsTable<T> {
                         catalogs.push(ctl_name.as_str());
                         databases.push(db_name.to_owned());
                         names.push(stream_table.name().to_string());
+                        let tenant = ctx.get_tenant();
+                        let catalog = ctx.get_default_catalog()?;
                         table_name.push(format!(
                             "{}.{}",
-                            stream_table.source_table_database(),
-                            stream_table.source_table_name()
+                            stream_table
+                                .source_table_database(&tenant, catalog.as_ref())
+                                .await?,
+                            stream_table
+                                .source_table_name(&tenant, catalog.as_ref())
+                                .await?
                         ));
                         mode.push(stream_table.mode().to_string());
 
