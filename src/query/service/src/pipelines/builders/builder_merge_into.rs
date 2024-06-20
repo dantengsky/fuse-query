@@ -16,6 +16,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
 use databend_common_base::base::tokio::sync::Semaphore;
+use databend_common_catalog::plan::Projection;
 use databend_common_catalog::table::Table;
 use databend_common_catalog::table_context::TableContext;
 use databend_common_exception::ErrorCode;
@@ -39,6 +40,7 @@ use databend_common_sql::executor::physical_plans::MergeInto;
 use databend_common_sql::executor::physical_plans::MergeIntoAddRowNumber;
 use databend_common_sql::executor::physical_plans::MergeIntoAppendNotMatched;
 use databend_common_sql::executor::physical_plans::MutationKind;
+use databend_common_storages_fuse::operations::build_block_fetcher;
 use databend_common_storages_fuse::operations::MatchedSplitProcessor;
 use databend_common_storages_fuse::operations::MergeIntoNotMatchedProcessor;
 use databend_common_storages_fuse::operations::MergeIntoSplitProcessor;
@@ -367,6 +369,7 @@ impl PipelineBuilder {
             change_join_order,
             can_try_update_column_only,
             enable_right_broadcast,
+            excluded_target_columns,
             ..
         } = merge_into;
         let enable_right_broadcast = *enable_right_broadcast;
@@ -442,6 +445,29 @@ impl PipelineBuilder {
             MergeIntoType::MatchedOnly => (1, true, false),
         };
 
+        let schema = table.schema();
+        let new_fetcher = || {
+            if let Some(cols) = excluded_target_columns {
+                let mut projection = Vec::new();
+                for col in cols {
+                    let col_name = col.column_name.clone();
+                    let idx = schema.index_of(&col_name).unwrap();
+                    projection.push(idx);
+                }
+                let projection = Projection::Columns(projection);
+
+                // fetcher that wll be used to read extra columns from target table
+                let fuse_table = table.clone();
+
+                // adjust column idx
+                let row_fetcher =
+                    build_block_fetcher(self.ctx.clone(), *row_id_idx, fuse_table, projection)?;
+                Ok::<_, ErrorCode>(Some(row_fetcher))
+            } else {
+                Ok(None)
+            }
+        };
+
         for _ in (0..self.main_pipeline.output_len()).step_by(step) {
             if need_match {
                 let matched_split_processor = MatchedSplitProcessor::create(
@@ -453,6 +479,7 @@ impl PipelineBuilder {
                     Arc::new(DataSchema::from(tbl.schema_with_stream())),
                     merge_into.target_build_optimization,
                     *can_try_update_column_only,
+                    new_fetcher()?,
                 )?;
                 pipe_items.push(matched_split_processor.into_pipe_item());
             }

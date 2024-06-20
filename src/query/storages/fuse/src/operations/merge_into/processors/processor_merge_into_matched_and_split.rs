@@ -45,6 +45,7 @@ use databend_common_storage::MergeStatus;
 use crate::operations::common::MutationLogs;
 use crate::operations::merge_into::mutator::DeleteByExprMutator;
 use crate::operations::merge_into::mutator::UpdateByExprMutator;
+use crate::operations::BlockFetcher;
 use crate::operations::BlockMetaIndex;
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
@@ -127,6 +128,9 @@ pub struct MatchedSplitProcessor {
     target_table_schema: DataSchemaRef,
     target_build_optimization: bool,
     enable_update_column_only: bool,
+
+    block_fetcher: Option<Box<dyn BlockFetcher>>,
+    fetcher_initialized: bool,
 }
 
 impl MatchedSplitProcessor {
@@ -187,6 +191,7 @@ impl MatchedSplitProcessor {
         target_table_schema: DataSchemaRef,
         target_build_optimization: bool,
         can_try_update_column_only: bool,
+        block_fetcher: Option<Box<dyn BlockFetcher>>,
     ) -> Result<Self> {
         let mut update_projections = Vec::with_capacity(field_index_of_input_schema.len());
         let mut ops = Vec::<MutationKind>::new();
@@ -200,6 +205,10 @@ impl MatchedSplitProcessor {
             );
         }
 
+        let num_extra_cols_in_update_branch = block_fetcher
+            .as_ref()
+            .map(|f| f.num_columns_to_fetch())
+            .unwrap_or(0);
         if !enable_update_column_only {
             for item in matched.iter() {
                 // delete
@@ -210,7 +219,7 @@ impl MatchedSplitProcessor {
                             filter.clone(),
                             ctx.get_function_context()?,
                             row_id_idx,
-                            input_schema.num_fields(),
+                            input_schema.num_fields() + num_extra_cols_in_update_branch,
                             target_build_optimization,
                         ),
                     }))
@@ -227,7 +236,7 @@ impl MatchedSplitProcessor {
                             ctx.get_function_context()?,
                             field_index_of_input_schema.clone(),
                             update_lists.clone(),
-                            input_schema.num_fields(),
+                            input_schema.num_fields() + num_extra_cols_in_update_branch,
                         ),
                     }))
                 }
@@ -256,6 +265,8 @@ impl MatchedSplitProcessor {
             target_table_schema,
             target_build_optimization,
             enable_update_column_only,
+            block_fetcher,
+            fetcher_initialized: false,
         })
     }
 
@@ -271,6 +282,7 @@ impl MatchedSplitProcessor {
     }
 }
 
+#[async_trait::async_trait]
 impl Processor for MatchedSplitProcessor {
     fn name(&self) -> String {
         "MatchedSplit".to_owned()
@@ -322,7 +334,7 @@ impl Processor for MatchedSplitProcessor {
                 {
                     // no pending data (being sent to down streams)
                     self.input_data = Some(self.input_port.pull_data().unwrap()?);
-                    Ok(Event::Sync)
+                    Ok(Event::Async)
                 } else {
                     // data pending
                     Ok(Event::NeedConsume)
@@ -334,7 +346,7 @@ impl Processor for MatchedSplitProcessor {
         }
     }
 
-    fn process(&mut self) -> Result<()> {
+    async fn async_process(&mut self) -> Result<()> {
         if let Some(data_block) = self.input_data.take() {
             //  we receive a partial unmodified block data meta.
             if data_block.get_meta().is_some() && data_block.is_empty() {
@@ -354,6 +366,18 @@ impl Processor for MatchedSplitProcessor {
                 return Ok(());
             }
             let start = Instant::now();
+
+            let data_block = if let Some(fetcher) = &mut self.block_fetcher {
+                // TODO encapsulates this in fetcher
+                if !self.fetcher_initialized {
+                    fetcher.init().await?;
+                    self.fetcher_initialized = true;
+                }
+                fetcher.fetch(data_block).await?
+            } else {
+                data_block
+            };
+
             let mut current_block = data_block;
             if !self.enable_update_column_only {
                 for op in self.ops.iter() {

@@ -139,6 +139,7 @@ impl MergeIntoInterpreter {
             row_id_index,
             can_try_update_column_only,
             enable_right_broadcast,
+            excluded_target_columns,
             ..
         } = &self.plan;
         let enable_right_broadcast = *enable_right_broadcast;
@@ -224,8 +225,20 @@ impl MergeIntoInterpreter {
         let mut builder = PhysicalPlanBuilder::new(meta_data.clone(), self.ctx.clone(), false);
         let join_input = builder.build(&input, *columns_set.clone()).await?;
 
-        // find row_id column index
-        let join_output_schema = join_input.output_schema()?;
+        let join_output_schema = if let Some(excluded) = excluded_target_columns {
+            let mut join_schema = join_input.output_schema()?.as_ref().clone();
+            // - push back excluded fields into join_schema
+            // - wrap datatype with Nullable if necessary
+            for col in excluded {
+                join_schema.fields.push(DataField::new(
+                    &col.index.to_string(),
+                    col.data_type.clone().wrap_nullable(),
+                ));
+            }
+            Arc::new(join_schema)
+        } else {
+            join_input.output_schema()?
+        };
 
         let insert_only = matches!(merge_type, MergeIntoType::InsertOnly);
 
@@ -401,6 +414,7 @@ impl MergeIntoInterpreter {
                 can_try_update_column_only: *can_try_update_column_only,
                 plan_id: u32::MAX,
                 enable_right_broadcast,
+                excluded_target_columns: excluded_target_columns.clone(),
             }))
         } else {
             let merge_append = PhysicalPlan::MergeInto(Box::new(MergeInto {
@@ -431,6 +445,7 @@ impl MergeIntoInterpreter {
                 can_try_update_column_only: *can_try_update_column_only,
                 plan_id: u32::MAX,
                 enable_right_broadcast,
+                excluded_target_columns: excluded_target_columns.clone(),
             }));
             // if change_join_order = true, it means the target is build side,
             // in this way, we will do matched operation and not matched operation

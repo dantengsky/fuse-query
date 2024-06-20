@@ -23,6 +23,7 @@ use databend_storages_common_table_meta::meta::Location;
 
 use crate::binder::MergeIntoType;
 use crate::executor::physical_plan::PhysicalPlan;
+use crate::ColumnBinding;
 
 pub type MatchExpr = Vec<(Option<RemoteExpr>, Option<Vec<(FieldIndex, RemoteExpr)>>)>;
 
@@ -49,6 +50,7 @@ pub struct MergeInto {
     pub target_build_optimization: bool,
     pub can_try_update_column_only: bool,
     pub enable_right_broadcast: bool,
+    pub excluded_target_columns: Option<Vec<ColumnBinding>>,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]

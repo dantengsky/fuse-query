@@ -398,6 +398,8 @@ fn format_merge_into(merge_into: &MergeInto) -> Result<String> {
             condition_format, unmatched_format
         )));
     }
+
+    // TODO format target table pruning
     let all_children = [
         vec![distributed_format],
         vec![target_build_optimization_format],

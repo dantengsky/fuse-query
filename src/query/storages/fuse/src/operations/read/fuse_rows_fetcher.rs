@@ -136,6 +136,90 @@ pub fn build_row_fetcher_pipeline(
 }
 
 #[async_trait::async_trait]
+pub trait BlockFetcher: Send + Sync {
+    async fn init(&mut self) -> Result<()>;
+    async fn fetch(&mut self, data_block: DataBlock) -> Result<DataBlock>;
+    fn output_schema(&self) -> DataSchema;
+    fn num_columns_to_fetch(&self) -> usize;
+}
+
+pub fn build_block_fetcher(
+    ctx: Arc<dyn TableContext>,
+    row_id_col_offset: usize,
+    fuse_table: FuseTable,
+    projection: Projection,
+) -> Result<Box<dyn BlockFetcher>> {
+    let fuse_table = Arc::new(fuse_table);
+    let block_reader =
+        fuse_table.create_block_reader(ctx.clone(), projection.clone(), false, false, true)?;
+    let max_threads = ctx.get_settings().get_max_threads()? as usize;
+
+    match &fuse_table.storage_format {
+        FuseStorageFormat::Native => {
+            let mut column_leaves = Vec::with_capacity(block_reader.project_column_nodes.len());
+            for column_node in &block_reader.project_column_nodes {
+                let leaves: Vec<ColumnDescriptor> = column_node
+                    .leaf_indices
+                    .iter()
+                    .map(|i| block_reader.parquet_schema_descriptor.columns()[*i].clone())
+                    .collect::<Vec<_>>();
+                column_leaves.push(leaves);
+            }
+            let column_leaves = Arc::new(column_leaves);
+            Ok(if block_reader.support_blocking_api() {
+                Box::new(TransformRowsFetcher::new(
+                    row_id_col_offset,
+                    NativeRowsFetcher::<true>::create(
+                        fuse_table.clone(),
+                        projection.clone(),
+                        block_reader.clone(),
+                        column_leaves.clone(),
+                        max_threads,
+                    ),
+                ))
+            } else {
+                Box::new(TransformRowsFetcher::new(
+                    row_id_col_offset,
+                    NativeRowsFetcher::<false>::create(
+                        fuse_table.clone(),
+                        projection.clone(),
+                        block_reader.clone(),
+                        column_leaves.clone(),
+                        max_threads,
+                    ),
+                ))
+            })
+        }
+        FuseStorageFormat::Parquet => {
+            let read_settings = ReadSettings::from_ctx(&ctx)?;
+            Ok(if block_reader.support_blocking_api() {
+                Box::new(TransformRowsFetcher::new(
+                    row_id_col_offset,
+                    ParquetRowsFetcher::<true>::create(
+                        fuse_table.clone(),
+                        projection.clone(),
+                        block_reader.clone(),
+                        read_settings,
+                        max_threads,
+                    ),
+                ))
+            } else {
+                Box::new(TransformRowsFetcher::new(
+                    row_id_col_offset,
+                    ParquetRowsFetcher::<false>::create(
+                        fuse_table.clone(),
+                        projection.clone(),
+                        block_reader.clone(),
+                        read_settings,
+                        max_threads,
+                    ),
+                ))
+            })
+        }
+    }
+}
+
+#[async_trait::async_trait]
 pub trait RowsFetcher {
     async fn on_start(&mut self) -> Result<()>;
     async fn fetch(&mut self, row_ids: &[u64]) -> Result<DataBlock>;
@@ -203,5 +287,72 @@ where F: RowsFetcher + Send + Sync + 'static
             row_id_col_offset,
             fetcher,
         }))
+    }
+    fn new(row_id_col_offset: usize, fetcher: F) -> Self {
+        Self {
+            row_id_col_offset,
+            fetcher,
+        }
+    }
+}
+#[async_trait::async_trait]
+impl<F> BlockFetcher for TransformRowsFetcher<F>
+where F: RowsFetcher + Send + Sync + 'static
+{
+    async fn init(&mut self) -> Result<()> {
+        self.fetcher.on_start().await
+    }
+
+    // TODO duplciated
+    async fn fetch(&mut self, mut data: DataBlock) -> Result<DataBlock> {
+        let num_rows = data.num_rows();
+        if num_rows == 0 {
+            // Although the data block is empty, we need to add empty columns to align the schema.
+            let fetched_schema = self.fetcher.schema();
+            for f in fetched_schema.fields().iter() {
+                let builder = ColumnBuilder::with_capacity(f.data_type(), 0);
+                let col = builder.build();
+                data.add_column(BlockEntry::new(f.data_type().clone(), Value::Column(col)));
+            }
+            return Ok(data);
+        }
+
+        let row_id_column = {
+            let col = data.columns()[self.row_id_col_offset].clone();
+            col.remove_nullable()
+        };
+
+        let row_id_column = row_id_column
+            .value
+            .convert_to_full_column(&DataType::Number(NumberDataType::UInt64), num_rows)
+            .into_number()
+            .unwrap()
+            .into_u_int64()
+            .unwrap();
+
+        let fetched_block = self.fetcher.fetch(&row_id_column).await?;
+
+        // wrap with Nullable
+        for col in fetched_block.columns().iter() {
+            if col.data_type.is_nullable() {
+                data.add_column(col.clone());
+            } else {
+                let block_entry = BlockEntry::new(
+                    DataType::Nullable(Box::new(col.data_type.clone())),
+                    col.value.clone().wrap_nullable(None),
+                );
+                data.add_column(block_entry);
+            }
+        }
+
+        Ok(data)
+    }
+    fn output_schema(&self) -> DataSchema {
+        self.fetcher.schema()
+    }
+
+    fn num_columns_to_fetch(&self) -> usize {
+        // TODO optimize
+        self.fetcher.schema().num_fields()
     }
 }

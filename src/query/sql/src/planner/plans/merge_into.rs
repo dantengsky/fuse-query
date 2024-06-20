@@ -28,7 +28,7 @@ use databend_common_meta_types::MetaId;
 
 use crate::binder::MergeIntoType;
 use crate::optimizer::SExpr;
-use crate::BindContext;
+use crate::{BindContext, ColumnBinding};
 use crate::IndexType;
 use crate::MetadataRef;
 use crate::ScalarExpr;
@@ -77,6 +77,7 @@ pub struct MergeInto {
     // we don't support complex expressions.
     pub can_try_update_column_only: bool,
     pub enable_right_broadcast: bool,
+    pub excluded_target_columns: Option<Vec<ColumnBinding>>,
 }
 
 impl std::fmt::Debug for MergeInto {
@@ -93,7 +94,7 @@ impl std::fmt::Debug for MergeInto {
             .field(
                 "can_try_update_column_only",
                 &self.can_try_update_column_only,
-            )
+            ).field("target_table_column_pruning", &self.excluded_target_columns)
             .finish()
     }
 }

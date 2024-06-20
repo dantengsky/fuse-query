@@ -32,11 +32,13 @@ use databend_common_catalog::plan::InternalColumn;
 use databend_common_catalog::plan::InternalColumnType;
 use databend_common_exception::ErrorCode;
 use databend_common_exception::Result;
+use databend_common_expression::is_stream_column;
 use databend_common_expression::types::DataType;
 use databend_common_expression::FieldIndex;
 use databend_common_expression::TableSchemaRef;
 use databend_common_expression::ROW_ID_COL_NAME;
 use indexmap::IndexMap;
+use log::info;
 
 use crate::binder::wrap_cast;
 use crate::binder::Binder;
@@ -291,6 +293,12 @@ impl Binder {
             .bind_table_reference(bind_context, &target_table)
             .await?;
 
+        // Keep a copy of the target table column bindings, later we might
+        // use it to prune the columns of target table.
+        //
+        // Note that row_id column is not included, intentionally.
+        let target_column_bindings = target_context.columns.clone();
+
         if table.change_tracking_enabled() && merge_type != MergeIntoType::InsertOnly {
             if let RelOperator::Scan(scan) = target_expr.plan() {
                 let new_scan = scan.update_stream_columns(true);
@@ -299,7 +307,7 @@ impl Binder {
         }
 
         // add internal_column (_row_id)
-        let table_index = self
+        let target_table_index = self
             .metadata
             .read()
             .get_table_index(Some(database_name.as_str()), table_name.as_str())
@@ -323,11 +331,11 @@ impl Binder {
         let row_id_index = column_binding.index;
 
         target_expr =
-            SExpr::add_internal_column_index(&target_expr, table_index, row_id_index, &None);
+            SExpr::add_internal_column_index(&target_expr, target_table_index, row_id_index, &None);
 
         self.metadata
             .write()
-            .set_table_row_id_index(table_index, row_id_index);
+            .set_table_row_id_index(target_table_index, row_id_index);
 
         // add row_id_idx
         if merge_type != MergeIntoType::InsertOnly {
@@ -343,7 +351,7 @@ impl Binder {
             right: Box::new(source_data.clone()),
         };
 
-        let (join_sexpr, mut bind_ctx) = self
+        let (mut join_sexpr, mut bind_ctx) = self
             .bind_merge_into_join(
                 bind_context,
                 target_context,
@@ -397,7 +405,10 @@ impl Binder {
             Box::new(IndexMap::new()),
         );
 
-        let column_entries = self.metadata.read().columns_by_table_index(table_index);
+        let column_entries = self
+            .metadata
+            .read()
+            .columns_by_table_index(target_table_index);
         let mut field_index_map = HashMap::<usize, String>::new();
         // if true, read all columns of target table
         if has_update {
@@ -438,6 +449,29 @@ impl Binder {
             );
         }
 
+        // target table column pruning not support CDC yet
+        let target_table_column_pruning = !matched_clauses.is_empty(); // && !table.change_tracking_enabled();
+
+        info!(
+            "target table column pruning enabled: {}",
+            target_table_column_pruning
+        );
+
+        let excluded_target_columns = if target_table_column_pruning {
+            let excluded = self.prune_target_columns(
+                &mut join_sexpr,
+                target_table_index,
+                target_column_bindings,
+            );
+            if excluded.is_empty() {
+                None
+            } else {
+                Some(excluded)
+            }
+        } else {
+            None
+        };
+
         Ok(MergeInto {
             catalog: catalog_name.to_string(),
             database: database_name.to_string(),
@@ -450,7 +484,7 @@ impl Binder {
             columns_set: Box::new(columns_set),
             matched_evaluators,
             unmatched_evaluators,
-            target_table_idx: table_index,
+            target_table_idx: target_table_index,
             field_index_map,
             merge_type,
             distributed: false,
@@ -458,6 +492,7 @@ impl Binder {
             row_id_index,
             can_try_update_column_only: self.can_try_update_column_only(&matched_clauses),
             enable_right_broadcast: false,
+            excluded_target_columns,
         })
     }
 
@@ -697,6 +732,62 @@ impl Binder {
             }
         }
         false
+    }
+
+    fn prune_target_columns(
+        &self,
+        join_sexpr: &mut SExpr,
+        target_table_index: IndexType,
+        target_columns: Vec<ColumnBinding>,
+    ) -> Vec<ColumnBinding> {
+        // find the target table columns used by join conditions
+        let prob_columns = match join_sexpr.plan.as_ref() {
+            RelOperator::Join(j) => {
+                j.left_conditions
+                    .iter()
+                    .filter_map(|cond| match cond {
+                        // FIXME, I am not sure if bound columns should be searched recursively
+                        ScalarExpr::BoundColumnRef(col_ref) => {
+                            assert_eq!(col_ref.column.table_index, Some(target_table_index));
+                            Some(col_ref.column.index)
+                        }
+                        _ => None,
+                    })
+                    .collect::<HashSet<_>>()
+            }
+            _ => unreachable!(),
+        };
+
+        // excludes columns that not used
+        let (excluded_column_bindings, excluded_column_ids): (Vec<_>, HashSet<_>) = target_columns
+            .iter()
+            .filter(|col| !prob_columns.contains(&col.index) && !is_stream_column(&col.column_name))
+            .map(|col| ((*col).clone(), col.index))
+            .unzip();
+
+        assert_eq!(excluded_column_bindings.len(), excluded_column_ids.len());
+
+        if !excluded_column_ids.is_empty() {
+            // rewrite the join_sexpr
+            let mut scan_plan = join_sexpr.children[0].plan.as_ref().clone();
+            if let RelOperator::Scan(ref mut scan) = &mut scan_plan {
+                assert_eq!(scan.table_index, target_table_index);
+                let cols = scan.columns.difference(&excluded_column_ids);
+                scan.columns = cols.cloned().collect();
+            } else {
+                // Give up pruning for stmt like:
+                //   merge into tt2 using(select true as x) as t on (x and tt2.a) when matched and tt2.a then update set tt2.b = parse_json('30');
+                info!("the left operator of join expr is not a Scan, give up target table pruning");
+                return vec![];
+            }
+            join_sexpr.children[0] = Arc::new({
+                let mut v = join_sexpr.children[0].as_ref().clone();
+                v.plan = Arc::new(scan_plan);
+                v
+            });
+        }
+
+        excluded_column_bindings
     }
 }
 
