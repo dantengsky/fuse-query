@@ -15,6 +15,8 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use chrono::DateTime;
+use chrono::Utc;
 use databend_common_exception::Result;
 use databend_common_expression::TableSchema;
 use databend_storages_common_table_meta::meta::ClusterKey;
@@ -46,6 +48,10 @@ impl TruncateGenerator {
     pub fn mode(&self) -> &TruncateMode {
         &self.mode
     }
+
+    pub fn get_lvt(&self) -> DateTime<Utc> {
+        todo!()
+    }
 }
 
 #[async_trait::async_trait]
@@ -70,8 +76,8 @@ impl SnapshotGenerator for TruncateGenerator {
             (None, None)
         };
 
+        let least_visible_timestamp = self.get_lvt();
         let new_snapshot = TableSnapshot::new(
-            Uuid::new_v4(),
             prev_table_seq,
             &prev_timestamp,
             prev_snapshot_id,
@@ -80,6 +86,7 @@ impl SnapshotGenerator for TruncateGenerator {
             vec![],
             cluster_key_meta,
             None,
+            least_visible_timestamp,
         );
         Ok(new_snapshot)
     }

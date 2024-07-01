@@ -15,6 +15,8 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use chrono::DateTime;
+use chrono::Utc;
 use databend_common_exception::ErrorCode;
 use databend_common_exception::Result;
 use databend_common_expression::TableSchema;
@@ -45,6 +47,10 @@ impl MutationGenerator {
             mutation_kind,
         }
     }
+
+    pub fn get_lvt(&self) -> DateTime<Utc> {
+        todo!()
+    }
 }
 
 impl SnapshotGenerator for MutationGenerator {
@@ -65,10 +71,12 @@ impl SnapshotGenerator for MutationGenerator {
     ) -> Result<TableSnapshot> {
         let default_cluster_key_id = cluster_key_meta.clone().map(|v| v.0);
 
+        let lvt = self.get_lvt();
         let previous = previous.unwrap_or_else(|| {
             Arc::new(TableSnapshot::new_empty_snapshot(
                 schema.clone(),
                 prev_table_seq,
+                lvt,
             ))
         });
         match &self.conflict_resolve_ctx {
@@ -95,8 +103,8 @@ impl SnapshotGenerator for MutationGenerator {
                         default_cluster_key_id,
                     );
                     deduct_statistics_mut(&mut new_summary, &ctx.removed_statistics);
+                    let lvt = self.get_lvt();
                     let new_snapshot = TableSnapshot::new(
-                        Uuid::new_v4(),
                         prev_table_seq,
                         &previous.timestamp,
                         Some((previous.snapshot_id, previous.format_version)),
@@ -105,6 +113,7 @@ impl SnapshotGenerator for MutationGenerator {
                         new_segments,
                         cluster_key_meta,
                         previous.table_statistics_location.clone(),
+                        lvt,
                     );
 
                     if matches!(self.mutation_kind, MutationKind::Compact) {

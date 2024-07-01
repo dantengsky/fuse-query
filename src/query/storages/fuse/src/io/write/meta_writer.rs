@@ -104,7 +104,8 @@ impl Marshal for TableSnapshotStatistics {
 
 #[cfg(test)]
 mod tests {
-
+    use chrono::DateTime;
+    use chrono::Utc;
     use databend_common_base::runtime::catch_unwind;
     use databend_common_expression::TableSchema;
     use databend_storages_common_table_meta::meta::SnapshotId;
@@ -131,11 +132,11 @@ mod tests {
 
     #[test]
     fn test_snapshot_format_version_validation() {
+        let lvt: DateTime<Utc>;
         // old versions are not allowed (runtime panics)
         for v in 0..TableSnapshot::VERSION {
             let r = catch_unwind(|| {
                 let mut snapshot = TableSnapshot::new(
-                    SnapshotId::new_v4(),
                     None,
                     &None,
                     None,
@@ -144,6 +145,7 @@ mod tests {
                     vec![],
                     None,
                     None,
+                    lvt.clone(),
                 );
                 snapshot.format_version = v;
                 let _ = snapshot.marshal();
@@ -153,7 +155,6 @@ mod tests {
 
         // current version allowed
         let snapshot = TableSnapshot::new(
-            SnapshotId::new_v4(),
             None,
             &None,
             None,
@@ -162,6 +163,7 @@ mod tests {
             vec![],
             None,
             None,
+            lvt,
         );
         snapshot.marshal().unwrap();
     }

@@ -16,6 +16,8 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use chrono::DateTime;
+use chrono::Utc;
 use databend_common_catalog::table_context::TableContext;
 use databend_common_exception::ErrorCode;
 use databend_common_exception::Result;
@@ -32,6 +34,7 @@ use databend_storages_common_table_meta::meta::TableSnapshot;
 use log::info;
 use log::warn;
 use uuid::Uuid;
+use uuid::Version;
 
 use crate::operations::common::ConflictResolveContext;
 use crate::operations::common::SnapshotGenerator;
@@ -54,6 +57,10 @@ impl AppendGenerator {
             overwrite,
             conflict_resolve_ctx: ConflictResolveContext::None,
         }
+    }
+
+    pub fn get_lvt(&self) -> DateTime<Utc> {
+        todo!()
     }
 
     fn check_fill_default(&self, summary: &Statistics) -> Result<bool> {
@@ -120,6 +127,22 @@ impl SnapshotGenerator for AppendGenerator {
         previous: Option<Arc<TableSnapshot>>,
         prev_table_seq: Option<u64>,
     ) -> Result<TableSnapshot> {
+        if let Some(prev) = &previous {
+            let version = prev.snapshot_id.get_version();
+            match version {
+                None => {}
+                Some(v) => {
+                    match v {
+                        Version::SortRand => {
+                            // v7
+                            let base_ts = prev.snapshot_id.get_timestamp().unwrap();
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        };
+
         let (snapshot_merged, expected_schema) = self.conflict_resolve_ctx()?;
         if is_column_type_modified(&schema, expected_schema) {
             return Err(ErrorCode::UnresolvableConflict(format!(
@@ -226,8 +249,8 @@ impl SnapshotGenerator for AppendGenerator {
                 .set_compaction_num_block_hint(compact_num_block_hint);
         }
 
+        let lvt = self.get_lvt();
         Ok(TableSnapshot::new(
-            Uuid::new_v4(),
             prev_table_seq,
             &prev_timestamp,
             prev_snapshot_id,
@@ -236,6 +259,7 @@ impl SnapshotGenerator for AppendGenerator {
             new_segments,
             cluster_key_meta,
             table_statistics_location,
+            lvt,
         ))
     }
 }

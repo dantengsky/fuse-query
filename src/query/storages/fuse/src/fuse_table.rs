@@ -14,10 +14,14 @@
 
 use std::any::Any;
 use std::collections::BTreeMap;
+use std::ops::Sub;
 use std::str;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use chrono::DateTime;
+use chrono::Days;
+use chrono::Utc;
 use databend_common_catalog::catalog::StorageDescription;
 use databend_common_catalog::plan::DataSourcePlan;
 use databend_common_catalog::plan::PartStatistics;
@@ -577,8 +581,8 @@ impl Table for FuseTable {
 
         let table_version = Some(self.get_table_info().ident.seq);
 
-        let new_snapshot = TableSnapshot::new(
-            Uuid::new_v4(),
+        let lvt: DateTime<Utc>;
+        let mut new_snapshot = TableSnapshot::new(
             table_version,
             &prev_timestamp,
             prev_snapshot_id,
@@ -587,7 +591,15 @@ impl Table for FuseTable {
             segments,
             cluster_key_meta,
             prev_statistics_location,
+            lvt,
         );
+
+        let retention_period = ctx.get_settings().get_data_retention_time_in_days()?;
+        let snapshot_timestamp = new_snapshot.timestamp.unwrap();
+        let lvt = snapshot_timestamp
+            .checked_sub_days(Days(retention_period))
+            .unwrap();
+        new_snapshot.least_visible_timestamp = Some(lvt);
 
         let mut table_info = self.table_info.clone();
         table_info.meta = new_table_meta;
@@ -631,8 +643,8 @@ impl Table for FuseTable {
 
         let table_version = Some(self.get_table_info().ident.seq);
 
+        let lvt: DateTime<Utc>;
         let new_snapshot = TableSnapshot::new(
-            Uuid::new_v4(),
             table_version,
             &prev_timestamp,
             prev_snapshot_id,
@@ -641,6 +653,7 @@ impl Table for FuseTable {
             segments,
             None,
             prev_statistics_location,
+            lvt,
         );
 
         let mut table_info = self.table_info.clone();

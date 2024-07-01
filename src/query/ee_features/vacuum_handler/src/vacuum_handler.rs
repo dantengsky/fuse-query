@@ -49,6 +49,13 @@ pub trait VacuumHandler: Sync + Send {
         retain: Option<Duration>,
         vacuum_limit: usize,
     ) -> Result<usize>;
+
+    async fn vacuum2(
+        fuse_table: &FuseTable,
+        ctx: Arc<dyn TableContext>,
+        retention_time: DateTime<Utc>,
+        dry_run: bool,
+    ) -> Result<Option<Vec<String>>>;
 }
 
 pub struct VacuumHandlerWrapper {
