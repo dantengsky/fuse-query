@@ -214,8 +214,9 @@ impl SnapshotLocationCreator for SnapshotVersion {
                 )
             }
             SnapshotVersion::V5(_) => {
+                // 'g' is larger than all the simple form uuid generated previously
                 format!(
-                    "{}/{}/={}{}",
+                    "{}/{}/g{}{}",
                     prefix.as_ref(),
                     FUSE_TBL_SNAPSHOT_PREFIX,
                     id.simple(),

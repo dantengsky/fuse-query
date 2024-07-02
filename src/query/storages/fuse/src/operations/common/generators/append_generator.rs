@@ -31,6 +31,7 @@ use databend_storages_common_table_meta::meta::ClusterKey;
 use databend_storages_common_table_meta::meta::ColumnStatistics;
 use databend_storages_common_table_meta::meta::Statistics;
 use databend_storages_common_table_meta::meta::TableSnapshot;
+use databend_storages_common_table_meta::meta::TableSnapshotBuilder;
 use log::info;
 use log::warn;
 use uuid::Uuid;
@@ -60,6 +61,10 @@ impl AppendGenerator {
     }
 
     pub fn get_lvt(&self) -> DateTime<Utc> {
+        todo!()
+    }
+
+    pub fn get_retention(&self) -> Result<u64> {
         todo!()
     }
 
@@ -127,22 +132,6 @@ impl SnapshotGenerator for AppendGenerator {
         previous: Option<Arc<TableSnapshot>>,
         prev_table_seq: Option<u64>,
     ) -> Result<TableSnapshot> {
-        if let Some(prev) = &previous {
-            let version = prev.snapshot_id.get_version();
-            match version {
-                None => {}
-                Some(v) => {
-                    match v {
-                        Version::SortRand => {
-                            // v7
-                            let base_ts = prev.snapshot_id.get_timestamp().unwrap();
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        };
-
         let (snapshot_merged, expected_schema) = self.conflict_resolve_ctx()?;
         if is_column_type_modified(&schema, expected_schema) {
             return Err(ErrorCode::UnresolvableConflict(format!(
@@ -249,18 +238,26 @@ impl SnapshotGenerator for AppendGenerator {
                 .set_compaction_num_block_hint(compact_num_block_hint);
         }
 
-        let lvt = self.get_lvt();
-        Ok(TableSnapshot::new(
-            prev_table_seq,
-            &prev_timestamp,
-            prev_snapshot_id,
-            schema,
-            new_summary,
-            new_segments,
-            cluster_key_meta,
-            table_statistics_location,
-            lvt,
-        ))
+        TableSnapshotBuilder::new(self.get_retention()?)
+            .set_previous_snapshot_opt(previous)
+            .set_schema(schema)
+            .set_summary(new_summary)
+            .set_segments(new_segments)
+            .set_cluster_key_meta(cluster_key_meta)
+            .set_prev_table_seq_opt(prev_table_seq)
+            .set_table_statistics_location(table_statistics_location)
+            .build()
+        // Ok(TableSnapshot::new(
+        //    prev_table_seq,
+        //    &prev_timestamp,
+        //    prev_snapshot_id,
+        //    schema,
+        //    new_summary,
+        //    new_segments,
+        //    cluster_key_meta,
+        //    table_statistics_location,
+        //    lvt,
+        //))
     }
 }
 

@@ -14,5 +14,8 @@
 
 mod snapshot;
 
+mod builder;
+
+pub use builder::TableSnapshotBuilder;
 pub use snapshot::TableSnapshot;
 pub use snapshot::TableSnapshotLite;

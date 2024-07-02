@@ -129,8 +129,14 @@ impl Interpreter for DropTableColumnInterpreter {
 
         let table_id = table_info.ident.table_id;
         let table_version = table_info.ident.seq;
+        let retention_period_in_days = self.ctx.get_settings().get_data_retention_time_in_days()?;
 
-        generate_new_snapshot(table.as_ref(), &mut new_table_meta).await?;
+        generate_new_snapshot(
+            table.as_ref(),
+            &mut new_table_meta,
+            retention_period_in_days,
+        )
+        .await?;
 
         let req = UpdateTableMetaReq {
             table_id,

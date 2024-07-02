@@ -31,6 +31,7 @@ use databend_common_storages_fuse::FuseTable;
 use databend_common_storages_stream::stream_table::STREAM_ENGINE;
 use databend_common_storages_view::view_table::VIEW_ENGINE;
 use databend_storages_common_table_meta::meta::TableSnapshot;
+use databend_storages_common_table_meta::meta::TableSnapshotBuilder;
 use databend_storages_common_table_meta::meta::Versioned;
 use databend_storages_common_table_meta::table::OPT_KEY_SNAPSHOT_LOCATION;
 use log::info;
@@ -120,7 +121,12 @@ impl Interpreter for AddTableColumnInterpreter {
             let table_id = table_info.ident.table_id;
             let table_version = table_info.ident.seq;
 
-            generate_new_snapshot(table.as_ref(), &mut new_table_meta).await?;
+            generate_new_snapshot(
+                table.as_ref(),
+                &mut new_table_meta,
+                self.ctx.get_settings().get_data_retention_time_in_days()?,
+            )
+            .await?;
 
             let req = UpdateTableMetaReq {
                 table_id,
@@ -143,16 +149,26 @@ impl Interpreter for AddTableColumnInterpreter {
 pub(crate) async fn generate_new_snapshot(
     table: &dyn Table,
     new_table_meta: &mut TableMeta,
+    retention_period_in_days: u64,
 ) -> Result<()> {
     if let Ok(fuse_table) = FuseTable::try_from_table(table) {
         if let Some(snapshot) = fuse_table.read_table_snapshot().await? {
-            let mut new_snapshot = TableSnapshot::from_previous(
-                snapshot.as_ref(),
-                Some(fuse_table.get_table_info().ident.seq),
-            );
+            // TODO where is the base? can we ignore it safely?
+            let new_snapshot = TableSnapshotBuilder::new(retention_period_in_days)
+                .set_previous_snapshot(snapshot.as_ref())
+                .set_prev_table_seq(fuse_table.get_table_info().ident.seq)
+                .set_schema(new_table_meta.schema.as_ref().clone())
+                .build()?;
+
+            //            let mut new_snapshot = TableSnapshot::from_previous_new(
+            //                None,
+            //                Some(snapshot.as_ref()),
+            //                Some(fuse_table.get_table_info().ident.seq),
+            //                retention_period_in_days,
+            //            )?;
 
             // replace schema
-            new_snapshot.schema = new_table_meta.schema.as_ref().clone();
+            // new_snapshot.schema = new_table_meta.schema.as_ref().clone();
 
             // write down new snapshot
             let new_snapshot_location = fuse_table
@@ -177,11 +193,13 @@ pub(crate) async fn generate_new_snapshot(
                 OPT_KEY_SNAPSHOT_LOCATION.to_owned(),
                 new_snapshot_location.clone(),
             );
+            Ok(())
         } else {
             info!("Snapshot not found, no need to generate new snapshot");
+            Ok(())
         }
     } else {
         info!("Not a fuse table, no need to generate new snapshot");
+        Ok(())
     }
-    Ok(())
 }

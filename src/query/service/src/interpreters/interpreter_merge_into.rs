@@ -33,6 +33,7 @@ use databend_common_storages_factory::Table;
 use databend_common_storages_fuse::FuseTable;
 use databend_common_storages_fuse::TableContext;
 use databend_storages_common_table_meta::meta::TableSnapshot;
+use databend_storages_common_table_meta::meta::TableSnapshotBuilder;
 
 use crate::interpreters::common::dml_build_update_stream_req;
 use crate::interpreters::HookOperator;
@@ -137,12 +138,36 @@ impl MergeIntoInterpreter {
 
         // Prepare MergeIntoBuildInfo for PhysicalPlanBuilder to build MergeInto physical plan.
         let table_info = fuse_table.get_table_info();
-        let table_snapshot = fuse_table.read_table_snapshot().await?.unwrap_or_else(|| {
-            Arc::new(TableSnapshot::new_empty_snapshot(
-                fuse_table.schema().as_ref().clone(),
-                Some(table_info.ident.seq),
-            ))
-        });
+        let retention_period = self.ctx.get_settings().get_data_retention_time_in_days()?;
+        let table_snapshot = match fuse_table.read_table_snapshot().await? {
+            Some(v) => v,
+            None => {
+                let base = None; // TODO make sure this is safe,
+                // let previous = None;
+                // let prev_table_seq = Some(table_info.ident.seq);
+                // this snapshot will be used as a base snapshot!!
+
+                let snapshot = TableSnapshotBuilder::new(retention_period)
+                    .set_base_snapshot_opt(base)
+                    .set_prev_table_seq(table_info.ident.seq)
+                    .set_schema(fuse_table.schema().as_ref().clone())
+                    .build()?;
+
+                // let mut snapshot = TableSnapshot::from_previous_new(
+                //    base,
+                //    previous,
+                //    prev_table_seq,
+                //    retention_period,
+                //)?;
+                // snapshot.schema = fuse_table.schema().as_ref().clone();
+                Arc::new(snapshot)
+
+                // Arc::new(TableSnapshot::new_empty_snapshot(
+                //    fuse_table.schema().as_ref().clone(),
+                //    Some(table_info.ident.seq),
+                //))
+            }
+        };
         let update_stream_meta =
             dml_build_update_stream_req(self.ctx.clone(), &merge_into.meta_data).await?;
         let merge_into_build_info = MergeIntoBuildInfo {

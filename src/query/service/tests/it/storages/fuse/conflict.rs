@@ -36,14 +36,16 @@ use databend_storages_common_table_meta::meta::TableSnapshot;
 ///
 /// so the delete operation cannot be applied
 fn test_unresolvable_delete_conflict() {
-    let mut base_snapshot = TableSnapshot::new_empty_snapshot(TableSchema::default(), None);
+    // let mut base_snapshot = TableSnapshot::new_empty_snapshot(TableSchema::default(), None);
+    let mut base_snapshot = TableSnapshot::default();
     base_snapshot.segments = vec![
         ("1".to_string(), 1),
         ("2".to_string(), 1),
         ("3".to_string(), 1),
     ];
 
-    let mut latest_snapshot = TableSnapshot::new_empty_snapshot(TableSchema::default(), None);
+    // let mut latest_snapshot = TableSnapshot::new_empty_snapshot(TableSchema::default(), None);
+    let mut latest_snapshot = TableSnapshot::default();
     latest_snapshot.segments = vec![("1".to_string(), 1), ("4".to_string(), 1)];
 
     let ctx = ConflictResolveContext::ModifiedSegmentExistsInLatest(SnapshotChanges {
@@ -77,7 +79,8 @@ fn test_unresolvable_delete_conflict() {
 ///
 /// the delete operation is merged into the latest snapshot, by removing segments 2, 3, and adding segment 8 in the latest snapshot
 fn test_resolvable_delete_conflict() {
-    let mut base_snapshot = TableSnapshot::new_empty_snapshot(TableSchema::default(), None);
+    // let mut base_snapshot = TableSnapshot::new_empty_snapshot(TableSchema::default(), None);
+    let mut base_snapshot = TableSnapshot::default();
     base_snapshot.segments = vec![
         ("1".to_string(), 1),
         ("2".to_string(), 1),
@@ -95,7 +98,8 @@ fn test_resolvable_delete_conflict() {
         cluster_stats: None,
     };
 
-    let mut latest_snapshot = TableSnapshot::new_empty_snapshot(TableSchema::default(), None);
+    // let mut latest_snapshot = TableSnapshot::new_empty_snapshot(TableSchema::default(), None);
+    let mut latest_snapshot = TableSnapshot::default();
     latest_snapshot.segments = vec![
         ("2".to_string(), 1),
         ("3".to_string(), 1),
@@ -181,7 +185,8 @@ fn test_resolvable_delete_conflict() {
 ///
 /// the replace operation is merged into the latest snapshot, by removing segments 2, 3, and adding segment 6,5 in the latest snapshot
 fn test_resolvable_replace_conflict() {
-    let mut base_snapshot = TableSnapshot::new_empty_snapshot(TableSchema::default(), None);
+    //    let mut base_snapshot = TableSnapshot::new_empty_snapshot(TableSchema::default(), None);
+    let mut base_snapshot = TableSnapshot::default();
     base_snapshot.segments = vec![
         ("1".to_string(), 1),
         ("2".to_string(), 1),
@@ -199,7 +204,8 @@ fn test_resolvable_replace_conflict() {
         cluster_stats: None,
     };
 
-    let mut latest_snapshot = TableSnapshot::new_empty_snapshot(TableSchema::default(), None);
+    // let mut latest_snapshot = TableSnapshot::new_empty_snapshot(TableSchema::default(), None);
+    let mut latest_snapshot = TableSnapshot::default();
     latest_snapshot.segments = vec![
         ("2".to_string(), 1),
         ("3".to_string(), 1),

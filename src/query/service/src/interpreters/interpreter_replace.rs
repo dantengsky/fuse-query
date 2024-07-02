@@ -46,6 +46,7 @@ use databend_common_storage::StageFileInfo;
 use databend_common_storages_factory::Table;
 use databend_common_storages_fuse::FuseTable;
 use databend_storages_common_table_meta::meta::TableSnapshot;
+use databend_storages_common_table_meta::meta::TableSnapshotBuilder;
 use parking_lot::RwLock;
 
 use crate::interpreters::common::check_deduplicate_label;
@@ -164,12 +165,25 @@ impl ReplaceInterpreter {
         })?;
 
         let table_info = fuse_table.get_table_info();
-        let base_snapshot = fuse_table.read_table_snapshot().await?.unwrap_or_else(|| {
-            Arc::new(TableSnapshot::new_empty_snapshot(
-                schema.as_ref().clone(),
-                Some(table_info.ident.seq),
-            ))
-        });
+        let retention_period_in_days = self.ctx.get_settings().get_data_retention_time_in_days()?;
+        let base_snapshot = match fuse_table.read_table_snapshot().await? {
+            Some(v) => v,
+            None => {
+                // TODO verify this, this may be used as base snapshot of other TableSnapshot
+                let new_snapshot = TableSnapshotBuilder::new(retention_period_in_days)
+                    .set_prev_table_seq(table_info.ident.seq)
+                    .set_schema(schema.as_ref().clone())
+                    .build()?;
+                // let mut new_snapshot = TableSnapshot::from_previous_new(
+                //    None,
+                //    None,
+                //    Some(table_info.ident.seq),
+                //    retention_period_in_days,
+                //)?;
+                // new_snapshot.schema = schema.as_ref().clone();
+                Arc::new(new_snapshot)
+            }
+        };
 
         let is_multi_node = !self.ctx.get_cluster().is_empty();
         let is_value_source = matches!(self.plan.source, InsertInputSource::Values(_));

@@ -20,13 +20,15 @@ use databend_storages_common_table_meta::meta::testing::StatisticsV0;
 use databend_storages_common_table_meta::meta::testing::TableSnapshotV1;
 use databend_storages_common_table_meta::meta::testing::TableSnapshotV2;
 use databend_storages_common_table_meta::meta::TableSnapshot;
+use databend_storages_common_table_meta::meta::TableSnapshotBuilder;
 use uuid::Uuid;
 
 fn default_snapshot() -> TableSnapshot {
-    let uuid = Uuid::new_v4();
-    let schema = TableSchema::empty();
-    let stats = Default::default();
-    TableSnapshot::new(uuid, None, &None, None, schema, stats, vec![], None, None)
+    TableSnapshot::default()
+    //    let uuid = Uuid::new_v4();
+    //    let schema = TableSchema::empty();
+    //    let stats = Default::default();
+    //    TableSnapshot::new(uuid, None, &None, None, schema, stats, vec![], None, None)
 }
 
 #[test]
@@ -40,17 +42,23 @@ fn snapshot_timestamp_monotonic_increase() {
     let prev = default_snapshot();
     let schema = TableSchema::empty();
     let uuid = Uuid::new_v4();
-    let current = TableSnapshot::new(
-        uuid,
-        None,
-        &prev.timestamp,
-        prev.prev_snapshot_id,
-        schema,
-        Default::default(),
-        vec![],
-        None,
-        None,
-    );
+    // let current = TableSnapshot::new(
+    //    uuid,
+    //    None,
+    //    &prev.timestamp,
+    //    prev.prev_snapshot_id,
+    //    schema,
+    //    Default::default(),
+    //    vec![],
+    //    None,
+    //    None,
+    //);
+
+    let current = TableSnapshotBuilder::new(1)
+        .set_previous_snapshot(&prev)
+        .build()
+        .unwrap();
+
     let current_ts = current.timestamp.unwrap();
     let prev_ts = prev.timestamp.unwrap();
     assert!(current_ts > prev_ts)
@@ -60,22 +68,28 @@ fn snapshot_timestamp_monotonic_increase() {
 fn snapshot_timestamp_time_skew_tolerance() {
     let mut prev = default_snapshot();
     let schema = TableSchema::empty();
-    let uuid = Uuid::new_v4();
+    // let uuid = Uuid::new_v4();
 
     // simulating a stalled clock
     prev.timestamp = Some(prev.timestamp.unwrap().add(chrono::Duration::days(1)));
 
-    let current = TableSnapshot::new(
-        uuid,
-        None,
-        &prev.timestamp,
-        prev.prev_snapshot_id,
-        schema,
-        Default::default(),
-        vec![],
-        None,
-        None,
-    );
+    // let current = TableSnapshot::new(
+    //    uuid,
+    //    None,
+    //    &prev.timestamp,
+    //    prev.prev_snapshot_id,
+    //    schema,
+    //    Default::default(),
+    //    vec![],
+    //    None,
+    //    None,
+    //);
+
+    let current = TableSnapshotBuilder::new(1)
+        .set_previous_snapshot(&prev)
+        .set_schema(schema)
+        .build()
+        .unwrap();
     let current_ts = current.timestamp.unwrap();
     let prev_ts = prev.timestamp.unwrap();
     assert!(current_ts > prev_ts)

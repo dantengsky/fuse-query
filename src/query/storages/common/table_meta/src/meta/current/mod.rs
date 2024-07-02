@@ -23,6 +23,7 @@ pub use v2::TableSnapshotStatistics;
 pub use v4::CompactSegmentInfo;
 pub use v4::SegmentInfo;
 pub use v5::TableSnapshot;
+pub use v5::TableSnapshotBuilder;
 pub use v5::TableSnapshotLite;
 
 use super::v0;

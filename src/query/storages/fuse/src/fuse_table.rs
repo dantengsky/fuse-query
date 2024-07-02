@@ -67,6 +67,7 @@ use databend_storages_common_table_meta::meta::ClusterKey;
 use databend_storages_common_table_meta::meta::SnapshotId;
 use databend_storages_common_table_meta::meta::Statistics as FuseStatistics;
 use databend_storages_common_table_meta::meta::TableSnapshot;
+use databend_storages_common_table_meta::meta::TableSnapshotBuilder;
 use databend_storages_common_table_meta::meta::TableSnapshotStatistics;
 use databend_storages_common_table_meta::meta::Versioned;
 use databend_storages_common_table_meta::table::table_storage_prefix;
@@ -567,37 +568,45 @@ impl Table for FuseTable {
         let schema = self.schema().as_ref().clone();
 
         let prev = self.read_table_snapshot().await?;
-        let prev_version = self.snapshot_format_version(None).await?;
-        let prev_timestamp = prev.as_ref().and_then(|v| v.timestamp);
-        let prev_snapshot_id = prev.as_ref().map(|v| (v.snapshot_id, prev_version));
-        let prev_statistics_location = prev
-            .as_ref()
-            .and_then(|v| v.table_statistics_location.clone());
-        let (summary, segments) = if let Some(v) = prev {
-            (v.summary.clone(), v.segments.clone())
-        } else {
-            (FuseStatistics::default(), vec![])
-        };
+        // let prev_version = self.snapshot_format_version(None).await?;
+        // let prev_timestamp = prev.as_ref().and_then(|v| v.timestamp);
+        // let prev_snapshot_id = prev.as_ref().map(|v| (v.snapshot_id, prev_version));
+        // let prev_statistics_location = prev
+        //    .as_ref()
+        //    .and_then(|v| v.table_statistics_location.clone());
+        // let (summary, segments) = if let Some(v) = prev {
+        //    (v.summary.clone(), v.segments.clone())
+        //} else {
+        //    (FuseStatistics::default(), vec![])
+        //};
 
-        let table_version = Some(self.get_table_info().ident.seq);
+        let prev_table_seq = self.get_table_info().ident.seq;
+        let retention_period = ctx.get_settings().get_data_retention_time_in_days()?;
 
-        let lvt: DateTime<Utc>;
-        let mut new_snapshot = TableSnapshot::new(
-            table_version,
-            &prev_timestamp,
-            prev_snapshot_id,
-            schema,
-            summary,
-            segments,
-            cluster_key_meta,
-            prev_statistics_location,
-            lvt,
-        );
+        // let base = None; // TODO verify this is corret
+        let mut new_snapshot = TableSnapshotBuilder::new(retention_period)
+            .set_previous_snapshot_opt(prev)
+            .set_prev_table_seq(prev_table_seq)
+            .set_cluster_key_meta(cluster_key_meta)
+            .set_schema(schema)
+            .build()?;
+
+        // let mut new_snapshot = TableSnapshot::new(
+        //    table_version,
+        //    &prev_timestamp,
+        //    prev_snapshot_id,
+        //    schema,
+        //    summary,
+        //    segments,
+        //    cluster_key_meta,
+        //    prev_statistics_location,
+        //    lvt,
+        //);
 
         let retention_period = ctx.get_settings().get_data_retention_time_in_days()?;
         let snapshot_timestamp = new_snapshot.timestamp.unwrap();
         let lvt = snapshot_timestamp
-            .checked_sub_days(Days(retention_period))
+            .checked_sub_days(Days::new(retention_period))
             .unwrap();
         new_snapshot.least_visible_timestamp = Some(lvt);
 
@@ -629,32 +638,42 @@ impl Table for FuseTable {
         let schema = self.schema().as_ref().clone();
 
         let prev = self.read_table_snapshot().await?;
-        let prev_version = self.snapshot_format_version(None).await?;
-        let prev_timestamp = prev.as_ref().and_then(|v| v.timestamp);
-        let prev_statistics_location = prev
-            .as_ref()
-            .and_then(|v| v.table_statistics_location.clone());
-        let prev_snapshot_id = prev.as_ref().map(|v| (v.snapshot_id, prev_version));
-        let (summary, segments) = if let Some(v) = prev {
-            (v.summary.clone(), v.segments.clone())
-        } else {
-            (FuseStatistics::default(), vec![])
-        };
+        // let prev_version = self.snapshot_format_version(None).await?;
+        // let prev_timestamp = prev.as_ref().and_then(|v| v.timestamp);
+        // let prev_statistics_location = prev
+        //    .as_ref()
+        //    .and_then(|v| v.table_statistics_location.clone());
+        // let prev_snapshot_id = prev.as_ref().map(|v| (v.snapshot_id, prev_version));
+        // let (summary, segments) = if let Some(v) = prev {
+        //    (v.summary.clone(), v.segments.clone())
+        //} else {
+        //    (FuseStatistics::default(), vec![])
+        //};
 
         let table_version = Some(self.get_table_info().ident.seq);
 
-        let lvt: DateTime<Utc>;
-        let new_snapshot = TableSnapshot::new(
-            table_version,
-            &prev_timestamp,
-            prev_snapshot_id,
-            schema,
-            summary,
-            segments,
-            None,
-            prev_statistics_location,
-            lvt,
-        );
+        // let base = None; // TODO verify this is corret
+        // let previous = prev.as_ref().map(|v| v.as_ref());
+        let retention_period = ctx.get_settings().get_data_retention_time_in_days()?;
+        let prev_table_seq = table_version;
+        let new_snapshot = TableSnapshotBuilder::new(retention_period)
+            .set_previous_snapshot_opt(prev)
+            .set_schema(schema)
+            .set_prev_table_seq_opt(prev_table_seq)
+            .build()?;
+        // new_snapshot.schema = schema;
+
+        // let new_snapshot = TableSnapshot::new(
+        //    table_version,
+        //    &prev_timestamp,
+        //    prev_snapshot_id,
+        //    schema,
+        //    summary,
+        //    segments,
+        //    None,
+        //    prev_statistics_location,
+        //    lvt,
+        //);
 
         let mut table_info = self.table_info.clone();
         table_info.meta = new_table_meta;

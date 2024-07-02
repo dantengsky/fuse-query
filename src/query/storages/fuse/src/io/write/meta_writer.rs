@@ -110,6 +110,7 @@ mod tests {
     use databend_common_expression::TableSchema;
     use databend_storages_common_table_meta::meta::SnapshotId;
     use databend_storages_common_table_meta::meta::Statistics;
+    use databend_storages_common_table_meta::meta::TableSnapshotBuilder;
 
     use super::*;
 
@@ -132,39 +133,17 @@ mod tests {
 
     #[test]
     fn test_snapshot_format_version_validation() {
-        let lvt: DateTime<Utc>;
         // old versions are not allowed (runtime panics)
         for v in 0..TableSnapshot::VERSION {
             let r = catch_unwind(|| {
-                let mut snapshot = TableSnapshot::new(
-                    None,
-                    &None,
-                    None,
-                    TableSchema::default(),
-                    Statistics::default(),
-                    vec![],
-                    None,
-                    None,
-                    lvt.clone(),
-                );
+                let mut snapshot = TableSnapshotBuilder::new(1).build().unwrap();
                 snapshot.format_version = v;
                 let _ = snapshot.marshal();
             });
             assert!(r.is_err())
         }
 
-        // current version allowed
-        let snapshot = TableSnapshot::new(
-            None,
-            &None,
-            None,
-            TableSchema::default(),
-            Statistics::default(),
-            vec![],
-            None,
-            None,
-            lvt,
-        );
+        let snapshot = TableSnapshotBuilder::new(1).build().unwrap();
         snapshot.marshal().unwrap();
     }
 }

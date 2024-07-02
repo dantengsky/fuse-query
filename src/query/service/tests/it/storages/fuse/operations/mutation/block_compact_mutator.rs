@@ -38,6 +38,7 @@ use databend_storages_common_table_meta::meta::Location;
 use databend_storages_common_table_meta::meta::SegmentInfo;
 use databend_storages_common_table_meta::meta::Statistics;
 use databend_storages_common_table_meta::meta::TableSnapshot;
+use databend_storages_common_table_meta::meta::TableSnapshotBuilder;
 use opendal::Operator;
 use rand::thread_rng;
 use rand::Rng;
@@ -203,18 +204,23 @@ async fn test_safety() -> Result<()> {
             merge_statistics_mut(&mut summary, &seg.summary, None);
         }
 
-        let id = Uuid::new_v4();
-        let snapshot = TableSnapshot::new(
-            id,
-            None,
-            &None,
-            None,
-            schema.as_ref().clone(),
-            summary,
-            locations.clone(),
-            None,
-            None,
-        );
+        let snapshot = TableSnapshotBuilder::new(1)
+            .set_schema(schema.as_ref().clone())
+            .set_summary(summary)
+            .set_segments(locations.clone())
+            .build()?;
+        // let id = Uuid::new_v4();
+        // let snapshot = TableSnapshot::new(
+        //    id,
+        //    None,
+        //    &None,
+        //    None,
+        //    schema.as_ref().clone(),
+        //    summary,
+        //    locations.clone(),
+        //    None,
+        //    None,
+        //);
 
         let limit: usize = rand.gen_range(1..15);
         let compact_params = CompactOptions {

@@ -64,6 +64,7 @@ impl VacuumHandler for RealVacuumHandler {
     }
 
     async fn vacuum2(
+        &self,
         fuse_table: &FuseTable,
         ctx: Arc<dyn TableContext>,
         retention_time: DateTime<Utc>,

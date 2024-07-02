@@ -146,6 +146,7 @@ use databend_storages_common_table_meta::meta::Location;
 use databend_storages_common_table_meta::meta::SegmentInfo;
 use databend_storages_common_table_meta::meta::Statistics;
 use databend_storages_common_table_meta::meta::TableSnapshot;
+use databend_storages_common_table_meta::meta::TableSnapshotBuilder;
 use databend_storages_common_table_meta::meta::Versioned;
 use databend_storages_common_txn::TxnManagerRef;
 use futures::TryStreamExt;
@@ -274,17 +275,21 @@ async fn test_commit_to_meta_server() -> Result<()> {
             let fuse_table = FuseTable::try_from_table(table.as_ref())?;
 
             let new_segments = vec![("do not care".to_string(), SegmentInfo::VERSION)];
-            let new_snapshot = TableSnapshot::new(
-                Uuid::new_v4(),
-                None,
-                &None,
-                None,
-                table.schema().as_ref().clone(),
-                Statistics::default(),
-                new_segments,
-                None,
-                None,
-            );
+            // let new_snapshot = TableSnapshot::new(
+            //    Uuid::new_v4(),
+            //    None,
+            //    &None,
+            //    None,
+            //    table.schema().as_ref().clone(),
+            //    Statistics::default(),
+            //    new_segments,
+            //    None,
+            //    None,
+            //);
+            let new_snapshot = TableSnapshotBuilder::new(1)
+                .set_schema(table.schema().as_ref().clone())
+                .set_segments(new_segments)
+                .build()?;
 
             let faked_catalog = FakedCatalog {
                 cat: catalog,

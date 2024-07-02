@@ -24,6 +24,7 @@ use databend_common_storages_fuse::FuseTable;
 use databend_query::test_kits::*;
 use databend_storages_common_table_meta::meta::Location;
 use databend_storages_common_table_meta::meta::TableSnapshot;
+use databend_storages_common_table_meta::meta::TableSnapshotBuilder;
 use databend_storages_common_table_meta::meta::Versioned;
 use uuid::Uuid;
 
@@ -91,7 +92,10 @@ async fn test_fuse_purge_normal_orphan_snapshot() -> Result<()> {
             .snapshot_location_from_uuid(&orphan_snapshot_id, TableSnapshot::VERSION)?;
         // orphan_snapshot is created by using `from_previous`, which guarantees
         // that the timestamp of snapshot returned is larger than `current_snapshot`'s.
-        let orphan_snapshot = TableSnapshot::from_previous(current_snapshot.as_ref(), None);
+
+        let orphan_snapshot = TableSnapshotBuilder::new(1)
+            .set_previous_snapshot(current_snapshot.as_ref())
+            .build()?;
         orphan_snapshot
             .write_meta(&operator, &orphan_snapshot_location)
             .await?;

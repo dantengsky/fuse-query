@@ -24,6 +24,7 @@ use databend_common_metrics::storage::*;
 use databend_common_sql::executor::physical_plans::MutationKind;
 use databend_storages_common_table_meta::meta::ClusterKey;
 use databend_storages_common_table_meta::meta::TableSnapshot;
+use databend_storages_common_table_meta::meta::TableSnapshotBuilder;
 use log::info;
 use uuid::Uuid;
 
@@ -51,6 +52,10 @@ impl MutationGenerator {
     pub fn get_lvt(&self) -> DateTime<Utc> {
         todo!()
     }
+
+    pub fn get_retention(&self) -> Result<u64> {
+        todo!()
+    }
 }
 
 impl SnapshotGenerator for MutationGenerator {
@@ -71,14 +76,24 @@ impl SnapshotGenerator for MutationGenerator {
     ) -> Result<TableSnapshot> {
         let default_cluster_key_id = cluster_key_meta.clone().map(|v| v.0);
 
-        let lvt = self.get_lvt();
-        let previous = previous.unwrap_or_else(|| {
-            Arc::new(TableSnapshot::new_empty_snapshot(
-                schema.clone(),
-                prev_table_seq,
-                lvt,
-            ))
-        });
+        let retention_period_in_days = self.get_retention()?;
+        let previous = match previous {
+            Some(s) => s,
+            None => {
+                let s = TableSnapshotBuilder::new(retention_period_in_days)
+                    .set_schema(schema.clone())
+                    .set_prev_table_seq_opt(prev_table_seq)
+                    .build()?;
+                Arc::new(s)
+            }
+        };
+        // let previous = previous.unwrap_or_else(|| {
+        //    Arc::new(TableSnapshot::new_empty_snapshot(
+        //        schema.clone(),
+        //        prev_table_seq,
+        //        lvt,
+        //    ))
+        //});
         match &self.conflict_resolve_ctx {
             ConflictResolveContext::ModifiedSegmentExistsInLatest(ctx) => {
                 if let Some((removed, replaced)) =
@@ -103,18 +118,28 @@ impl SnapshotGenerator for MutationGenerator {
                         default_cluster_key_id,
                     );
                     deduct_statistics_mut(&mut new_summary, &ctx.removed_statistics);
-                    let lvt = self.get_lvt();
-                    let new_snapshot = TableSnapshot::new(
-                        prev_table_seq,
-                        &previous.timestamp,
-                        Some((previous.snapshot_id, previous.format_version)),
-                        schema,
-                        new_summary,
-                        new_segments,
-                        cluster_key_meta,
-                        previous.table_statistics_location.clone(),
-                        lvt,
-                    );
+
+                    let new_snapshot = TableSnapshotBuilder::new(self.get_retention()?)
+                        .set_base_snapshot_opt(Some(&self.base_snapshot))
+                        .set_previous_snapshot(&previous)
+                        .set_schema(schema)
+                        .set_summary(new_summary)
+                        .set_segments(new_segments)
+                        .set_cluster_key_meta(cluster_key_meta)
+                        .set_prev_table_seq_opt(prev_table_seq)
+                        .build()?;
+
+                    // let new_snapshot = TableSnapshot::new(
+                    //    prev_table_seq,
+                    //    &previous.timestamp,
+                    //    Some((previous.snapshot_id, previous.format_version)),
+                    //    schema,
+                    //    new_summary,
+                    //    new_segments,
+                    //    cluster_key_meta,
+                    //    previous.table_statistics_location.clone(),
+                    //    lvt,
+                    //);
 
                     if matches!(self.mutation_kind, MutationKind::Compact) {
                         // for compaction, a basic but very important verification:

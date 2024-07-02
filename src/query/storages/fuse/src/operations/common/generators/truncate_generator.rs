@@ -21,6 +21,7 @@ use databend_common_exception::Result;
 use databend_common_expression::TableSchema;
 use databend_storages_common_table_meta::meta::ClusterKey;
 use databend_storages_common_table_meta::meta::TableSnapshot;
+use databend_storages_common_table_meta::meta::TableSnapshotBuilder;
 use uuid::Uuid;
 
 use crate::operations::common::SnapshotGenerator;
@@ -52,6 +53,10 @@ impl TruncateGenerator {
     pub fn get_lvt(&self) -> DateTime<Utc> {
         todo!()
     }
+
+    pub fn get_retention_period_in_days(&self) -> Result<u64> {
+        todo!()
+    }
 }
 
 #[async_trait::async_trait]
@@ -67,27 +72,36 @@ impl SnapshotGenerator for TruncateGenerator {
         previous: Option<Arc<TableSnapshot>>,
         prev_table_seq: Option<u64>,
     ) -> Result<TableSnapshot> {
-        let (prev_timestamp, prev_snapshot_id) = if let Some(prev_snapshot) = previous {
-            (
-                prev_snapshot.timestamp,
-                Some((prev_snapshot.snapshot_id, prev_snapshot.format_version)),
-            )
-        } else {
-            (None, None)
-        };
+        let builder = TableSnapshotBuilder::new(self.get_retention_period_in_days()?)
+            .set_previous_snapshot_opt(previous);
+        //        let (prev_timestamp, prev_snapshot_id) = if let Some(prev_snapshot) = previous {
+        //            (
+        //                prev_snapshot.timestamp,
+        //                Some((prev_snapshot.snapshot_id, prev_snapshot.format_version)),
+        //            )
+        //        } else {
+        //            (None, None)
+        //        };
 
-        let least_visible_timestamp = self.get_lvt();
-        let new_snapshot = TableSnapshot::new(
-            prev_table_seq,
-            &prev_timestamp,
-            prev_snapshot_id,
-            schema,
-            Default::default(),
-            vec![],
-            cluster_key_meta,
-            None,
-            least_visible_timestamp,
-        );
+        let new_snapshot = builder
+            .set_prev_table_seq_opt(prev_table_seq)
+            .set_schema(schema)
+            .set_segments(vec![])
+            .set_cluster_key_meta(cluster_key_meta)
+            .build()?;
+
+        // let least_visible_timestamp = self.get_lvt();
+        // let new_snapshot = TableSnapshot::new(
+        //    prev_table_seq,
+        //    &prev_timestamp,
+        //    prev_snapshot_id,
+        //    schema,
+        //    Default::default(),
+        //    vec![],
+        //    cluster_key_meta,
+        //    None,
+        //    least_visible_timestamp,
+        //);
         Ok(new_snapshot)
     }
 }

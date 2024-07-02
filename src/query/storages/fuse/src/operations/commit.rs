@@ -43,6 +43,7 @@ use databend_storages_common_table_meta::meta::SegmentInfo;
 use databend_storages_common_table_meta::meta::SnapshotId;
 use databend_storages_common_table_meta::meta::Statistics;
 use databend_storages_common_table_meta::meta::TableSnapshot;
+use databend_storages_common_table_meta::meta::TableSnapshotBuilder;
 use databend_storages_common_table_meta::meta::TableSnapshotStatistics;
 use databend_storages_common_table_meta::meta::Versioned;
 use databend_storages_common_table_meta::table::OPT_KEY_LEGACY_SNAPSHOT_LOC;
@@ -292,10 +293,28 @@ impl FuseTable {
         ctx.set_status_info("mutation: begin try to commit");
 
         loop {
-            let mut snapshot_tobe_committed = TableSnapshot::from_previous(
-                latest_snapshot.as_ref(),
-                Some(latest_table_info.ident.seq),
-            );
+            let base = Some(base_snapshot.as_ref());
+            let previous = latest_snapshot.as_ref();
+            let prev_table_seq = Some(latest_table_info.ident.seq);
+            let retention_period_in_days = ctx.get_settings().get_data_retention_time_in_days()?;
+
+            // let mut snapshot_tobe_committed = TableSnapshot::from_previous_new(
+            //    base,
+            //    previous,
+            //    prev_table_seq,
+            //    retention_period_in_days,
+            //)?;
+
+            let mut snapshot_tobe_committed = TableSnapshotBuilder::new(retention_period_in_days)
+                .set_base_snapshot_opt(base)
+                .set_previous_snapshot(previous)
+                .set_prev_table_seq_opt(prev_table_seq)
+                .build()?;
+
+            // let mut snapshot_tobe_committed = TableSnapshot::from_previous(
+            //    latest_snapshot.as_ref(),
+            //    Some(latest_table_info.ident.seq),
+            //);
 
             let schema = self.schema();
             let (segments_tobe_committed, statistics_tobe_committed) = Self::merge_with_base(

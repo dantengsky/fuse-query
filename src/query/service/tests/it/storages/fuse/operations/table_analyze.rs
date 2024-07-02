@@ -205,7 +205,7 @@ async fn test_table_analyze_without_prev_table_seq() -> Result<()> {
 
     // genenrate snapshot without prev_table_seq
     let snapshot_0 = fuse_table.read_table_snapshot().await?.unwrap();
-    let snapshot_1 = TableSnapshot::from_previous(&snapshot_0, None);
+    let snapshot_1 = TableSnapshot::from_previous_new(None, Some(&snapshot_0), None, 1)?;
     let snapshot_loc_1 = location_gen
         .snapshot_location_from_uuid(&snapshot_1.snapshot_id, TableSnapshot::VERSION)?;
     snapshot_1.write_meta(&operator, &snapshot_loc_1).await?;
@@ -219,7 +219,7 @@ async fn test_table_analyze_without_prev_table_seq() -> Result<()> {
         table_statistics.format_version(),
     )?;
     // genenrate snapshot without prev_table_seq
-    let mut snapshot_2 = TableSnapshot::from_previous(&snapshot_1, None);
+    let mut snapshot_2 = TableSnapshot::from_previous_new(None, Some(&snapshot_1), None, 1)?;
     snapshot_2.table_statistics_location = Some(table_statistics_location);
     FuseTable::commit_to_meta_server(
         fixture.new_query_ctx().await?.as_ref(),

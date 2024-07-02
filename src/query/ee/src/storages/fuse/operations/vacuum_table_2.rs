@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::collections::HashSet;
+use std::panic::Location;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -31,312 +32,14 @@ use databend_common_storages_fuse::io::TableMetaLocationGenerator;
 use databend_common_storages_fuse::FuseTable;
 use databend_storages_common_cache::LoadParams;
 use databend_storages_common_table_meta::meta::CompactSegmentInfo;
+use databend_storages_common_table_meta::meta::FormatVersion;
+use databend_storages_common_table_meta::meta::SnapshotId;
+use databend_storages_common_table_meta::meta::TableSnapshot;
+use futures_util::TryStreamExt;
+use log::info;
+use opendal::Operator;
 
 use crate::storages::fuse::get_snapshot_referenced_segments;
-
-const DRY_RUN_LIMIT: usize = 1000;
-
-#[derive(Debug, PartialEq, Eq)]
-pub struct SnapshotReferencedFiles {
-    pub segments: HashSet<String>,
-    pub blocks: HashSet<String>,
-    pub blocks_index: HashSet<String>,
-}
-
-impl SnapshotReferencedFiles {
-    pub fn all_files(&self) -> Vec<String> {
-        let mut files = vec![];
-        for file in &self.segments {
-            files.push(file.clone());
-        }
-        for file in &self.blocks {
-            files.push(file.clone());
-        }
-        for file in &self.blocks_index {
-            files.push(file.clone());
-        }
-        files
-    }
-}
-
-// return all the segment\block\index files referenced by current snapshot.
-#[async_backtrace::framed]
-pub async fn get_snapshot_referenced_files(
-    fuse_table: &FuseTable,
-    ctx: &Arc<dyn TableContext>,
-) -> Result<Option<SnapshotReferencedFiles>> {
-    // 1. Read the root snapshot.
-    let root_snapshot_location_op = fuse_table.snapshot_loc().await?;
-    if root_snapshot_location_op.is_none() {
-        return Ok(None);
-    }
-
-    let root_snapshot_location = root_snapshot_location_op.unwrap();
-    let reader = MetaReaders::table_snapshot_reader(fuse_table.get_operator());
-    let ver = TableMetaLocationGenerator::snapshot_version(root_snapshot_location.as_str());
-    let params = LoadParams {
-        location: root_snapshot_location.clone(),
-        len_hint: None,
-        ver,
-        put_cache: true,
-    };
-    let root_snapshot = match reader.read(&params).await {
-        Err(e) if e.code() == ErrorCode::STORAGE_NOT_FOUND => {
-            // concurrent gc: someone else has already collected this snapshot, ignore it
-            // warn!(
-            //    "concurrent gc: snapshot {:?} already collected. table: {}, ident {}",
-            //    root_snapshot_location, self.table_info.desc, self.table_info.ident,
-            //);
-            return Ok(None);
-        }
-        Err(e) => return Err(e),
-        Ok(v) => v,
-    };
-
-    let root_snapshot_lite = Arc::new(SnapshotLiteExtended {
-        format_version: ver,
-        snapshot_id: root_snapshot.snapshot_id,
-        timestamp: root_snapshot.timestamp,
-        segments: HashSet::from_iter(root_snapshot.segments.clone()),
-        table_statistics_location: root_snapshot.table_statistics_location.clone(),
-    });
-    drop(root_snapshot);
-
-    // 2. Find all segments referenced by the current snapshots
-    let snapshots_io = SnapshotsIO::create(ctx.clone(), fuse_table.get_operator());
-    let segments_opt = get_snapshot_referenced_segments(
-        &snapshots_io,
-        root_snapshot_location,
-        root_snapshot_lite,
-        |status| {
-            ctx.set_status_info(&status);
-        },
-    )
-    .await?;
-
-    let segments_vec = match segments_opt {
-        Some(segments) => segments,
-        None => {
-            return Ok(None);
-        }
-    };
-
-    let locations_referenced = fuse_table
-        .get_block_locations(ctx.clone(), &segments_vec, false, false)
-        .await?;
-
-    let mut segments = HashSet::with_capacity(segments_vec.len());
-    segments_vec.into_iter().for_each(|(location, _)| {
-        segments.insert(location);
-    });
-    Ok(Some(SnapshotReferencedFiles {
-        segments,
-        blocks: locations_referenced.block_location,
-        blocks_index: locations_referenced.bloom_location,
-    }))
-}
-
-// return orphan files to be purged
-#[async_backtrace::framed]
-async fn get_orphan_files_to_be_purged(
-    fuse_table: &FuseTable,
-    referenced_files: HashSet<String>,
-    retention_time: DateTime<Utc>,
-) -> Result<Vec<String>> {
-    let files_to_be_purged = match referenced_files.iter().next().cloned() {
-        Some(location) => {
-            let prefix = SnapshotsIO::get_s3_prefix_from_file(&location);
-            if let Some(prefix) = prefix {
-                fuse_table
-                    .list_files(prefix, |location, modified| {
-                        modified <= retention_time && !referenced_files.contains(&location)
-                    })
-                    .await?
-            } else {
-                vec![]
-            }
-        }
-        None => {
-            vec![]
-        }
-    };
-
-    Ok(files_to_be_purged)
-}
-
-#[async_backtrace::framed]
-pub async fn do_gc_orphan_files(
-    fuse_table: &FuseTable,
-    ctx: &Arc<dyn TableContext>,
-    retention_time: DateTime<Utc>,
-    start: Instant,
-) -> Result<()> {
-    // 1. Get all the files referenced by the current snapshot
-    let referenced_files = match get_snapshot_referenced_files(fuse_table, ctx).await? {
-        Some(referenced_files) => referenced_files,
-        None => return Ok(()),
-    };
-    let status = format!(
-        "gc orphan: read referenced files:{},{},{}, cost:{:?}",
-        referenced_files.segments.len(),
-        referenced_files.blocks.len(),
-        referenced_files.blocks_index.len(),
-        start.elapsed()
-    );
-    ctx.set_status_info(&status);
-
-    // 2. Purge orphan segment files.
-    // 2.1 Get orphan segment files to be purged
-    let segment_locations_to_be_purged =
-        get_orphan_files_to_be_purged(fuse_table, referenced_files.segments, retention_time)
-            .await?;
-    let status = format!(
-        "gc orphan: read segment_locations_to_be_purged:{}, cost:{:?}, retention_time: {}",
-        segment_locations_to_be_purged.len(),
-        start.elapsed(),
-        retention_time
-    );
-    ctx.set_status_info(&status);
-
-    // 2.2 Delete all the orphan segment files to be purged
-    let purged_file_num = segment_locations_to_be_purged.len();
-    fuse_table
-        .try_purge_location_files_and_cache::<CompactSegmentInfo, _, _>(
-            ctx.clone(),
-            HashSet::from_iter(segment_locations_to_be_purged.into_iter()),
-        )
-        .await?;
-    let status = format!(
-        "gc orphan: purged segment files:{}, cost:{:?}",
-        purged_file_num,
-        start.elapsed()
-    );
-    ctx.set_status_info(&status);
-
-    // 3. Purge orphan block files.
-    // 3.1 Get orphan block files to be purged
-    let block_locations_to_be_purged =
-        get_orphan_files_to_be_purged(fuse_table, referenced_files.blocks, retention_time).await?;
-    let status = format!(
-        "gc orphan: read block_locations_to_be_purged:{}, cost:{:?}",
-        block_locations_to_be_purged.len(),
-        start.elapsed()
-    );
-    ctx.set_status_info(&status);
-
-    // 3.2 Delete all the orphan block files to be purged
-    let purged_file_num = block_locations_to_be_purged.len();
-    fuse_table
-        .try_purge_location_files(
-            ctx.clone(),
-            HashSet::from_iter(block_locations_to_be_purged.into_iter()),
-        )
-        .await?;
-    let status = format!(
-        "gc orphan: purged block files:{}, cost:{:?}",
-        purged_file_num,
-        start.elapsed()
-    );
-    ctx.set_status_info(&status);
-
-    // 4. Purge orphan block index files.
-    // 4.1 Get orphan block index files to be purged
-    let index_locations_to_be_purged =
-        get_orphan_files_to_be_purged(fuse_table, referenced_files.blocks_index, retention_time)
-            .await?;
-    let status = format!(
-        "gc orphan: read index_locations_to_be_purged:{}, cost:{:?}",
-        index_locations_to_be_purged.len(),
-        start.elapsed()
-    );
-    ctx.set_status_info(&status);
-
-    // 4.2 Delete all the orphan block index files to be purged
-    let purged_file_num = index_locations_to_be_purged.len();
-    fuse_table
-        .try_purge_location_files(
-            ctx.clone(),
-            HashSet::from_iter(index_locations_to_be_purged.into_iter()),
-        )
-        .await?;
-    let status = format!(
-        "gc orphan: purged block index files:{}, cost:{:?}",
-        purged_file_num,
-        start.elapsed()
-    );
-    ctx.set_status_info(&status);
-
-    Ok(())
-}
-
-#[async_backtrace::framed]
-pub async fn do_dry_run_orphan_files(
-    fuse_table: &FuseTable,
-    ctx: &Arc<dyn TableContext>,
-    retention_time: DateTime<Utc>,
-    start: Instant,
-    purge_files: &mut Vec<String>,
-    dry_run_limit: usize,
-) -> Result<()> {
-    // 1. Get all the files referenced by the current snapshot
-    let referenced_files = match get_snapshot_referenced_files(fuse_table, ctx).await? {
-        Some(referenced_files) => referenced_files,
-        None => return Ok(()),
-    };
-    let status = format!(
-        "dry_run orphan: read referenced files:{},{},{}, cost:{:?}",
-        referenced_files.segments.len(),
-        referenced_files.blocks.len(),
-        referenced_files.blocks_index.len(),
-        start.elapsed()
-    );
-    ctx.set_status_info(&status);
-
-    // 2. Get purge orphan segment files.
-    let segment_locations_to_be_purged =
-        get_orphan_files_to_be_purged(fuse_table, referenced_files.segments, retention_time)
-            .await?;
-    let status = format!(
-        "dry_run orphan: read segment_locations_to_be_purged:{}, cost:{:?}",
-        segment_locations_to_be_purged.len(),
-        start.elapsed()
-    );
-    ctx.set_status_info(&status);
-
-    purge_files.extend(segment_locations_to_be_purged);
-    if purge_files.len() >= dry_run_limit {
-        return Ok(());
-    }
-
-    // 3. Get purge orphan block files.
-    let block_locations_to_be_purged =
-        get_orphan_files_to_be_purged(fuse_table, referenced_files.blocks, retention_time).await?;
-    let status = format!(
-        "dry_run orphan: read block_locations_to_be_purged:{}, cost:{:?}",
-        block_locations_to_be_purged.len(),
-        start.elapsed()
-    );
-    ctx.set_status_info(&status);
-    purge_files.extend(block_locations_to_be_purged);
-    if purge_files.len() >= dry_run_limit {
-        return Ok(());
-    }
-
-    // 4. Get purge orphan block index files.
-    let index_locations_to_be_purged =
-        get_orphan_files_to_be_purged(fuse_table, referenced_files.blocks_index, retention_time)
-            .await?;
-    let status = format!(
-        "dry_run orphan: read index_locations_to_be_purged:{}, cost:{:?}",
-        index_locations_to_be_purged.len(),
-        start.elapsed()
-    );
-    ctx.set_status_info(&status);
-
-    purge_files.extend(index_locations_to_be_purged);
-
-    Ok(())
-}
 
 #[async_backtrace::framed]
 pub async fn do_vacuum2(
@@ -347,11 +50,76 @@ pub async fn do_vacuum2(
 ) -> Result<Option<Vec<String>>> {
     let start = Instant::now();
 
+    // TODO get table lvt
+
+    let snapshot = fuse_table.read_table_snapshot().await?;
+
+    let Some(snapshot) = snapshot else {
+        // nothing to do
+        return Ok(None);
+    };
+
+    if snapshot.snapshot_id.get_timestamp().is_none() {
+        // not working for snapshot before v5
+        return Ok(None);
+    }
+
+    // safe to unwrap, all snapshots of v5 have a lvt
+    let lvt = snapshot.least_visible_timestamp.unwrap();
+
     // navigate to timestamp
 
+    let anchor = navigate_to(lvt).await?;
+
+    let Some(anchor) = anchor else {
+        // other ones may have vacuumed this table, no anchor found
+        return Ok(None);
+    };
+
+    let anchor_snapshot = load_snapshot(&anchor).await?;
+
+    let Some((gc_root_id, gc_root_ver)) = anchor_snapshot.prev_snapshot_id else {
+        // we are at the first snapshot
+        return Ok(None);
+    };
+
+    if gc_root_id.get_timestamp().is_some() {
+        // not support
+        return Ok(None);
+    }
+
+    // **************
     // load the root snapshot, which may be the current snapshot
 
+    let gc_root = load_snapshot_by_location(gc_root_id, gc_root_ver).await?;
+
+    let lvt = gc_root.least_visible_timestamp.unwrap();
+
+    let operator = fuse_table.get_operator_ref();
+
+    let deleter = Deleter::new(operator.clone());
+
     // delete all the snapshots that created before root as stream
+
+    {
+        let mut snapshot_paths = operator.lister("ss_/").await?;
+
+        while let Some(entry) = snapshot_paths.try_next().await? {
+            let path = entry.path();
+            if !is_v5_path(path) {
+                info!("deleting snapshot {}", path);
+                deleter.del(path)
+            } else {
+                let ts = ts_from_path(path);
+                if ts < lvt {
+                    info!("deleting snapshot {}, which has lesser ts {}", path, ts);
+                    deleter.del(path)
+                } else {
+                    break;
+                }
+            }
+        }
+    }
 
     // list segments, for segment that
     //
@@ -360,6 +128,31 @@ pub async fn do_vacuum2(
     //    - have no timestamp embedded in its object key
     //    - or have timestamp `ts_seg` embedded in its object key, where ts_seg < root.lvt
     // delete it
+
+    {
+        let mut snapshot_paths = operator.lister("_sg/").await?;
+
+        while let Some(entry) = snapshot_paths.try_next().await? {
+            let path = entry.path();
+
+            if referenced(path) {
+                continue;
+            }
+
+            if !is_v5_path(path) {
+                info!("deleting segment {}", path);
+                deleter.del(path)
+            } else {
+                let ts = ts_from_path(path);
+                if ts < lvt {
+                    info!("deleting segment {}, which has lesser ts {}", path, ts);
+                    deleter.del(path)
+                } else {
+                    break;
+                }
+            }
+        }
+    }
 
     // list blocks, for block that
     //
@@ -371,5 +164,45 @@ pub async fn do_vacuum2(
 
     // we are done
 
-    Ok(())
+    Ok(None)
+}
+
+fn is_v5_path(path: &str) -> bool {
+    todo!()
+}
+
+async fn navigate_to(time: DateTime<Utc>) -> Result<Option<String>> {
+    todo!()
+}
+
+async fn load_snapshot(path: &str) -> Result<Arc<TableSnapshot>> {
+    todo!()
+}
+
+async fn load_snapshot_by_location(
+    snapshot_id: SnapshotId,
+    version: FormatVersion,
+) -> Result<Arc<TableSnapshot>> {
+    todo!()
+}
+
+fn to_prefix(ts: DateTime<Utc>) -> String {
+    todo!()
+}
+
+fn ts_from_path(path: &str) -> DateTime<Utc> {
+    todo!()
+}
+
+fn referenced(path: &str) -> bool {
+    todo!()
+}
+
+struct Deleter {}
+
+impl Deleter {
+    fn new(operator: Operator) -> Self {
+        todo!()
+    }
+    fn del(&self, path: impl Into<String>) {}
 }

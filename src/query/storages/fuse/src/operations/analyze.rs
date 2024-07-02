@@ -39,6 +39,7 @@ use databend_storages_common_table_meta::meta::SegmentInfo;
 use databend_storages_common_table_meta::meta::SnapshotId;
 use databend_storages_common_table_meta::meta::StatisticsOfColumns;
 use databend_storages_common_table_meta::meta::TableSnapshot;
+use databend_storages_common_table_meta::meta::TableSnapshotBuilder;
 use databend_storages_common_table_meta::meta::TableSnapshotStatistics;
 
 use crate::io::SegmentsIO;
@@ -177,12 +178,32 @@ impl SinkAnalyzeState {
         let (col_stats, cluster_stats) =
             regenerate_statistics(table, snapshot.as_ref(), &self.ctx).await?;
         // 4. Save table statistics
-        let lvt: DateTime<Utc>;
-        let mut new_snapshot =
-            TableSnapshot::from_previous(&snapshot, Some(table.get_table_info().ident.seq), lvt);
+
+        // TODO verify that none base snapshot is safe
+        let base = None;
+        let previous = snapshot.as_ref();
+        let prev_table_seq = table.get_table_info().ident.seq;
+        let retention_period_in_days = self.ctx.get_settings().get_data_retention_time_in_days()?;
+        // let mut new_snapshot = TableSnapshot::from_previous_new(
+        //    base,
+        //    previous,
+        //    prev_table_seq,
+        //    retention_period_in_days,
+        //)?;
+        // let mut new_snapshot =
+        //    TableSnapshot::from_previous(&snapshot, Some(table.get_table_info().ident.seq), lvt);
+        //        new_snapshot.summary.col_stats = col_stats;
+        //        new_snapshot.summary.cluster_stats = cluster_stats;
+        //        new_snapshot.table_statistics_location = Some(table_statistics_location);
+
+        let mut new_snapshot = TableSnapshotBuilder::new(retention_period_in_days)
+            .set_base_snapshot_opt(base)
+            .set_previous_snapshot(previous)
+            .set_table_statistics_location(Some(table_statistics_location))
+            .set_prev_table_seq(prev_table_seq)
+            .build()?;
         new_snapshot.summary.col_stats = col_stats;
         new_snapshot.summary.cluster_stats = cluster_stats;
-        new_snapshot.table_statistics_location = Some(table_statistics_location);
 
         FuseTable::commit_to_meta_server(
             self.ctx.as_ref(),

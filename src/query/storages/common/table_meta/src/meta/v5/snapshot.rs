@@ -18,7 +18,6 @@ use std::io::Read;
 use chrono::DateTime;
 use chrono::Days;
 use chrono::Utc;
-use databend_common_base::base::uuid;
 use databend_common_base::base::uuid::Uuid;
 use databend_common_exception::ErrorCode;
 use databend_common_exception::Result;
@@ -43,7 +42,7 @@ use crate::meta::Statistics;
 use crate::meta::Versioned;
 
 /// The structure of the TableSnapshot is the same as that of v2, but the serialization and deserialization methods are different
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Default, Clone, Debug)]
 pub struct TableSnapshot {
     /// format version of TableSnapshot meta data
     ///
@@ -98,49 +97,49 @@ pub struct TableSnapshot {
 }
 
 impl TableSnapshot {
-    pub fn try_new(
-        based_snapshot_timestamp: Option<&DateTime<Utc>>,
-        previous_opt: Option<&TableSnapshot>,
-        retention_period_in_days: u64,
-    ) -> Result<Self> {
-        let now = Utc::now();
-        match previous_opt {
-            Some(prev) => {
-                let timestamp = monotonically_increased_timestamp(now, &prev.timestamp);
-                let lvt_candidate = timestamp
-                    .checked_sub_days(Days(retention_period_in_days))
-                    .unwrap();
-                // although retention_period can be adjusted freely, snapshot's lvt should
-                // always be larger than the previous one
-                let lvt =
-                    monotonically_increased_timestamp(lvt_candidate, &prev.least_visible_timestamp);
+    //    pub fn try_new(
+    //        based_snapshot_timestamp: Option<&DateTime<Utc>>,
+    //        previous_opt: Option<&TableSnapshot>,
+    //        retention_period_in_days: u64,
+    //    ) -> Result<Self> {
+    //        let now = Utc::now();
+    //        match previous_opt {
+    //            Some(prev) => {
+    //                let timestamp = monotonically_increased_timestamp(now, &prev.timestamp);
+    //                let lvt_candidate = timestamp
+    //                    .checked_sub_days(Days::new(retention_period_in_days))
+    //                    .unwrap();
+    //                // although retention_period can be adjusted freely, snapshot's lvt should
+    //                // always be larger than the previous one
+    //                let lvt =
+    //                    monotonically_increased_timestamp(lvt_candidate, &prev.least_visible_timestamp);
+    //
+    //                if Some(&lvt) <= based_snapshot_timestamp {
+    //                    // should not allow this, TODO why
+    //                    return Err(ErrorCode::UnresolvableConflict(
+    //                        "generate new snapshot based on staled snapshot",
+    //                    ));
+    //                }
+    //
+    //                Ok(Self {
+    //                    format_version: TableSnapshot::VERSION,
+    //                    snapshot_id,
+    //                    timestamp: Some(timestamp),
+    //                    prev_table_seq,
+    //                    prev_snapshot_id,
+    //                    schema,
+    //                    summary,
+    //                    segments,
+    //                    cluster_key_meta,
+    //                    table_statistics_location,
+    //                    least_visible_timestamp: Some(lvt),
+    //                })
+    //            }
+    //            None => {}
+    //        }
+    //    }
 
-                if Some(&lvt) <= based_snapshot_timestamp {
-                    // should not allow this, TODO why
-                    return Err(ErrorCode::UnresolvableConflict(
-                        "generate new snapshot based on staled snapshot",
-                    ));
-                }
-
-                Ok(Self {
-                    format_version: TableSnapshot::VERSION,
-                    snapshot_id,
-                    timestamp: Some(timestamp),
-                    prev_table_seq,
-                    prev_snapshot_id,
-                    schema,
-                    summary,
-                    segments,
-                    cluster_key_meta,
-                    table_statistics_location,
-                    least_visible_timestamp: Some(lvt),
-                })
-            }
-            None => {}
-        }
-    }
-
-    pub fn new(
+    fn new(
         prev_table_seq: Option<u64>,
         prev_timestamp: &Option<DateTime<Utc>>,
         prev_snapshot_id: Option<(SnapshotId, FormatVersion)>,
@@ -177,7 +176,7 @@ impl TableSnapshot {
         }
     }
 
-    pub fn new_empty_snapshot(
+    fn new_empty_snapshot(
         schema: TableSchema,
         prev_table_seq: Option<u64>,
         least_visible_timestamp: DateTime<Utc>,
@@ -213,6 +212,57 @@ impl TableSnapshot {
             clone.table_statistics_location,
             least_visible_timestamp,
         )
+    }
+
+    fn uuid_from_data_tiem(ts: DateTime<Utc>) -> Uuid {
+        todo!()
+    }
+
+    fn from_previous_new(
+        base: Option<&TableSnapshot>,
+        previous: Option<&TableSnapshot>,
+        prev_table_seq: Option<u64>,
+        retention_period_in_days: u64,
+    ) -> Result<Self> {
+        let now = Utc::now();
+        let timestamp =
+            monotonically_increased_timestamp(now, &previous.map(|v| v.timestamp).flatten());
+        let snapshot_id = Self::uuid_from_data_tiem(timestamp);
+        if let Some(prev) = previous {
+            let cloned = prev.clone();
+            let lvt_candidate = timestamp
+                .checked_sub_days(Days::new(retention_period_in_days))
+                .unwrap();
+            // although retention_period can be adjusted freely, snapshot's lvt should
+            // always be larger than the previous one
+            let lvt =
+                monotonically_increased_timestamp(lvt_candidate, &prev.least_visible_timestamp);
+
+            if let Some(Some(ts)) = base.map(|v| &v.timestamp) {
+                if &lvt < ts {
+                    return Err(ErrorCode::UnresolvableConflict(
+                        "generate new snapshot based on staled snapshot",
+                    ));
+                }
+            };
+
+            Ok(Self {
+                format_version: TableSnapshot::VERSION,
+                snapshot_id,
+                timestamp: Some(timestamp),
+                prev_table_seq,
+                prev_snapshot_id: Some((cloned.snapshot_id, cloned.format_version)),
+                least_visible_timestamp: Some(lvt),
+                ..cloned
+            })
+        } else {
+            Ok(Self {
+                format_version: TableSnapshot::VERSION,
+                snapshot_id,
+                timestamp: Some(timestamp),
+                ..Default::default()
+            })
+        }
     }
 
     /// Serializes the struct to a byte vector.
