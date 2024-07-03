@@ -5446,6 +5446,7 @@ dependencies = [
  "simple_hll",
  "snap",
  "typetag",
+ "uuid",
  "zstd 0.12.4",
 ]
 

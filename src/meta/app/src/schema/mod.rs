@@ -142,3 +142,4 @@ pub use virtual_column::UpdateVirtualColumnReply;
 pub use virtual_column::UpdateVirtualColumnReq;
 pub use virtual_column::VirtualColumnMeta;
 pub use virtual_column_ident::VirtualColumnIdent;
+pub use least_visible_time::*;

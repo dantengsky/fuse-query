@@ -21,6 +21,7 @@ use std::time::Instant;
 use databend_common_catalog::catalog::Catalog;
 use databend_common_config::InnerConfig;
 use databend_common_exception::Result;
+use databend_common_meta_api::kv_app_error::KVAppError;
 use databend_common_meta_api::SchemaApi;
 use databend_common_meta_api::SequenceApi;
 use databend_common_meta_app::schema::database_name_ident::DatabaseNameIdent;
@@ -86,6 +87,8 @@ use databend_common_meta_app::schema::RenameDatabaseReply;
 use databend_common_meta_app::schema::RenameDatabaseReq;
 use databend_common_meta_app::schema::RenameTableReply;
 use databend_common_meta_app::schema::RenameTableReq;
+use databend_common_meta_app::schema::SetLVTReply;
+use databend_common_meta_app::schema::SetLVTReq;
 use databend_common_meta_app::schema::SetTableColumnMaskPolicyReply;
 use databend_common_meta_app::schema::SetTableColumnMaskPolicyReq;
 use databend_common_meta_app::schema::TableInfo;
@@ -656,5 +659,10 @@ impl Catalog for MutableCatalog {
 
     async fn drop_sequence(&self, req: DropSequenceReq) -> Result<DropSequenceReply> {
         Ok(self.ctx.meta.drop_sequence(req).await?)
+    }
+
+    async fn set_table_lvt(&self, req: SetLVTReq) -> Result<SetLVTReply, KVAppError> {
+        let reply = self.ctx.meta.set_table_lvt(req).await?;
+        Ok(reply)
     }
 }

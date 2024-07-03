@@ -44,6 +44,7 @@ use databend_storages_common_table_meta::meta::ClusterStatistics;
 use databend_storages_common_table_meta::meta::SegmentInfo;
 use databend_storages_common_table_meta::meta::Statistics;
 use databend_storages_common_table_meta::meta::TableSnapshot;
+use databend_storages_common_table_meta::meta::TableSnapshotBuilder;
 use databend_storages_common_table_meta::meta::Versioned;
 use rand::thread_rng;
 use rand::Rng;
@@ -128,7 +129,10 @@ async fn test_recluster_mutator_block_select() -> Result<()> {
     // unused snapshot.
     // let snapshot = TableSnapshot::new_empty_snapshot(schema.as_ref().clone(), None);
 
-    let mut snapshot = TableSnapshot::from_previous_new(None, None, None, 1)?;
+    // let mut snapshot = TableSnapshot::from_previous_new(None, None, None, 1)?;
+    let mut snapshot = TableSnapshotBuilder::new(1)
+        .set_schema(schema.as_ref().clone())
+        .build()?;
     snapshot.schema = schema.as_ref().clone();
 
     let ctx: Arc<dyn TableContext> = ctx.clone();
@@ -253,7 +257,8 @@ async fn test_safety_for_recluster() -> Result<()> {
         //    None,
         //));
 
-        let mut snapshot = TableSnapshot::from_previous_new(None, None, None, 1)?;
+        // let mut snapshot = TableSnapshot::from_previous_new(None, None, None, 1)?;
+        let mut snapshot = TableSnapshotBuilder::new(1).build()?;
         snapshot.schema = schema.as_ref().clone();
         snapshot.summary = summary;
         snapshot.segments = locations.clone();

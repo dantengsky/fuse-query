@@ -39,6 +39,7 @@ pub use statistics::*;
 // currently, used by versioned readers only
 pub(crate) use testing::*;
 pub(crate) use utils::*;
+pub use v5::uuid_from_data_time;
 pub use versions::testify_version;
 pub use versions::SegmentInfoVersion;
 pub use versions::SnapshotVersion;

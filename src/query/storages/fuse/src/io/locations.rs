@@ -14,11 +14,15 @@
 
 use std::marker::PhantomData;
 
+use chrono::DateTime;
+use chrono::Utc;
 use databend_common_exception::Result;
 use databend_common_expression::DataBlock;
+use databend_storages_common_table_meta::meta::uuid_from_data_time;
 use databend_storages_common_table_meta::meta::Location;
 use databend_storages_common_table_meta::meta::SegmentInfo;
 use databend_storages_common_table_meta::meta::SnapshotVersion;
+use databend_storages_common_table_meta::meta::TableSnapshot;
 use databend_storages_common_table_meta::meta::TableSnapshotStatisticsVersion;
 use databend_storages_common_table_meta::meta::Versioned;
 use uuid::Uuid;
@@ -117,6 +121,22 @@ impl TableMetaLocationGenerator {
         Ok(snapshot_version.create(id, &self.prefix))
     }
 
+    pub fn snapshot_prefix_from_timestamp(&self, ts: DateTime<Utc>) -> String {
+        let uuid = uuid_from_data_time(ts);
+        let uuid_str = uuid.simple().to_string();
+        // extract the most significant 48 bits, which is 12 characters
+        let timestamp_component = &uuid_str[..12];
+
+        // only return prefix of v5 snapshots
+
+        // TODO duplicated code
+        // 'g' is larger than all the simple form uuid generated previously
+        format!(
+            "{}/{}/g{}",
+            self.prefix, FUSE_TBL_SNAPSHOT_PREFIX, timestamp_component
+        )
+    }
+
     pub fn snapshot_version(location: impl AsRef<str>) -> u64 {
         if location.as_ref().ends_with(SNAPSHOT_V5.suffix().as_str()) {
             SNAPSHOT_V5.version()
@@ -194,10 +214,16 @@ impl TableMetaLocationGenerator {
 
 trait SnapshotLocationCreator {
     fn create(&self, id: &Uuid, prefix: impl AsRef<str>) -> String;
+    fn prefix(&self) -> String;
     fn suffix(&self) -> String;
 }
 
 impl SnapshotLocationCreator for SnapshotVersion {
+    fn prefix(&self) -> String {
+        todo!()
+    }
+
+    // todo rename this
     fn create(&self, id: &Uuid, prefix: impl AsRef<str>) -> String {
         match self {
             SnapshotVersion::V0(_)
@@ -239,6 +265,9 @@ impl SnapshotLocationCreator for SnapshotVersion {
 }
 
 impl SnapshotLocationCreator for TableSnapshotStatisticsVersion {
+    fn prefix(&self) -> String {
+        todo!()
+    }
     fn create(&self, id: &Uuid, prefix: impl AsRef<str>) -> String {
         format!(
             "{}/{}/{}{}",

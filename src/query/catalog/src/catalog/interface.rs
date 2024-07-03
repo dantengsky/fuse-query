@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use databend_common_exception::ErrorCode;
 use databend_common_exception::Result;
+use databend_common_meta_api::kv_app_error::KVAppError;
 use databend_common_meta_app::schema::CatalogInfo;
 use databend_common_meta_app::schema::CommitTableMetaReply;
 use databend_common_meta_app::schema::CommitTableMetaReq;
@@ -73,6 +74,8 @@ use databend_common_meta_app::schema::RenameDatabaseReply;
 use databend_common_meta_app::schema::RenameDatabaseReq;
 use databend_common_meta_app::schema::RenameTableReply;
 use databend_common_meta_app::schema::RenameTableReq;
+use databend_common_meta_app::schema::SetLVTReply;
+use databend_common_meta_app::schema::SetLVTReq;
 use databend_common_meta_app::schema::SetTableColumnMaskPolicyReply;
 use databend_common_meta_app::schema::SetTableColumnMaskPolicyReq;
 use databend_common_meta_app::schema::TableInfo;
@@ -388,4 +391,8 @@ pub trait Catalog: DynClone + Send + Sync + Debug {
     ) -> Result<GetSequenceNextValueReply>;
 
     async fn drop_sequence(&self, req: DropSequenceReq) -> Result<DropSequenceReply>;
+
+    async fn set_table_lvt(&self, req: SetLVTReq) -> std::result::Result<SetLVTReply, KVAppError> {
+        Ok(SetLVTReply { time: req.time })
+    }
 }

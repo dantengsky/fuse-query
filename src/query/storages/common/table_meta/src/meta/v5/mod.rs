@@ -19,3 +19,4 @@ mod builder;
 pub use builder::TableSnapshotBuilder;
 pub use snapshot::TableSnapshot;
 pub use snapshot::TableSnapshotLite;
+pub use builder::uuid_from_data_time;

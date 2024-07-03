@@ -30,7 +30,11 @@ use databend_common_storages_fuse::io::SnapshotLiteExtended;
 use databend_common_storages_fuse::io::SnapshotsIO;
 use databend_common_storages_fuse::io::TableMetaLocationGenerator;
 use databend_common_storages_fuse::FuseTable;
+use databend_common_storages_fuse::FUSE_TBL_BLOCK_PREFIX;
+use databend_common_storages_fuse::FUSE_TBL_SEGMENT_PREFIX;
 use databend_storages_common_cache::LoadParams;
+use databend_storages_common_table_meta::meta;
+use databend_storages_common_table_meta::meta::uuid_from_data_time;
 use databend_storages_common_table_meta::meta::CompactSegmentInfo;
 use databend_storages_common_table_meta::meta::FormatVersion;
 use databend_storages_common_table_meta::meta::SnapshotId;
@@ -50,7 +54,7 @@ pub async fn do_vacuum2(
 ) -> Result<Option<Vec<String>>> {
     let start = Instant::now();
 
-    // TODO get table lvt
+    // TODO set lvt
 
     let snapshot = fuse_table.read_table_snapshot().await?;
 
@@ -61,7 +65,7 @@ pub async fn do_vacuum2(
 
     if snapshot.snapshot_id.get_timestamp().is_none() {
         // not working for snapshot before v5
-        return Ok(None);
+        return Err(ErrorCode::StorageOther("legacy snapshot is not supported"));
     }
 
     // safe to unwrap, all snapshots of v5 have a lvt
@@ -69,14 +73,22 @@ pub async fn do_vacuum2(
 
     // navigate to timestamp
 
-    let anchor = navigate_to(lvt).await?;
+    let navigator = Navigator {
+        ctx,
+        retention_time,
+        location_gen: fuse_table.meta_location_generator().clone(),
+        operator: fuse_table.get_operator(),
+        dry_run: false,
+    };
+
+    let anchor = navigator.navigate_to_snapshot_by_timestamp(lvt).await?;
 
     let Some(anchor) = anchor else {
         // other ones may have vacuumed this table, no anchor found
         return Ok(None);
     };
 
-    let anchor_snapshot = load_snapshot(&anchor).await?;
+    let anchor_snapshot = navigator.load_snapshot_by_path(&anchor).await?;
 
     let Some((gc_root_id, gc_root_ver)) = anchor_snapshot.prev_snapshot_id else {
         // we are at the first snapshot
@@ -91,35 +103,23 @@ pub async fn do_vacuum2(
     // **************
     // load the root snapshot, which may be the current snapshot
 
-    let gc_root = load_snapshot_by_location(gc_root_id, gc_root_ver).await?;
+    let gc_root = navigator
+        .load_snapshot_by_id(gc_root_id, gc_root_ver)
+        .await?;
 
     let lvt = gc_root.least_visible_timestamp.unwrap();
 
     let operator = fuse_table.get_operator_ref();
 
-    let deleter = Deleter::new(operator.clone());
-
     // delete all the snapshots that created before root as stream
-
-    {
-        let mut snapshot_paths = operator.lister("ss_/").await?;
-
-        while let Some(entry) = snapshot_paths.try_next().await? {
-            let path = entry.path();
-            if !is_v5_path(path) {
-                info!("deleting snapshot {}", path);
-                deleter.del(path)
-            } else {
-                let ts = ts_from_path(path);
-                if ts < lvt {
-                    info!("deleting snapshot {}, which has lesser ts {}", path, ts);
-                    deleter.del(path)
-                } else {
-                    break;
-                }
-            }
-        }
-    }
+    let deleter = Deleter {
+        operator: operator.clone(),
+        list_prefix: FUSE_TBL_BLOCK_PREFIX.to_owned(),
+        root_set: HashSet::default(),
+        lvt: lvt.clone(),
+        target_description: "snapshot".to_owned(),
+    };
+    deleter.cleanup().await?;
 
     // list segments, for segment that
     //
@@ -129,30 +129,14 @@ pub async fn do_vacuum2(
     //    - or have timestamp `ts_seg` embedded in its object key, where ts_seg < root.lvt
     // delete it
 
-    {
-        let mut snapshot_paths = operator.lister("_sg/").await?;
-
-        while let Some(entry) = snapshot_paths.try_next().await? {
-            let path = entry.path();
-
-            if referenced(path) {
-                continue;
-            }
-
-            if !is_v5_path(path) {
-                info!("deleting segment {}", path);
-                deleter.del(path)
-            } else {
-                let ts = ts_from_path(path);
-                if ts < lvt {
-                    info!("deleting segment {}, which has lesser ts {}", path, ts);
-                    deleter.del(path)
-                } else {
-                    break;
-                }
-            }
-        }
-    }
+    let deleter = Deleter {
+        operator: operator.clone(),
+        list_prefix: FUSE_TBL_SEGMENT_PREFIX.to_owned(),
+        root_set: HashSet::from_iter(gc_root.segments.iter().map(|(path, v)| path.to_owned())),
+        lvt: lvt.clone(),
+        target_description: "segment".to_owned(),
+    };
+    deleter.cleanup().await?;
 
     // list blocks, for block that
     //
@@ -162,47 +146,137 @@ pub async fn do_vacuum2(
     //    - or have timestamp `ts_blk` embedded in its object key, where ts_blk < root.lvt
     // delete it
 
+    let segment_reader = MetaReaders::segment_info_reader(
+        operator.clone(),
+        fuse_table.get_table_info().meta.schema.clone(),
+    );
+
+    let block_gc_root_set = {
+        let mut root_set = HashSet::new();
+        for x in &gc_root.segments {
+            let params = LoadParams {
+                location: x.0.clone(),
+                len_hint: None,
+                ver: x.1,
+                put_cache: false,
+            };
+            let segment = segment_reader.read(&params).await?;
+
+            let block_metas = segment.block_metas()?;
+            for y in block_metas {
+                root_set.insert(y.location.0.to_owned());
+            }
+        }
+        root_set
+    };
+
+    let deleter = Deleter {
+        operator: operator.clone(),
+        list_prefix: FUSE_TBL_BLOCK_PREFIX.to_owned(),
+        root_set: block_gc_root_set,
+        lvt: lvt.clone(),
+        target_description: "block".to_owned(),
+    };
+    deleter.cleanup().await?;
+
     // we are done
 
     Ok(None)
 }
 
-fn is_v5_path(path: &str) -> bool {
-    todo!()
+struct Deleter {
+    operator: Operator,
+    list_prefix: String,
+    root_set: HashSet<String>,
+    lvt: DateTime<Utc>,
+    target_description: String,
 }
-
-async fn navigate_to(time: DateTime<Utc>) -> Result<Option<String>> {
-    todo!()
-}
-
-async fn load_snapshot(path: &str) -> Result<Arc<TableSnapshot>> {
-    todo!()
-}
-
-async fn load_snapshot_by_location(
-    snapshot_id: SnapshotId,
-    version: FormatVersion,
-) -> Result<Arc<TableSnapshot>> {
-    todo!()
-}
-
-fn to_prefix(ts: DateTime<Utc>) -> String {
-    todo!()
-}
-
-fn ts_from_path(path: &str) -> DateTime<Utc> {
-    todo!()
-}
-
-fn referenced(path: &str) -> bool {
-    todo!()
-}
-
-struct Deleter {}
 
 impl Deleter {
-    fn new(operator: Operator) -> Self {
-        todo!()
+    fn del(&self, path: &str) -> Result<()> {
+        // TODO
+        eprintln!("file to be deleted {}", path);
+        Ok(())
     }
-    fn del(&self, path: impl Into<String>) {}
+
+    fn is_v5_path(path: &str) -> bool {
+        // TODO re-consider this, it is dangerous
+        path.starts_with('g')
+    }
+
+    async fn cleanup(&self) -> Result<()> {
+        let mut snapshot_paths = self.operator.lister(&self.list_prefix).await?;
+        while let Some(entry) = snapshot_paths.try_next().await? {
+            let path = entry.path();
+            if self.root_set.contains(path) {
+                continue;
+            }
+            if !Self::is_v5_path(path) {
+                info!("deleting {} {}", self.target_description, path);
+                self.del(path)?
+            } else {
+                let ts = ts_from_path(path);
+                if ts < self.lvt {
+                    info!(
+                        "deleting {} {}, which has lesser ts {}",
+                        self.target_description, path, ts
+                    );
+                    self.del(path)?
+                } else {
+                    break;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+struct Navigator {
+    ctx: Arc<dyn TableContext>,
+    retention_time: DateTime<Utc>,
+    location_gen: TableMetaLocationGenerator,
+    operator: Operator,
+    dry_run: bool,
+}
+
+impl Navigator {
+    async fn navigate_to_snapshot_by_timestamp(&self, ts: DateTime<Utc>) -> Result<Option<String>> {
+        let prefix = format!("{}", self.location_gen.snapshot_prefix_from_timestamp(ts));
+        // find the first one which has a larger or equal timestamp embedded in object key
+        let mut lister = self.operator.lister(&prefix).await?;
+        let next = lister.try_next().await?;
+        let path = next.map(|v| v.path().to_owned());
+        Ok(path)
+    }
+
+    async fn load_snapshot_by_path(&self, path: &str) -> Result<Arc<TableSnapshot>> {
+        let reader = MetaReaders::table_snapshot_reader(self.operator.clone());
+        let ver = TableMetaLocationGenerator::snapshot_version(path);
+        let params = LoadParams {
+            location: path.to_owned(),
+            len_hint: None,
+            ver,
+            put_cache: false,
+        };
+        reader.read(&params).await
+    }
+
+    // TODO duplicated code
+    async fn load_snapshot_by_id(
+        &self,
+        snapshot_id: SnapshotId,
+        version: FormatVersion,
+    ) -> Result<Arc<TableSnapshot>> {
+        let snapshot_path = self
+            .location_gen
+            .snapshot_location_from_uuid(&snapshot_id, version)?;
+        let reader = MetaReaders::table_snapshot_reader(self.operator.clone());
+        let params = LoadParams {
+            location: snapshot_path,
+            len_hint: None,
+            ver: version,
+            put_cache: false,
+        };
+        reader.read(&params).await
+    }
 }
