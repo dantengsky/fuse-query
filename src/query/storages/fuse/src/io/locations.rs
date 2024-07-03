@@ -124,6 +124,7 @@ impl TableMetaLocationGenerator {
     pub fn snapshot_prefix_from_timestamp(&self, ts: DateTime<Utc>) -> String {
         let uuid = uuid_from_data_time(ts);
         let uuid_str = uuid.simple().to_string();
+
         // extract the most significant 48 bits, which is 12 characters
         let timestamp_component = &uuid_str[..12];
 
@@ -214,15 +215,10 @@ impl TableMetaLocationGenerator {
 
 trait SnapshotLocationCreator {
     fn create(&self, id: &Uuid, prefix: impl AsRef<str>) -> String;
-    fn prefix(&self) -> String;
     fn suffix(&self) -> String;
 }
 
 impl SnapshotLocationCreator for SnapshotVersion {
-    fn prefix(&self) -> String {
-        todo!()
-    }
-
     // todo rename this
     fn create(&self, id: &Uuid, prefix: impl AsRef<str>) -> String {
         match self {
@@ -265,9 +261,6 @@ impl SnapshotLocationCreator for SnapshotVersion {
 }
 
 impl SnapshotLocationCreator for TableSnapshotStatisticsVersion {
-    fn prefix(&self) -> String {
-        todo!()
-    }
     fn create(&self, id: &Uuid, prefix: impl AsRef<str>) -> String {
         format!(
             "{}/{}/{}{}",

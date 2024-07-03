@@ -38,8 +38,8 @@ pub use statistics::*;
 // export legacy versioned table meta types locally,
 // currently, used by versioned readers only
 pub(crate) use testing::*;
+pub use utils::uuid_from_data_time;
 pub(crate) use utils::*;
-pub use v5::uuid_from_data_time;
 pub use versions::testify_version;
 pub use versions::SegmentInfoVersion;
 pub use versions::SnapshotVersion;

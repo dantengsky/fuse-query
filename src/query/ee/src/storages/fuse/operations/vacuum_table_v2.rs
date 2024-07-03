@@ -18,13 +18,17 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use chrono::DateTime;
+use chrono::Days;
 use chrono::Duration;
+use chrono::TimeZone;
 use chrono::Utc;
+use databend_common_base::base::uuid::Uuid;
 use databend_common_catalog::table::NavigationPoint;
 use databend_common_catalog::table::Table;
 use databend_common_catalog::table_context::TableContext;
 use databend_common_exception::ErrorCode;
 use databend_common_exception::Result;
+use databend_common_meta_app::schema::SetLVTReq;
 use databend_common_storages_fuse::io::MetaReaders;
 use databend_common_storages_fuse::io::SnapshotLiteExtended;
 use databend_common_storages_fuse::io::SnapshotsIO;
@@ -32,6 +36,7 @@ use databend_common_storages_fuse::io::TableMetaLocationGenerator;
 use databend_common_storages_fuse::FuseTable;
 use databend_common_storages_fuse::FUSE_TBL_BLOCK_PREFIX;
 use databend_common_storages_fuse::FUSE_TBL_SEGMENT_PREFIX;
+use databend_common_storages_fuse::FUSE_TBL_SNAPSHOT_PREFIX;
 use databend_storages_common_cache::LoadParams;
 use databend_storages_common_table_meta::meta;
 use databend_storages_common_table_meta::meta::uuid_from_data_time;
@@ -49,7 +54,6 @@ use crate::storages::fuse::get_snapshot_referenced_segments;
 pub async fn do_vacuum2(
     fuse_table: &FuseTable,
     ctx: Arc<dyn TableContext>,
-    retention_time: DateTime<Utc>,
     dry_run: bool,
 ) -> Result<Option<Vec<String>>> {
     let start = Instant::now();
@@ -68,6 +72,29 @@ pub async fn do_vacuum2(
         return Err(ErrorCode::StorageOther("legacy snapshot is not supported"));
     }
 
+    let retention_period_in_days = ctx.get_settings().get_data_retention_time_in_days()?;
+
+    let self_ts = snapshot.timestamp.unwrap();
+
+    let now = Utc::now();
+    let lvt_point_candidate = now
+        .checked_sub_days(Days::new(retention_period_in_days))
+        .unwrap();
+
+    let lvt_point = std::cmp::min(lvt_point_candidate, self_ts);
+
+    let cat = ctx.get_default_catalog()?;
+    let reply = cat
+        .set_table_lvt(SetLVTReq {
+            table_id: fuse_table.get_table_info().ident.table_id,
+            time: lvt_point,
+        })
+        .await?;
+
+    let meta_lvt = reply.time;
+
+    eprintln!(" meta lvt is {}", meta_lvt);
+
     // safe to unwrap, all snapshots of v5 have a lvt
     let lvt = snapshot.least_visible_timestamp.unwrap();
 
@@ -75,14 +102,17 @@ pub async fn do_vacuum2(
 
     let navigator = Navigator {
         ctx,
-        retention_time,
         location_gen: fuse_table.meta_location_generator().clone(),
         operator: fuse_table.get_operator(),
         dry_run: false,
     };
 
-    let anchor = navigator.navigate_to_snapshot_by_timestamp(lvt).await?;
+    // doc why navigate to meta lvt
+    let anchor = navigator
+        .navigate_to_snapshot_by_timestamp(meta_lvt)
+        .await?;
 
+    eprintln!("anchor sanpshot path {:?}", anchor);
     let Some(anchor) = anchor else {
         // other ones may have vacuumed this table, no anchor found
         return Ok(None);
@@ -91,11 +121,15 @@ pub async fn do_vacuum2(
     let anchor_snapshot = navigator.load_snapshot_by_path(&anchor).await?;
 
     let Some((gc_root_id, gc_root_ver)) = anchor_snapshot.prev_snapshot_id else {
+        info!("not previous?");
+        eprintln!("not previous?");
         // we are at the first snapshot
         return Ok(None);
     };
 
-    if gc_root_id.get_timestamp().is_some() {
+    if gc_root_id.get_timestamp().is_none() {
+        info!("non supported gc root snapshot version");
+        eprintln!("non supported gc root snapshot version");
         // not support
         return Ok(None);
     }
@@ -112,11 +146,21 @@ pub async fn do_vacuum2(
     let operator = fuse_table.get_operator_ref();
 
     // delete all the snapshots that created before root as stream
+
+    // note: why using the meta_lvt
+    let prefix = format!(
+        "{}/{}/",
+        fuse_table.meta_location_generator().prefix(),
+        FUSE_TBL_SNAPSHOT_PREFIX,
+    );
+
+    info!("vacuuming snapshots");
+    eprintln!("vacuuming snapshots");
     let deleter = Deleter {
         operator: operator.clone(),
-        list_prefix: FUSE_TBL_BLOCK_PREFIX.to_owned(),
+        list_prefix: prefix,
         root_set: HashSet::default(),
-        lvt: lvt.clone(),
+        lvt: meta_lvt,
         target_description: "snapshot".to_owned(),
     };
     deleter.cleanup().await?;
@@ -132,7 +176,7 @@ pub async fn do_vacuum2(
     let deleter = Deleter {
         operator: operator.clone(),
         list_prefix: FUSE_TBL_SEGMENT_PREFIX.to_owned(),
-        root_set: HashSet::from_iter(gc_root.segments.iter().map(|(path, v)| path.to_owned())),
+        root_set: HashSet::from_iter(gc_root.segments.iter().map(|(path, _v)| path.to_owned())),
         lvt: lvt.clone(),
         target_description: "segment".to_owned(),
     };
@@ -204,25 +248,53 @@ impl Deleter {
         path.starts_with('g')
     }
 
+    fn ts_from_path(path: &str) -> Result<DateTime<Utc>> {
+        let without_g = &path[1..];
+        // uuid in simple string form, has 32 characters
+        let uuid_str = &without_g[..32];
+
+        let uuid = Uuid::try_parse(uuid_str).map_err(|e| {
+            ErrorCode::StorageOther(format!("Failed to parse as uuid {}. {}", uuid_str, e))
+        })?;
+
+        let timestamp = uuid
+            .get_timestamp()
+            .expect("no uuid other than v7 is expected");
+
+        let (secs, nanos) = timestamp.to_unix();
+
+        // TODO may panic
+        let data_time_ts = Utc.timestamp(secs as i64, nanos);
+        Ok(data_time_ts)
+    }
+
     async fn cleanup(&self) -> Result<()> {
+        eprintln!("{} prefix is {}", self.target_description, self.list_prefix);
         let mut snapshot_paths = self.operator.lister(&self.list_prefix).await?;
         while let Some(entry) = snapshot_paths.try_next().await? {
             let path = entry.path();
             if self.root_set.contains(path) {
                 continue;
             }
-            if !Self::is_v5_path(path) {
+
+            let trimmed_path = &path[self.list_prefix.len()..];
+
+            eprintln!("trimmed path slice is {}", trimmed_path);
+
+            if !Self::is_v5_path(trimmed_path) {
                 info!("deleting {} {}", self.target_description, path);
                 self.del(path)?
             } else {
-                let ts = ts_from_path(path);
+                let ts = Self::ts_from_path(trimmed_path)?;
                 if ts < self.lvt {
+                    // TODO doc why
                     info!(
                         "deleting {} {}, which has lesser ts {}",
                         self.target_description, path, ts
                     );
                     self.del(path)?
                 } else {
+                    // TODO doc why
                     break;
                 }
             }
@@ -233,7 +305,6 @@ impl Deleter {
 
 struct Navigator {
     ctx: Arc<dyn TableContext>,
-    retention_time: DateTime<Utc>,
     location_gen: TableMetaLocationGenerator,
     operator: Operator,
     dry_run: bool,

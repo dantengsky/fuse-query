@@ -54,7 +54,6 @@ pub trait VacuumHandler: Sync + Send {
         &self,
         fuse_table: &FuseTable,
         ctx: Arc<dyn TableContext>,
-        retention_time: DateTime<Utc>,
         dry_run: bool,
     ) -> Result<Option<Vec<String>>>;
 }
@@ -102,6 +101,18 @@ impl VacuumHandlerWrapper {
     ) -> Result<usize> {
         self.handler
             .do_vacuum_temporary_files(temporary_dir, retain, vacuum_limit)
+            .await
+    }
+
+    #[async_backtrace::framed]
+    pub async fn do_vacuum2(
+        &self,
+        fuse_table: &FuseTable,
+        ctx: Arc<dyn TableContext>,
+        dry_run: bool,
+    ) -> Result<Option<Vec<String>>> {
+        self.handler
+            .vacuum2(fuse_table, ctx, dry_run)
             .await
     }
 }

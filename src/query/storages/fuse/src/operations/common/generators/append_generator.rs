@@ -65,7 +65,7 @@ impl AppendGenerator {
     }
 
     pub fn get_retention(&self) -> Result<u64> {
-        todo!()
+        self.ctx.get_settings().get_data_retention_time_in_days()
     }
 
     fn check_fill_default(&self, summary: &Statistics) -> Result<bool> {

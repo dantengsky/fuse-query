@@ -21,6 +21,7 @@ mod fuse_snapshots;
 
 mod fuse_amend;
 mod fuse_statistics;
+// mod fuse_vacuum2;
 mod table_args;
 
 pub use clustering_information::ClusteringInformation;

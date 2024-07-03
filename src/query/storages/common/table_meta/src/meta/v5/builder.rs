@@ -18,11 +18,10 @@ use chrono::Utc;
 use databend_common_exception::ErrorCode;
 use databend_common_exception::Result;
 use databend_common_expression::TableSchema;
-use uuid::NoContext;
-use uuid::Uuid;
 
 use super::snapshot::TableSnapshot;
 use crate::meta::monotonically_increased_timestamp;
+use crate::meta::uuid_from_data_time;
 use crate::meta::ClusterKey;
 use crate::meta::Location;
 use crate::meta::Statistics;
@@ -122,7 +121,6 @@ impl TableSnapshotBuilder {
             .unwrap();
 
         // s.prev == s' =>  s.lvt > s'.lvt
-        //
         // lvt is allowed to be increased, but NOT decreased
         let lvt = monotonically_increased_timestamp(
             lvt_candidate,
@@ -151,11 +149,4 @@ impl TableSnapshotBuilder {
             ..self.snapshot_template
         })
     }
-}
-
-pub fn uuid_from_data_time(ts: DateTime<Utc>) -> Uuid {
-    let seconds = ts.timestamp();
-    let nanos = ts.timestamp_subsec_nanos();
-    let uuid_ts = uuid::Timestamp::from_unix(NoContext, seconds as u64, nanos);
-    Uuid::new_v7(uuid_ts)
 }

@@ -28,7 +28,7 @@ use databend_enterprise_vacuum_handler::VacuumHandlerWrapper;
 
 use crate::storages::fuse::do_vacuum;
 use crate::storages::fuse::do_vacuum_drop_tables;
-use crate::storages::fuse::operations::vacuum_table_2::do_vacuum2;
+use crate::storages::fuse::operations::vacuum_table_v2::do_vacuum2;
 use crate::storages::fuse::operations::vacuum_temporary_files::do_vacuum_temporary_files;
 
 pub struct RealVacuumHandler {}
@@ -67,10 +67,9 @@ impl VacuumHandler for RealVacuumHandler {
         &self,
         fuse_table: &FuseTable,
         ctx: Arc<dyn TableContext>,
-        retention_time: DateTime<Utc>,
         dry_run: bool,
     ) -> Result<Option<Vec<String>>> {
-        do_vacuum2(fuse_table, ctx, retention_time, dry_run).await
+        do_vacuum2(fuse_table, ctx, dry_run).await
     }
 }
 

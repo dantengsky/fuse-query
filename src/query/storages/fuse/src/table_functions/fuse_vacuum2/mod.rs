@@ -12,10 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod snapshot;
+mod fuse_vacuum2;
 
-mod builder;
-
-pub use builder::TableSnapshotBuilder;
-pub use snapshot::TableSnapshot;
-pub use snapshot::TableSnapshotLite;
+pub use fuse_vacuum2::FuseVacuum2;
