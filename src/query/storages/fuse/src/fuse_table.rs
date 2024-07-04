@@ -223,8 +223,24 @@ impl FuseTable {
 
         let part_prefix = table_info.meta.part_prefix.clone();
 
-        let meta_location_generator =
+        let mut meta_location_generator =
             TableMetaLocationGenerator::with_prefix(storage_prefix).with_part_prefix(part_prefix);
+
+        match table_type {
+            FuseTableType::Standard | FuseTableType::External => {
+                let snapshot_loc = table_info
+                    .options()
+                    .get(OPT_KEY_SNAPSHOT_LOCATION)
+                    // for backward compatibility, we check the legacy table option
+                    .or_else(|| table_info.options().get(OPT_KEY_LEGACY_SNAPSHOT_LOC))
+                    .cloned();
+                // for standard and external tables, pass snapshot_location to location generator,
+                // so that the generator can extract or set up de base table timestamp
+                meta_location_generator
+                    .enable_location_gen_with_base_snapshot_location(snapshot_loc)
+            }
+            _ => {}
+        }
 
         Ok(Box::new(FuseTable {
             table_info,

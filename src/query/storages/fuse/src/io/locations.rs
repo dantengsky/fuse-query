@@ -25,6 +25,8 @@ use databend_storages_common_table_meta::meta::SnapshotVersion;
 use databend_storages_common_table_meta::meta::TableSnapshot;
 use databend_storages_common_table_meta::meta::TableSnapshotStatisticsVersion;
 use databend_storages_common_table_meta::meta::Versioned;
+use uuid::NoContext;
+use uuid::Timestamp;
 use uuid::Uuid;
 
 use crate::constants::FUSE_TBL_BLOCK_PREFIX;
@@ -55,6 +57,7 @@ static SNAPSHOT_STATISTICS_V2: TableSnapshotStatisticsVersion =
 pub struct TableMetaLocationGenerator {
     prefix: String,
     part_prefix: String,
+    allow_to_generated_new_locations: Option<Timestamp>,
 }
 
 impl TableMetaLocationGenerator {
@@ -62,12 +65,43 @@ impl TableMetaLocationGenerator {
         Self {
             prefix,
             part_prefix: "".to_string(),
+            allow_to_generated_new_locations: None,
         }
     }
 
     pub fn with_part_prefix(mut self, part_prefix: String) -> Self {
         self.part_prefix = part_prefix;
         self
+    }
+
+    fn try_parse_ts_from_table_location(&self, loc: &str) -> Option<uuid::Timestamp> {
+        assert!(!self.prefix.is_empty());
+        let stripped = &loc[self.prefix.len()..];
+        let 
+    }
+    fn enable_location_gen_with_base_table_ts(&mut self, ts: uuid::Timestamp) {
+        self.allow_to_generated_new_locations = Some(ts);
+    }
+
+    pub fn enable_location_gen_with_base_snapshot_location(&mut self, loc: Option<String>) {
+
+
+        // A None loc indicates that we are working on a newly created normal/external empty table,
+        match loc {
+            None => {
+                self.allow_to_generated_new_locations = Some(Timestamp::from_unix(NoContext, 0, 0))
+            }
+            Some(loc) => {
+                let ts = self.try_parse_ts_from_table_location(&loc);
+                if let Some(ts) = ts {
+                    self.allow_to_generated_new_locations = Some(ts);
+                } else {
+                    // location of pre v5-snapshot
+                    //
+                }
+            }
+        }
+        self.allow_to_generated_new_locations = Some(ts);
     }
 
     pub fn prefix(&self) -> &str {
@@ -78,10 +112,15 @@ impl TableMetaLocationGenerator {
         &self.part_prefix
     }
 
-    pub fn gen_block_location(&self) -> (Location, Uuid) {
-        let part_uuid = Uuid::new_v4();
+    fn base_table_ts(&self) -> Result<Timestamp> {
+        todo!()
+    }
+
+    pub fn gen_block_location(&self) -> Result<(Location, Uuid)> {
+        let ts = self.base_table_ts()?;
+        let part_uuid = Uuid::new_v7(ts);
         let location_path = format!(
-            "{}/{}/{}{}_v{}.parquet",
+            "{}/{}/g{}{}_v{}.parquet",
             &self.prefix,
             FUSE_TBL_BLOCK_PREFIX,
             &self.part_prefix,
@@ -89,7 +128,7 @@ impl TableMetaLocationGenerator {
             DataBlock::VERSION,
         );
 
-        ((location_path, DataBlock::VERSION), part_uuid)
+        Ok(((location_path, DataBlock::VERSION), part_uuid))
     }
 
     pub fn block_bloom_index_location(&self, block_id: &Uuid) -> Location {
@@ -106,9 +145,11 @@ impl TableMetaLocationGenerator {
     }
 
     pub fn gen_segment_info_location(&self) -> String {
-        let segment_uuid = Uuid::new_v4().simple().to_string();
+        // TODO no unwrap here pls
+        let ts = self.base_table_ts().unwrap();
+        let segment_uuid = Uuid::new_v7(ts);
         format!(
-            "{}/{}/{}_v{}.mpk",
+            "{}/{}/g{}_v{}.mpk",
             &self.prefix,
             FUSE_TBL_SEGMENT_PREFIX,
             segment_uuid,
