@@ -74,33 +74,42 @@ impl TableMetaLocationGenerator {
         self
     }
 
-    fn try_parse_ts_from_table_location(&self, loc: &str) -> Option<uuid::Timestamp> {
+    // TODO duplicated
+    fn try_parse_ts_from_table_location(&self, loc: &str) -> Result<Option<uuid::Timestamp>> {
         assert!(!self.prefix.is_empty());
         let stripped = &loc[self.prefix.len()..];
-        let 
+        if stripped.starts_with('g') {
+            let trim_epoch_seperator = &stripped[1..];
+            let uuid_str = &trim_epoch_seperator[..32];
+            let uuid = Uuid::parse_str(uuid_str)?;
+            // it shall be a v7 uuid
+            assert!(uuid.get_timestamp().is_some());
+            Ok(Some(uuid.get_timestamp().unwrap()))
+        } else {
+            Ok(None)
+        }
     }
     fn enable_location_gen_with_base_table_ts(&mut self, ts: uuid::Timestamp) {
         self.allow_to_generated_new_locations = Some(ts);
     }
 
     pub fn enable_location_gen_with_base_snapshot_location(&mut self, loc: Option<String>) {
-
-
         // A None loc indicates that we are working on a newly created normal/external empty table,
-        match loc {
+        let ts = match loc {
             None => {
-                self.allow_to_generated_new_locations = Some(Timestamp::from_unix(NoContext, 0, 0))
+                // Table is empty
+                Timestamp::from_unix(NoContext, 0, 0)
             }
             Some(loc) => {
                 let ts = self.try_parse_ts_from_table_location(&loc);
                 if let Some(ts) = ts {
-                    self.allow_to_generated_new_locations = Some(ts);
+                    ts
                 } else {
-                    // location of pre v5-snapshot
-                    //
+                    // Table snapshot location of pre v5-snapshot format
+                    Timestamp::from_unix(NoContext, 0, 0)
                 }
             }
-        }
+        };
         self.allow_to_generated_new_locations = Some(ts);
     }
 
