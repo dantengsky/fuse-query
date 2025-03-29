@@ -86,6 +86,7 @@ pub fn serialize_block(
                 buf,
                 write_settings.table_compression,
                 None,
+                write_settings.enable_parquet_encoding,
             )?;
             let meta = column_parquet_metas(&result, &schema)?;
             Ok(meta)

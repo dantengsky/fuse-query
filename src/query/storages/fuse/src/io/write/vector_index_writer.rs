@@ -215,6 +215,7 @@ impl VectorIndexBuilder {
             // Zstd has the best compression ratio
             TableCompression::Zstd,
             Some(metadata),
+            false,
         )?;
 
         let size = data.len() as u64;
@@ -319,6 +320,7 @@ impl VectorIndexBuilder {
             // Zstd has the best compression ratio
             TableCompression::Zstd,
             Some(metadata),
+            false,
         )?;
 
         let size = data.len() as u64;

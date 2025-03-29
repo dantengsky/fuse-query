@@ -158,6 +158,7 @@ impl<'a> BlockWriter<'a> {
                 &mut data,
                 TableCompression::None,
                 None,
+                false,
             )?;
             let size = data.len() as u64;
             data_accessor.write(&location.0, data).await?;
