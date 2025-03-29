@@ -337,6 +337,7 @@ impl InvertedIndexWriter {
             // Zstd has the best compression ratio
             TableCompression::Zstd,
             None,
+            false,
         )?;
 
         Ok(data)
