@@ -17,14 +17,88 @@ use std::collections::HashSet;
 
 use databend_storages_common_table_meta::meta::Location;
 
+/// Represents the difference between two sets of segments and provides functionality to apply these differences.
+///
+/// `SegmentsDiff` is primarily used in the transaction retry mechanism to resolve conflicts. When a transaction
+/// fails due to conflicts with concurrent changes, this struct helps calculate the difference between:
+/// - The base segments (from the beginning of the transaction)
+/// - The new segments (the changes the transaction wants to make)
+///
+/// This diff can then be applied to the latest table state to create a merged result that incorporates
+/// both the transaction's changes and any concurrent changes made to the table.
+///
+/// If the diff cannot be applied (e.g., because segments that need to be replaced no longer exist),
+/// it indicates an unresolvable conflict that requires the transaction to be aborted.
 pub struct SegmentsDiff {
     appended: Vec<Location>,
     replaced: HashMap<Location, Vec<Location>>,
 }
 
 impl SegmentsDiff {
+    /// Creates a new `SegmentsDiff` by comparing base segments with new segments.
+    ///
+    /// This method calculates the differences between two sets of segments:
+    /// - Identifies which segments are replaced
+    /// - Determines which new segments are newly appended
+    ///
+    /// ## Logic Summary
+    /// 1. If base segments are empty, all new segments are considered appended
+    /// 2. Otherwise, finds common segments by matching segment locations
+    /// 3. Handles segments before the first common segment as appended
+    /// 4. For segments between common elements, determines replacements
+    /// 5. Handles any remaining base segments after the last common element by replacing them with any remaining new segments
+    /// 6. Returns a diff structure with replaced and appended segments
+    ///
+    /// ## Example
+    /// ```text
+    /// Base segments: [A] [B] [C] [D] [E] [F]
+    ///                     |       |
+    ///                     |       |
+    ///                     v       v
+    /// New segments:  [X] [B] [Y] [D] [Z]
+    ///
+    /// Result:
+    /// - Common segments: B and D (matched by ID)
+    /// - Appended: [X] (before first common segment)
+    /// - Replaced:
+    ///   - A -> [] (removed)
+    ///   - C -> [Y] (replaced with Y)
+    ///   - E, F -> [Z] (replaced with Z)
+    /// ```
+    ///
+    /// For more examples, please refer to the unit test cases.
+    ///
+    /// ## Validations
+    ///   - No duplicate segments exist in either input array (will panic if found)
+    ///   - Common segments maintain the same relative order in both arrays
+    ///   - Invariants of diff:
+    ///     - Appended segments are not present in the base segments
+    ///     - Replacement segments are a subset of new segments
+    ///     - Keys in replaced should be a subset of base segments
+    ///
+    /// # Arguments
+    /// * `base_segments` - The original set of segments, typically it is from the table snapshot at the beginning of a transaction
+    /// * `new_segments` - The target set of segments, typically it is from the latest table snapshot found during transaction retry
+    ///
+    /// # Returns
+    /// A `SegmentsDiff` containing the necessary changes to transform base segments to new segments
+    ///
+    /// # Panics
+    /// This function will panic if:
+    /// - Duplicate segments are found in either input array
+    /// - The invariants about appended and replaced segments are violated
+    /// - Common segments don't maintain the same relative order in both arrays
     #[allow(clippy::needless_range_loop)]
     pub fn new(base_segments: &[Location], new_segments: &[Location]) -> Self {
+        // Defensive check 1: Ensure no duplicate segments in input arrays
+        let new_segments_set: HashSet<_> = new_segments.iter().collect();
+        let base_segments_set: HashSet<_> = base_segments.iter().collect();
+        {
+            // Check that no duplicate segments in either vector
+            assert_eq!(new_segments_set.len(), new_segments.len());
+            assert_eq!(base_segments_set.len(), base_segments.len());
+        }
+
         // base_segments is empty
         if base_segments.is_empty() {
             return SegmentsDiff {
@@ -43,6 +117,13 @@ impl SegmentsDiff {
         for (i, base) in base_segments.iter().enumerate() {
             if let Some(&j) = new_segment_map.get(&base.0) {
                 common_indices.push((i, j));
+            }
+        }
+
+        // Defensive check 2: Verify common segments maintain the same relative order in both arrays
+        {
+            if common_indices.len() >= 2 {
+                Self::validate_common_segment_order(&common_indices);
             }
         }
 
@@ -89,11 +170,47 @@ impl SegmentsDiff {
             replaced.insert(base_segments[i].clone(), replacements);
         }
 
-        SegmentsDiff { replaced, appended }
+        // Defensive check 3: Verify invariants of the resulting diff
+        let diff = SegmentsDiff { replaced, appended };
+        diff.validate_diff_invariants(&base_segments_set, &new_segments_set);
+
+        diff
     }
 
+    /// Applies the diff to a target set of segments, transforming it according to the calculated differences.
+    ///
+    /// This method takes a target set of segments and applies both the replacements and additions
+    /// defined in this diff. It performs the following operations:
+    ///
+    /// 1. Verifies that all segments to be replaced exist in the target set
+    /// 2. Adds all appended segments to the result
+    /// 3. For each segment in the target:
+    ///    - If it should be replaced, adds the replacement segments instead
+    ///    - Otherwise, keeps the original segment
+    ///
+    /// ## Example
+    /// ```text
+    /// Target segments: [A] [B] [C] [D]
+    /// Diff:
+    ///   - Appended: [X]
+    ///   - Replaced: {B -> [Y, Z], D -> []}
+    ///
+    /// Result: [X] [A] [Y] [Z] [C]
+    /// ```
+    ///
+    /// # Arguments
+    /// * `self` - Consumes the diff as it's applied
+    /// * `target` - The set of segments to apply the diff to, typically it is from a snapshot being committed
+    ///
+    /// # Returns
+    /// * `Some(Vec<Location>)` - The transformed set of segments if all segments to be replaced exist in the target
+    /// * `None` - If any segment to be replaced doesn't exist in the target, indicating the diff cannot be applied
     pub fn apply(self, target: Vec<Location>) -> Option<Vec<Location>> {
         let target_segments = target.iter().collect::<HashSet<_>>();
+        // Defensive check 1: Ensure no duplicate segments in target
+        {
+            assert_eq!(target_segments.len(), target.len());
+        }
         for base in self.replaced.keys() {
             if !target_segments.contains(base) {
                 return None;
@@ -104,6 +221,19 @@ impl SegmentsDiff {
             appended,
             mut replaced,
         } = self;
+
+        // Defensive check 2:
+        // If a segment is in both appended and target, it must also be in replaced.
+        {
+            let appended_set: HashSet<&Location> = appended.iter().collect();
+            for segment in &target {
+                assert!(
+                    !appended_set.contains(segment),
+                    "Segment {:?} should not appear in both appended and target collections",
+                    segment
+                );
+            }
+        }
 
         let mut new_segments = appended;
         for segment in target.into_iter() {
@@ -117,6 +247,98 @@ impl SegmentsDiff {
             }
         }
         Some(new_segments)
+    }
+
+    /// Validates that the diff invariants are maintained:
+    /// 1. Appended segments should not be present in base segments
+    /// 2. Replacement segments should be a subset of new segments
+    /// 3. Keys in replaced should be a subset of base segments
+    ///
+    /// # Panics
+    /// This function will panic if any of the invariants are violated.
+    fn validate_diff_invariants(
+        &self,
+        base_segments_set: &HashSet<&Location>,
+        new_segments_set: &HashSet<&Location>,
+    ) {
+        // Invariant 1: Segments in `appended` should not be present in base_segments
+        let appended_set: HashSet<&Location> = self.appended.iter().collect();
+        let is_disjoint = appended_set.is_disjoint(base_segments_set);
+        if !is_disjoint {
+            // Find the overlapping elements for better error reporting
+            let overlap: Vec<_> = appended_set.intersection(base_segments_set).collect();
+            log::error!(
+                "Invariant violation: appended segments found in base_segments: {:?}",
+                overlap
+            );
+            assert!(
+                is_disjoint,
+                "Appended segments must not be present in base_segments"
+            );
+        }
+
+        // Invariant 2: Replacement segments should be a subset of new_segments
+        let replaced_set: HashSet<&Location> = self.replaced.values().flatten().collect();
+        let is_subset = replaced_set.is_subset(new_segments_set);
+        if !is_subset {
+            // Find the elements that are in replaced_set but not in new_segments_set
+            let diff: Vec<_> = replaced_set.difference(new_segments_set).collect();
+            log::error!(
+                "Invariant violation: replacement segments not found in new_segments: {:?}",
+                diff
+            );
+            assert!(
+                is_subset,
+                "Replacement segments must be present in new_segments"
+            );
+        }
+
+        // Invariant 3: Keys in replaced should be a subset of base_segments
+        let replaced_keys: HashSet<&Location> = self.replaced.keys().collect();
+        let keys_are_subset = replaced_keys.is_subset(base_segments_set);
+        if !keys_are_subset {
+            // Find the elements that are in replaced_keys but not in base_segments_set
+            let diff: Vec<_> = replaced_keys.difference(base_segments_set).collect();
+            log::error!(
+                "Invariant violation: replaced keys not found in base_segments: {:?}",
+                diff
+            );
+            assert!(
+                keys_are_subset,
+                "Keys in replaced must be present in base_segments"
+            );
+        }
+    }
+    /// Validates that common segments maintain the same relative order in both arrays.
+    ///
+    /// # Panics
+    /// This function will panic if common segments do not maintain the same relative order.
+    fn validate_common_segment_order(common_indices: &[(usize, usize)]) {
+        // Sort by base index to ensure we check in order
+        let mut sorted_indices = common_indices.to_owned();
+        sorted_indices.sort_by_key(|&(base_idx, _)| base_idx);
+
+        // Check if the new indices are also in ascending order
+        let new_indices: Vec<_> = sorted_indices.iter().map(|&(_, new_idx)| new_idx).collect();
+        let mut is_ordered = true;
+
+        for i in 1..new_indices.len() {
+            if new_indices[i] < new_indices[i - 1] {
+                is_ordered = false;
+                log::error!(
+                        "Order violation: Segment at base_index {} (new_index {}) comes after base_index {} (new_index {}), but new_index order is reversed",
+                        sorted_indices[i].0,
+                        new_indices[i],
+                        sorted_indices[i-1].0,
+                        new_indices[i-1]
+                    );
+            }
+        }
+
+        assert!(
+            is_ordered,
+            "Common segments must maintain the same relative order in both arrays"
+        );
     }
 }
 
@@ -286,5 +508,22 @@ mod tests {
                 assert!(replaced.is_empty());
             }
         }
+    }
+
+    #[test]
+    fn test_validate_segment_order_valid() {
+        // Valid case - segments maintain the same order
+        let common_indices = vec![(0, 1), (2, 3), (4, 6)];
+        // This should not panic
+        SegmentsDiff::validate_common_segment_order(&common_indices);
+    }
+
+    #[test]
+    #[should_panic(expected = "Common segments must maintain the same relative order")]
+    fn test_validate_segment_order_invalid() {
+        // Invalid case - segments have different relative order
+        let common_indices = vec![(0, 3), (2, 1), (4, 5)];
+        // This should panic because the new indices (3, 1, 5) are not in ascending order
+        SegmentsDiff::validate_common_segment_order(&common_indices);
     }
 }
