@@ -91,10 +91,10 @@ pub fn page_iter_to_arrays<'a, I: Pages + 'a>(
     let physical_type = &type_.physical_type;
     let logical_type = &type_.logical_type;
 
-    eprintln!(
-        "physical_type: {:?}, logical_type: {:?}, data_type: {:?}, chunk_size: {:?}, num_rows: {}",
-        physical_type, logical_type, data_type, chunk_size, num_rows
-    );
+    // eprintln!(
+    //    "physical_type: {:?}, logical_type: {:?}, data_type: {:?}, chunk_size: {:?}, num_rows: {}",
+    //    physical_type, logical_type, data_type, chunk_size, num_rows
+    //);
 
     Ok(match (physical_type, data_type.to_logical_type()) {
         (_, Null) => null::iter_to_arrays(pages, data_type, chunk_size, num_rows),
@@ -220,7 +220,7 @@ pub fn page_iter_to_arrays<'a, I: Pages + 'a>(
         ))),
 
         (PhysicalType::Int64, Decimal(precision, scale)) => {
-            eprintln!("HITTING ME");
+            // eprintln!("HITTING ME");
             // 估计总行数以预分配内存
             let mut all_values = Vec::with_capacity(num_rows);
 
@@ -243,7 +243,7 @@ pub fn page_iter_to_arrays<'a, I: Pages + 'a>(
                                 )
                             };
                             dict_values = Some(int64_values.to_vec());
-                            eprintln!("Found dictionary with {} values", int64_values.len());
+                            // eprintln!("Found dictionary with {} values", int64_values.len());
                         }
                     }
                     Page::Data(data_page) => {
@@ -277,13 +277,13 @@ pub fn page_iter_to_arrays<'a, I: Pages + 'a>(
                                         }
                                     }
 
-                                    eprintln!(
-                                        "Processed dictionary-encoded page with {} values",
-                                        data_page.num_values()
-                                    );
+                                    // eprintln!(
+                                    //    "Processed dictionary-encoded page with {} values",
+                                    //    data_page.num_values()
+                                    //);
                                 }
                                 _ => {
-                                    eprintln!(
+                                    unreachable!(
                                         "Unsupported encoding for dictionary data page: {:?}",
                                         data_page.encoding()
                                     );
