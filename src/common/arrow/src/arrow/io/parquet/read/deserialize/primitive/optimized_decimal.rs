@@ -1,4 +1,3 @@
-// Copyright 2020-2022 Jorge C. Leitão
 // Copyright 2021 Datafuse Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -12,16 +11,3 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
-mod basic;
-mod dictionary;
-mod integer;
-mod nested;
-
-mod optimized_decimal;
-
-pub use basic::Iter;
-pub use dictionary::DictIter;
-pub use dictionary::NestedDictIter;
-pub use integer::IntegerIter;
-pub use nested::NestedIter;

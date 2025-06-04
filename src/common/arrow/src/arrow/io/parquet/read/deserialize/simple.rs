@@ -14,6 +14,8 @@
 // limitations under the License.
 
 use ethnum::I256;
+use parquet2::encoding::Encoding;
+use parquet2::page::Page;
 use parquet2::schema::types::PhysicalType;
 use parquet2::schema::types::PrimitiveLogicalType;
 use parquet2::schema::types::PrimitiveType;
@@ -88,6 +90,11 @@ pub fn page_iter_to_arrays<'a, I: Pages + 'a>(
 
     let physical_type = &type_.physical_type;
     let logical_type = &type_.logical_type;
+
+    eprintln!(
+        "physical_type: {:?}, logical_type: {:?}, data_type: {:?}, chunk_size: {:?}, num_rows: {}",
+        physical_type, logical_type, data_type, chunk_size, num_rows
+    );
 
     Ok(match (physical_type, data_type.to_logical_type()) {
         (_, Null) => null::iter_to_arrays(pages, data_type, chunk_size, num_rows),
@@ -211,13 +218,111 @@ pub fn page_iter_to_arrays<'a, I: Pages + 'a>(
             chunk_size,
             |x: i32| x as i128,
         ))),
-        (PhysicalType::Int64, Decimal(_, _)) => dyn_iter(iden(primitive::IntegerIter::new(
-            pages,
-            data_type,
-            num_rows,
-            chunk_size,
-            |x: i64| x as i128,
-        ))),
+
+        (PhysicalType::Int64, Decimal(precision, scale)) => {
+            eprintln!("HITTING ME");
+            // 估计总行数以预分配内存
+            let mut all_values = Vec::with_capacity(num_rows);
+
+            // 存储字典值（如果有）
+            let mut dict_values: Option<Vec<i64>> = None;
+
+            // 不要创建原始值的中间副本
+            let mut page_iter = pages;
+
+            while let Some(page) = page_iter.next()? {
+                match page {
+                    Page::Dict(dict_page) => {
+                        let buffer = &dict_page.buffer;
+
+                        if buffer.len() % std::mem::size_of::<i64>() == 0 {
+                            let int64_values = unsafe {
+                                std::slice::from_raw_parts(
+                                    buffer.as_ptr() as *const i64,
+                                    buffer.len() / std::mem::size_of::<i64>(),
+                                )
+                            };
+                            dict_values = Some(int64_values.to_vec());
+                            eprintln!("Found dictionary with {} values", int64_values.len());
+                        }
+                    }
+                    Page::Data(data_page) => {
+                        let buffer = data_page.buffer();
+
+                        if let Some(ref dict_vals) = dict_values {
+                            match data_page.encoding() {
+                                Encoding::RleDictionary => {
+                                    use parquet2::encoding::hybrid_rle;
+                                    let bit_width = buffer[0];
+                                    let indices_buffer = &buffer[1..]; // skip the first byte which contains the bit width
+
+                                    let decoder = hybrid_rle::HybridRleDecoder::try_new(
+                                        indices_buffer,
+                                        bit_width as u32,
+                                        data_page.num_values(),
+                                    )
+                                    .map_err(|e| Error::from(e))?;
+
+                                    let indices: Vec<usize> = decoder
+                                        .map(|x| {
+                                            // 解码器返回的是Result<u32>类型，需要转换为usize
+                                            let x: usize = x.unwrap().try_into().unwrap();
+                                            x
+                                        })
+                                        .collect();
+
+                                    for idx in indices {
+                                        if idx < dict_vals.len() {
+                                            all_values.push(dict_vals[idx] as i128);
+                                        }
+                                    }
+
+                                    eprintln!(
+                                        "Processed dictionary-encoded page with {} values",
+                                        data_page.num_values()
+                                    );
+                                }
+                                _ => {
+                                    eprintln!(
+                                        "Unsupported encoding for dictionary data page: {:?}",
+                                        data_page.encoding()
+                                    );
+                                }
+                            }
+                        } else {
+                            if buffer.len() % std::mem::size_of::<i64>() == 0 {
+                                let int64_values = unsafe {
+                                    std::slice::from_raw_parts(
+                                        buffer.as_ptr() as *const i64,
+                                        buffer.len() / std::mem::size_of::<i64>(),
+                                    )
+                                };
+
+                                all_values.reserve(int64_values.len());
+
+                                for &val in int64_values {
+                                    all_values.push(val as i128);
+                                }
+
+                                eprintln!(
+                                    "Processed non-dictionary page with {} values",
+                                    int64_values.len()
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
+            let array = PrimitiveArray::<i128>::new(
+                DataType::Decimal(*precision, *scale),
+                all_values.into(),
+                None,
+            );
+
+            dyn_iter(std::iter::once(Ok(array)))
+        }
+
         (PhysicalType::FixedLenByteArray(n), Decimal(_, _)) if *n > 16 => {
             return Err(Error::NotYetImplemented(format!(
                 "Can't decode Decimal128 type from Fixed Size Byte Array of len {n:?}"
@@ -677,4 +782,22 @@ fn dict_read<'a, K: DictionaryKey, I: Pages + 'a>(
             )));
         }
     })
+}
+
+fn deserialize_indices(buffer: &[u8], num_values: usize) -> Vec<usize> {
+    // 创建一个用于存储结果的向量
+    let mut indices = Vec::with_capacity(num_values);
+
+    // 这里需要实现RLE解码逻辑
+    // 简化示例：假设buffer直接包含了usize类型的索引
+    if buffer.len() >= num_values * std::mem::size_of::<u32>() {
+        let u32_indices =
+            unsafe { std::slice::from_raw_parts(buffer.as_ptr() as *const u32, num_values) };
+
+        for &idx in u32_indices {
+            indices.push(idx as usize);
+        }
+    }
+
+    indices
 }
