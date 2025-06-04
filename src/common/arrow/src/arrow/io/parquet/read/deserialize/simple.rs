@@ -263,18 +263,24 @@ pub fn page_iter_to_arrays<'a, I: Pages + 'a>(
                                     )
                                     .map_err(|e| Error::from(e))?;
 
-                                    let indices: Vec<usize> = decoder
-                                        .map(|x| {
-                                            // 解码器返回的是Result<u32>类型，需要转换为usize
-                                            let x: usize = x.unwrap().try_into().unwrap();
-                                            x
-                                        })
-                                        .collect();
+                                    // let indices: Vec<usize> = decoder
+                                    //    .map(|x| {
+                                    //        // 解码器返回的是Result<u32>类型，需要转换为usize
+                                    //        let x: usize = x.unwrap().try_into().unwrap();
+                                    //        x
+                                    //    })
+                                    //    .collect();
 
-                                    for idx in indices {
-                                        if idx < dict_vals.len() {
-                                            all_values.push(dict_vals[idx] as i128);
-                                        }
+                                    // for idx in indices {
+                                    //    // if idx < dict_vals.len() {
+                                    //    all_values.push(dict_vals[idx] as i128);
+                                    //    //}
+                                    //}
+
+                                    for idx in decoder {
+                                        // if idx < dict_vals.len() {
+                                        all_values.push(dict_vals[idx? as usize] as i128);
+                                        //}
                                     }
 
                                     // eprintln!(
