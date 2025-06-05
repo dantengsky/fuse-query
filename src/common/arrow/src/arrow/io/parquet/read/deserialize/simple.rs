@@ -275,7 +275,7 @@ pub fn page_iter_to_arrays<'a, I: Pages + 'a>(
                                     //    // if idx < dict_vals.len() {
                                     //    all_values.push(dict_vals[idx] as i128);
                                     //    //}
-                                    //}
+                                   //}
 
                                     for idx in decoder {
                                         // if idx < dict_vals.len() {
@@ -320,25 +320,27 @@ pub fn page_iter_to_arrays<'a, I: Pages + 'a>(
                                     }
                                 },
                                 Encoding::DeltaBinaryPacked => {
-                                    use parquet2::encoding::delta_bitpacked;
+                                    use parquet2::encoding::delta_bitpacked::Decoder;
 
-                                    // 使用正确的 Decoder 类型处理 Delta Binary Packed 编码
-                                    let decoder = delta_bitpacked::Decoder::try_new(buffer)
+                                    // 1. 获取解码器
+                                    let decoder = Decoder::try_new(buffer)
                                         .map_err(Error::from)?;
 
-                                    // collect()将迭代器收集为Vec
-                                    let values: Vec<i64> = decoder.collect::<std::result::Result<Vec<_>, _>>()
-                                        .map_err(Error::from)?;
+                                    // 2. 直接使用解码器并预先分配内存，避免中间Vec
+                                    // 估计容量: 使用buffer.len()作为启发
+                                    let estimated_values = buffer.len() / 2; // 粗略估计，可能需要调整
+                                    all_values.reserve(estimated_values);
 
-                                    // Do we still need this?
-                                    all_values.reserve(values.len());
-
-                                    for val in values {
-                                        all_values.push(val as i128);
+                                    // 3. 直接处理解码结果，省去中间集合和额外遍历
+                                    for result in decoder {
+                                        match result {
+                                            Ok(val) => all_values.push(val as i128),
+                                            Err(e) => return Err(Error::from(e)),
+                                        }
                                     }
 
                                     eprintln!(
-                                        "Processed DeltaBinaryPacked-encoded page with {} values",
+                                        "Processed DeltaBinaryPacked-encoded page with {} values (optimized)",
                                         all_values.len()
                                     );
                                 },
