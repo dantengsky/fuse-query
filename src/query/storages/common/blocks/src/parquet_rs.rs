@@ -13,7 +13,9 @@
 // limitations under the License.
 
 use std::sync::Arc;
-use arrow_schema::{DataType, SchemaRef};
+
+use arrow_schema::DataType;
+use arrow_schema::SchemaRef;
 use databend_common_exception::Result;
 use databend_common_expression::DataBlock;
 use databend_common_expression::TableSchema;
@@ -35,12 +37,17 @@ pub fn blocks_to_parquet(
     enable_encoding: bool,
 ) -> Result<FileMetaData> {
     assert!(!blocks.is_empty());
+    let row_count_limit = std::env::var("DATABEND_PARQUET_ROW_COUNT_LIMIT")
+        .ok()
+        .and_then(|val| val.parse::<usize>().ok())
+        .unwrap_or(8192);
     let builder = WriterProperties::builder()
         .set_compression(compression.into())
         // use `usize::MAX` to effectively limit the number of row groups to 1
         .set_max_row_group_size(usize::MAX)
         .set_statistics_enabled(EnabledStatistics::None)
-        .set_bloom_filter_enabled(false);
+        .set_bloom_filter_enabled(false)
+        .set_data_page_row_count_limit(row_count_limit);
 
     let mut builder = if enable_encoding {
         // Enable dictionary encoding and fallback encodings.
@@ -70,14 +77,13 @@ pub fn blocks_to_parquet(
 
     for field in arrow_schema.as_ref().fields() {
         match field.data_type() {
-            DataType::Decimal128(_, _) |
-            DataType::Decimal256(_, _) => {
+            DataType::Decimal128(_, _) | DataType::Decimal256(_, _) => {
                 let path = ColumnPath::from(vec![field.name().to_string()]);
-                builder = builder.set_column_dictionary_enabled(path.clone(), false)
+                builder = builder
+                    .set_column_dictionary_enabled(path.clone(), false)
                     .set_column_encoding(path, Encoding::DELTA_BINARY_PACKED);
             }
-            _ => {
-            }
+            _ => {}
         }
     }
 
@@ -86,7 +92,6 @@ pub fn blocks_to_parquet(
         .into_iter()
         .map(|block| block.to_record_batch(table_schema))
         .collect::<Result<Vec<_>>>()?;
-
 
     let mut writer = ArrowWriter::try_new(write_buffer, arrow_schema, Some(props))?;
     for batch in batches {
