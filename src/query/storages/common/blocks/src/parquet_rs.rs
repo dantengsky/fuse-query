@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use std::sync::Arc;
-
+use arrow_schema::{DataType, SchemaRef};
 use databend_common_exception::Result;
 use databend_common_expression::DataBlock;
 use databend_common_expression::TableSchema;
@@ -24,6 +24,7 @@ use parquet::file::properties::EnabledStatistics;
 use parquet::file::properties::WriterProperties;
 use parquet::file::properties::WriterVersion;
 use parquet::format::FileMetaData;
+use parquet::schema::types::ColumnPath;
 
 /// Serialize data blocks to parquet format.
 pub fn blocks_to_parquet(
@@ -41,7 +42,7 @@ pub fn blocks_to_parquet(
         .set_statistics_enabled(EnabledStatistics::None)
         .set_bloom_filter_enabled(false);
 
-    let builder = if enable_encoding {
+    let mut builder = if enable_encoding {
         // Enable dictionary encoding and fallback encodings.
         //
         // Memo for quick lookup:
@@ -65,12 +66,28 @@ pub fn blocks_to_parquet(
             .set_encoding(Encoding::PLAIN)
     };
 
+    let arrow_schema: SchemaRef = Arc::new(table_schema.into());
+
+    for field in arrow_schema.as_ref().fields() {
+        match field.data_type() {
+            DataType::Decimal128(_, _) |
+            DataType::Decimal256(_, _) => {
+                let path = ColumnPath::from(vec![field.name().to_string()]);
+                builder = builder.set_column_dictionary_enabled(path.clone(), false)
+                    .set_column_encoding(path, Encoding::DELTA_BINARY_PACKED);
+            }
+            _ => {
+            }
+        }
+    }
+
     let props = builder.build();
     let batches = blocks
         .into_iter()
         .map(|block| block.to_record_batch(table_schema))
         .collect::<Result<Vec<_>>>()?;
-    let arrow_schema = Arc::new(table_schema.into());
+
+
     let mut writer = ArrowWriter::try_new(write_buffer, arrow_schema, Some(props))?;
     for batch in batches {
         writer.write(&batch)?;
