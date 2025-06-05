@@ -296,24 +296,65 @@ pub fn page_iter_to_arrays<'a, I: Pages + 'a>(
                                 }
                             }
                         } else {
-                            if buffer.len() % std::mem::size_of::<i64>() == 0 {
-                                let int64_values = unsafe {
-                                    std::slice::from_raw_parts(
-                                        buffer.as_ptr() as *const i64,
-                                        buffer.len() / std::mem::size_of::<i64>(),
-                                    )
-                                };
+                            // 处理非字典编码的页面
+                            match data_page.encoding() {
+                                Encoding::Plain => {
+                                    if buffer.len() % std::mem::size_of::<i64>() == 0 {
+                                        let int64_values = unsafe {
+                                            std::slice::from_raw_parts(
+                                                buffer.as_ptr() as *const i64,
+                                                buffer.len() / std::mem::size_of::<i64>(),
+                                            )
+                                        };
 
-                                all_values.reserve(int64_values.len());
+                                        all_values.reserve(int64_values.len());
 
-                                for &val in int64_values {
-                                    all_values.push(val as i128);
+                                        for &val in int64_values {
+                                            all_values.push(val as i128);
+                                        }
+
+                                        eprintln!(
+                                            "Processed Plain-encoded page with {} values",
+                                            int64_values.len()
+                                        );
+                                    }
+                                },
+                                Encoding::DeltaBinaryPacked => {
+                                    use parquet2::encoding::delta_bitpacked;
+
+                                    // 使用正确的 Decoder 类型处理 Delta Binary Packed 编码
+                                    let decoder = delta_bitpacked::Decoder::try_new(buffer)
+                                        .map_err(Error::from)?;
+
+                                    // collect()将迭代器收集为Vec
+                                    let values: Vec<i64> = decoder.collect::<std::result::Result<Vec<_>, _>>()
+                                        .map_err(Error::from)?;
+
+                                    // Do we still need this?
+                                    all_values.reserve(values.len());
+
+                                    for val in values {
+                                        all_values.push(val as i128);
+                                    }
+
+                                    eprintln!(
+                                        "Processed DeltaBinaryPacked-encoded page with {} values",
+                                        all_values.len()
+                                    );
+                                },
+                                //Encoding::RLE => {
+                                //    // 对于RLE编码的整数，使用RLE解码器
+                                //    // 注意：这里需要根据实际情况调整
+                                //    eprintln!("RLE encoding for Int64/Decimal not fully implemented");
+
+                                //    // TODO: 实现RLE编码解码逻辑
+                                //},
+                                _ => {
+                                    return Err(Error::NotYetImplemented(format!(
+                                        "Unsupported encoding for non-dictionary decimal data page: {:?}",
+                                        data_page.encoding()
+                                    )));
                                 }
-
-                                eprintln!(
-                                    "Processed non-dictionary page with {} values",
-                                    int64_values.len()
-                                );
                             }
                         }
                     }
