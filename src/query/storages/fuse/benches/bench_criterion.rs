@@ -34,7 +34,9 @@ use databend_common_storages_fuse::io::serialize_block;
 use databend_common_storages_fuse::io::WriteSettings;
 use databend_common_storages_fuse::FuseStorageFormat;
 use databend_storages_common_table_meta::table::TableCompression;
+use parquet::arrow::arrow_reader::ArrowReaderOptions;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use parquet::arrow::ProjectionMask;
 
 // 与 bench.rs 中相同的 NUM_ROWS 常量
 const NUM_ROWS: usize = 6002732;
@@ -77,22 +79,35 @@ fn column_by_name(record_batch: &RecordBatch, names: &[String]) -> ArrayRef {
 }
 
 /// 反序列化 Parquet 数据
-fn deser_parquet_impl(a: &Bytes, schema: &TableSchema) {
+fn deser_parquet_impl(a: &Bytes, schema: &TableSchema) -> Vec<RecordBatch> {
+    let meta =
+        parquet::arrow::arrow_reader::ArrowReaderMetadata::load(a, ArrowReaderOptions::new())
+            .unwrap();
     let reader = ParquetRecordBatchReaderBuilder::try_new(a.clone())
         .unwrap()
         .with_batch_size(8192)
+        .with_projection(ProjectionMask::columns(meta.parquet_schema(), vec![
+            "l_tax",
+        ]))
         .build()
         .unwrap();
     let batch: Vec<Result<RecordBatch, arrow_schema::ArrowError>> = reader.collect();
     let batch = batch.into_iter().map(|r| r.unwrap()).collect::<Vec<_>>();
     let num_rows: usize = batch.iter().map(|b| b.num_rows()).sum();
     assert_eq!(num_rows, NUM_ROWS);
+    batch
 }
 
 fn deser_parquet_to_block_impl(a: &Bytes, schema: &TableSchema) -> DataBlock {
+    let meta =
+        parquet::arrow::arrow_reader::ArrowReaderMetadata::load(a, ArrowReaderOptions::new())
+            .unwrap();
     let mut reader = ParquetRecordBatchReaderBuilder::try_new(a.clone())
         .unwrap()
         .with_batch_size(usize::MAX)
+        .with_projection(ProjectionMask::columns(meta.parquet_schema(), vec![
+            "l_tax",
+        ]))
         .build()
         .unwrap();
 
@@ -125,7 +140,7 @@ fn prepare_format_file(
     };
     let schema = Arc::new(schema);
     let mut buffer = Vec::new();
-    let _ = serialize_block(&write_settings, &schema, datablock, &mut buffer).unwrap();
+    //    let col_metas = serialize_block(&write_settings, &schema, datablock, &mut buffer).unwrap();
 
     (buffer.into(), schema)
 }
@@ -144,7 +159,10 @@ fn bench_parquet_deser_no_encoding(c: &mut Criterion) {
             BenchmarkId::from_parameter(format!("{:?}", compression)),
             &(&data, &schema),
             |b, (data, schema)| {
-                b.iter(|| deser_parquet_impl(data, schema));
+                b.iter(|| {
+                    let batch = deser_parquet_impl(data, schema);
+                    criterion::black_box(batch)
+                });
             },
         );
     }
@@ -165,7 +183,10 @@ fn bench_parquet_deser_encoding(c: &mut Criterion) {
             BenchmarkId::from_parameter(format!("{:?}", compression)),
             &(&data, &schema),
             |b, (data, schema)| {
-                b.iter(|| deser_parquet_impl(data, schema));
+                b.iter(|| {
+                    let batch = deser_parquet_impl(data, schema);
+                    criterion::black_box(batch)
+                });
             },
         );
     }
@@ -218,15 +239,18 @@ fn bench_native_deser_cols(c: &mut Criterion) {
                     let mut columns = Vec::with_capacity(schema.fields().len());
 
                     for (meta, f) in metas.iter().zip(schema.fields().iter()) {
-                        let bs = data
-                            .slice(meta.offset as usize..(meta.offset + meta.total_len()) as usize);
-                        let cols = reader
-                            .batch_read_columns(vec![bs.as_ref()], f.data_type.clone(), vec![meta
-                                .pages
-                                .clone()])
-                            .unwrap();
+                        if f.name == "l_tax" {
+                            let bs = data.slice(
+                                meta.offset as usize..(meta.offset + meta.total_len()) as usize,
+                            );
+                            let cols = reader
+                                .batch_read_columns(vec![bs.as_ref()], f.data_type.clone(), vec![
+                                    meta.pages.clone(),
+                                ])
+                                .unwrap();
 
-                        columns.push(cols);
+                            columns.push(cols);
+                        }
                     }
                     // let datablock = DataBlock::new_from_columns(columns);
                     // assert_eq!(datablock.num_rows(), NUM_ROWS);
@@ -260,15 +284,18 @@ fn bench_native_deser(c: &mut Criterion) {
                     let mut columns = Vec::with_capacity(schema.fields().len());
 
                     for (meta, f) in metas.iter().zip(schema.fields().iter()) {
-                        let bs = data
-                            .slice(meta.offset as usize..(meta.offset + meta.total_len()) as usize);
-                        let col = reader
-                            .batch_read_column(vec![bs.as_ref()], f.data_type.clone(), vec![meta
-                                .pages
-                                .clone()])
-                            .unwrap();
+                        if f.name == "l_tax" {
+                            let bs = data.slice(
+                                meta.offset as usize..(meta.offset + meta.total_len()) as usize,
+                            );
+                            let col = reader
+                                .batch_read_column(vec![bs.as_ref()], f.data_type.clone(), vec![
+                                    meta.pages.clone(),
+                                ])
+                                .unwrap();
 
-                        columns.push(col);
+                            columns.push(col);
+                        }
                     }
                     // let datablock = DataBlock::new_from_columns(columns);
                     // assert_eq!(datablock.num_rows(), NUM_ROWS);
