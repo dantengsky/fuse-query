@@ -15,13 +15,16 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use arrow_array::ArrayRef;
 use arrow_array::RecordBatch;
+use arrow_array::StructArray;
 use bytes::Bytes;
 use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::BenchmarkId;
 use criterion::Criterion;
 use criterion::Throughput;
+use databend_common_expression::BlockEntry;
 use databend_common_expression::DataBlock;
 use databend_common_expression::DataSchema;
 use databend_common_expression::TableSchema;
@@ -62,8 +65,19 @@ fn read_parquet_file() -> (DataBlock, TableSchema) {
     (block, schema)
 }
 
+fn column_by_name(record_batch: &RecordBatch, names: &[String]) -> ArrayRef {
+    let mut array = record_batch.column_by_name(&names[0]).unwrap().clone();
+    if names.len() > 1 {
+        for name in &names[1..] {
+            let struct_array = array.as_any().downcast_ref::<StructArray>().unwrap();
+            array = struct_array.column_by_name(name).unwrap().clone();
+        }
+    }
+    array
+}
+
 /// 反序列化 Parquet 数据
-fn deser_parquet_impl(a: Bytes) {
+fn deser_parquet_impl(a: &Bytes, schema: &TableSchema) {
     let reader = ParquetRecordBatchReaderBuilder::try_new(a.clone())
         .unwrap()
         .with_batch_size(8192)
@@ -73,6 +87,22 @@ fn deser_parquet_impl(a: Bytes) {
     let batch = batch.into_iter().map(|r| r.unwrap()).collect::<Vec<_>>();
     let num_rows: usize = batch.iter().map(|b| b.num_rows()).sum();
     assert_eq!(num_rows, NUM_ROWS);
+}
+
+fn deser_parquet_to_block_impl(a: &Bytes, schema: &TableSchema) -> DataBlock {
+    let mut reader = ParquetRecordBatchReaderBuilder::try_new(a.clone())
+        .unwrap()
+        .with_batch_size(usize::MAX)
+        .build()
+        .unwrap();
+
+    let batch = reader.next().unwrap();
+    let batch = batch.unwrap();
+    let schema: TableSchema = batch.schema().as_ref().try_into().unwrap();
+    let data_schema = DataSchema::from(&schema);
+    let (block, _) = DataBlock::from_record_batch(&data_schema, &batch).unwrap();
+    assert_eq!(block.num_rows(), NUM_ROWS);
+    block
 }
 
 /// 准备格式化文件
@@ -105,16 +135,16 @@ fn bench_parquet_deser_no_encoding(c: &mut Criterion) {
     let mut group = c.benchmark_group("parquet_deser_no_encoding");
 
     for compression in [TableCompression::LZ4, TableCompression::Zstd] {
-        let (data, _) = prepare_format_file(FuseStorageFormat::Parquet, compression, false);
+        let (data, schema) = prepare_format_file(FuseStorageFormat::Parquet, compression, false);
 
         // 设置吞吐量为输入数据的大小
         group.throughput(Throughput::Bytes(data.len() as u64));
 
         group.bench_with_input(
             BenchmarkId::from_parameter(format!("{:?}", compression)),
-            &data,
-            |b, data| {
-                b.iter(|| deser_parquet_impl(data.clone()));
+            &(&data, &schema),
+            |b, (data, schema)| {
+                b.iter(|| deser_parquet_impl(data, schema));
             },
         );
     }
@@ -127,15 +157,38 @@ fn bench_parquet_deser_encoding(c: &mut Criterion) {
     // group.measurement_time(Duration::from_secs(3));
 
     for compression in [TableCompression::LZ4, TableCompression::Zstd] {
-        let (data, _) = prepare_format_file(FuseStorageFormat::Parquet, compression, true);
+        let (data, schema) = prepare_format_file(FuseStorageFormat::Parquet, compression, true);
 
         group.throughput(Throughput::Bytes(data.len() as u64));
 
         group.bench_with_input(
             BenchmarkId::from_parameter(format!("{:?}", compression)),
-            &data,
-            |b, data| {
-                b.iter(|| deser_parquet_impl(data.clone()));
+            &(&data, &schema),
+            |b, (data, schema)| {
+                b.iter(|| deser_parquet_impl(data, schema));
+            },
+        );
+    }
+    group.finish();
+}
+
+fn bench_parquet_deser_encoding_to_block(c: &mut Criterion) {
+    let mut group = c.benchmark_group("parquet_deser_encoding");
+    // group.measurement_time(Duration::from_secs(3));
+
+    for compression in [TableCompression::LZ4, TableCompression::Zstd] {
+        let (data, schema) = prepare_format_file(FuseStorageFormat::Parquet, compression, true);
+
+        group.throughput(Throughput::Bytes(data.len() as u64));
+
+        group.bench_with_input(
+            BenchmarkId::from_parameter(format!("to_block/{:?}", compression)),
+            &(&data, &schema),
+            |b, (data, schema)| {
+                b.iter(|| {
+                    let block = deser_parquet_to_block_impl(data, schema);
+                    criterion::black_box(block)
+                });
             },
         );
     }
@@ -143,7 +196,7 @@ fn bench_parquet_deser_encoding(c: &mut Criterion) {
 }
 
 /// Native 反序列化基准测试
-fn bench_native_deser(c: &mut Criterion) {
+fn bench_native_deser_cols(c: &mut Criterion) {
     let mut group = c.benchmark_group("native_deser");
     // group.measurement_time(Duration::from_secs(3));
 
@@ -153,7 +206,7 @@ fn bench_native_deser(c: &mut Criterion) {
         group.throughput(Throughput::Bytes(data.len() as u64));
 
         group.bench_with_input(
-            BenchmarkId::from_parameter(format!("{:?}", compression)),
+            BenchmarkId::from_parameter(format!("no_concat/{:?}", compression)),
             &(data.clone(), schema.clone()),
             |b, (data, schema)| {
                 b.iter(|| {
@@ -185,7 +238,7 @@ fn bench_native_deser(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_native_deser_cols(c: &mut Criterion) {
+fn bench_native_deser(c: &mut Criterion) {
     let mut group = c.benchmark_group("native_deser");
     // group.measurement_time(Duration::from_secs(3));
 
@@ -195,7 +248,7 @@ fn bench_native_deser_cols(c: &mut Criterion) {
         group.throughput(Throughput::Bytes(data.len() as u64));
 
         group.bench_with_input(
-            BenchmarkId::from_parameter(format!("no_concat/{:?}", compression)),
+            BenchmarkId::from_parameter(format!("{:?}", compression)),
             &(data.clone(), schema.clone()),
             |b, (data, schema)| {
                 b.iter(|| {
@@ -217,9 +270,10 @@ fn bench_native_deser_cols(c: &mut Criterion) {
 
                         columns.push(col);
                     }
-                    let datablock = DataBlock::new_from_columns(columns);
-                    assert_eq!(datablock.num_rows(), NUM_ROWS);
-                    criterion::black_box(datablock)
+                    // let datablock = DataBlock::new_from_columns(columns);
+                    // assert_eq!(datablock.num_rows(), NUM_ROWS);
+                    // criterion::black_box(datablock)
+                    criterion::black_box(columns)
                 });
             },
         );
@@ -229,7 +283,7 @@ fn bench_native_deser_cols(c: &mut Criterion) {
 
 criterion_group!(
     benches,
-    bench_parquet_deser_no_encoding,
+    // bench_parquet_deser_no_encoding,
     bench_parquet_deser_encoding,
     bench_native_deser,
     bench_native_deser_cols
