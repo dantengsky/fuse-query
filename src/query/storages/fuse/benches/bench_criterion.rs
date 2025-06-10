@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use arrow_array::ArrayRef;
 use arrow_array::RecordBatch;
@@ -24,13 +23,11 @@ use criterion::criterion_main;
 use criterion::BenchmarkId;
 use criterion::Criterion;
 use criterion::Throughput;
-use databend_common_expression::BlockEntry;
 use databend_common_expression::DataBlock;
 use databend_common_expression::DataSchema;
 use databend_common_expression::TableSchema;
 use databend_common_expression::TableSchemaRef;
 use databend_common_native::read::NativeColumnsReader;
-use databend_common_storages_fuse::io::serialize_block;
 use databend_common_storages_fuse::io::WriteSettings;
 use databend_common_storages_fuse::FuseStorageFormat;
 use databend_storages_common_table_meta::table::TableCompression;
@@ -80,17 +77,18 @@ fn column_by_name(record_batch: &RecordBatch, names: &[String]) -> ArrayRef {
 
 /// 反序列化 Parquet 数据
 fn deser_parquet_impl(a: &Bytes, schema: &TableSchema) -> Vec<RecordBatch> {
-    let meta = parquet::arrow::arrow_reader::ArrowReaderMetadata::load(
+    let meta_reader = parquet::arrow::arrow_reader::ArrowReaderMetadata::load(
         &a.clone(),
         ArrowReaderOptions::new(),
     )
     .unwrap();
+    let parquet_schema = meta_reader.parquet_schema();
+    let mask = ProjectionMask::columns(parquet_schema, vec!["l_tax"]);
+
     let reader = ParquetRecordBatchReaderBuilder::try_new(a.clone())
         .unwrap()
         .with_batch_size(8192)
-        .with_projection(ProjectionMask::columns(meta.parquet_schema(), vec![
-            "l_tax",
-        ]))
+        .with_projection(mask)
         .build()
         .unwrap();
     let batch: Vec<Result<RecordBatch, arrow_schema::ArrowError>> = reader.collect();
@@ -101,17 +99,17 @@ fn deser_parquet_impl(a: &Bytes, schema: &TableSchema) -> Vec<RecordBatch> {
 }
 
 fn deser_parquet_to_block_impl(a: &Bytes, schema: &TableSchema) -> DataBlock {
-    let meta = parquet::arrow::arrow_reader::ArrowReaderMetadata::load(
+    let meta_reader = parquet::arrow::arrow_reader::ArrowReaderMetadata::load(
         &a.clone(),
         ArrowReaderOptions::new(),
     )
     .unwrap();
+    let parquet_schema = meta_reader.parquet_schema();
+    let mask = ProjectionMask::columns(parquet_schema, vec!["l_tax"]);
     let mut reader = ParquetRecordBatchReaderBuilder::try_new(a.clone())
         .unwrap()
         .with_batch_size(usize::MAX)
-        .with_projection(ProjectionMask::columns(meta.parquet_schema(), vec![
-            "l_tax",
-        ]))
+        .with_projection(mask)
         .build()
         .unwrap();
 
