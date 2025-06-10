@@ -285,6 +285,7 @@ criterion_group!(
     benches,
     // bench_parquet_deser_no_encoding,
     bench_parquet_deser_encoding,
+    bench_parquet_deser_encoding_to_block,
     bench_native_deser,
     bench_native_deser_cols
 );
