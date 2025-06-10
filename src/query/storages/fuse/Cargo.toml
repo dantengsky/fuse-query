@@ -76,11 +76,16 @@ uuid = { workspace = true }
 xorf = { workspace = true, default-features = false, features = ["binary-fuse"] }
 
 [dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
 divan = { workspace = true }
 tempfile = { workspace = true }
 
 [[bench]]
 name = "bench"
+harness = false
+
+[[bench]]
+name = "bench_criterion"
 harness = false
 
 [lints]
