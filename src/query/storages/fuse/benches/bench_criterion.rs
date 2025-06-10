@@ -153,7 +153,7 @@ fn bench_native_deser(c: &mut Criterion) {
         group.throughput(Throughput::Bytes(data.len() as u64));
 
         group.bench_with_input(
-            BenchmarkId::from_parameter(format!("{:?}/cols", compression)),
+            BenchmarkId::from_parameter(format!("{:?}", compression)),
             &(data.clone(), schema.clone()),
             |b, (data, schema)| {
                 b.iter(|| {
@@ -195,7 +195,7 @@ fn bench_native_deser_cols(c: &mut Criterion) {
         group.throughput(Throughput::Bytes(data.len() as u64));
 
         group.bench_with_input(
-            BenchmarkId::from_parameter(format!("{:?}", compression)),
+            BenchmarkId::from_parameter(format!("no_concat/{:?}", compression)),
             &(data.clone(), schema.clone()),
             |b, (data, schema)| {
                 b.iter(|| {
