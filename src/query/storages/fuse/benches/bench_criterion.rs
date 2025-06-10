@@ -103,7 +103,6 @@ fn prepare_format_file(
 /// Parquet 反序列化基准测试（无编码）
 fn bench_parquet_deser_no_encoding(c: &mut Criterion) {
     let mut group = c.benchmark_group("parquet_deser_no_encoding");
-    group.measurement_time(Duration::from_secs(3));
 
     for compression in [TableCompression::LZ4, TableCompression::Zstd] {
         let (data, _) = prepare_format_file(FuseStorageFormat::Parquet, compression, false);
@@ -125,7 +124,7 @@ fn bench_parquet_deser_no_encoding(c: &mut Criterion) {
 /// Parquet 反序列化基准测试（有编码）
 fn bench_parquet_deser_encoding(c: &mut Criterion) {
     let mut group = c.benchmark_group("parquet_deser_encoding");
-    group.measurement_time(Duration::from_secs(3));
+    // group.measurement_time(Duration::from_secs(3));
 
     for compression in [TableCompression::LZ4, TableCompression::Zstd] {
         let (data, _) = prepare_format_file(FuseStorageFormat::Parquet, compression, true);
@@ -146,7 +145,7 @@ fn bench_parquet_deser_encoding(c: &mut Criterion) {
 /// Native 反序列化基准测试
 fn bench_native_deser(c: &mut Criterion) {
     let mut group = c.benchmark_group("native_deser");
-    group.measurement_time(Duration::from_secs(3));
+    // group.measurement_time(Duration::from_secs(3));
 
     for compression in [TableCompression::LZ4, TableCompression::Zstd] {
         let (data, schema) = prepare_format_file(FuseStorageFormat::Native, compression, false);

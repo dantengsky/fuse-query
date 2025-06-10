@@ -29,7 +29,7 @@ fn main() {
 //       │              3.176 GB/s    │ 3.176 GB/s    │ 3.176 GB/s    │ 3.176 GB/s    │         │
 //       ╰─ Zstd        1.009 s       │ 1.009 s       │ 1.009 s       │ 1.009 s       │ 1       │ 1
 //                      1.425 GB/s    │ 1.425 GB/s    │ 1.425 GB/s    │ 1.425 GB/s    │         │
-//#[divan::bench_group(max_time = 3)]
+#[divan::bench_group(max_time = 3)]
 mod dummy {
     use std::sync::Arc;
 
