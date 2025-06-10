@@ -20,7 +20,7 @@ use databend_common_expression::TableSchema;
 use databend_storages_common_table_meta::table::TableCompression;
 use parquet::arrow::ArrowWriter;
 use parquet::basic::Encoding;
-use parquet::file::properties::EnabledStatistics;
+use parquet::file::properties::{EnabledStatistics, WriterVersion};
 use parquet::file::properties::WriterProperties;
 use parquet::format::FileMetaData;
 
@@ -30,17 +30,29 @@ pub fn blocks_to_parquet(
     blocks: Vec<DataBlock>,
     write_buffer: &mut Vec<u8>,
     compression: TableCompression,
+    encoding: bool,
 ) -> Result<FileMetaData> {
     assert!(!blocks.is_empty());
-    let props = WriterProperties::builder()
+    let props_builder = WriterProperties::builder()
         .set_compression(compression.into())
         // use `usize::MAX` to effectively limit the number of row groups to 1
         .set_max_row_group_size(usize::MAX)
-        .set_encoding(Encoding::PLAIN)
-        .set_dictionary_enabled(false)
         .set_statistics_enabled(EnabledStatistics::None)
-        .set_bloom_filter_enabled(false)
-        .build();
+        .set_bloom_filter_enabled(false);
+
+    let props =
+    if encoding {
+        props_builder
+            .set_writer_version(WriterVersion::PARQUET_2_0)
+            .set_dictionary_enabled(true)
+            .build()
+    } else {
+        props_builder
+            .set_encoding(Encoding::PLAIN)
+            .set_dictionary_enabled(false)
+            .build()
+    };
+
     let batches = blocks
         .into_iter()
         .map(|block| block.to_record_batch(table_schema))

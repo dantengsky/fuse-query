@@ -294,6 +294,7 @@ impl FuseTable {
             table_compression: self.table_compression,
             max_page_size,
             block_per_seg,
+            enable_encoding: false,
         }
     }
 

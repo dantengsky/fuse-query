@@ -73,27 +73,47 @@ mod dummy {
         (block, schema)
     }
 
+    fn deser_parquet_impl(a: Bytes) {
+        let reader = ParquetRecordBatchReaderBuilder::try_new(a.clone())
+            .unwrap()
+            .with_batch_size(8192)
+            .build()
+            .unwrap();
+        let batch: Vec<Result<RecordBatch, arrow_schema::ArrowError>> = reader.collect();
+        let batch = batch.into_iter().map(|r| r.unwrap()).collect::<Vec<_>>();
+        let num_rows: usize = batch.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(num_rows, NUM_ROWS);
+    }
+
     #[divan::bench(args = [TableCompression::LZ4, TableCompression::Zstd])]
-    fn parquet_deser(bencher: divan::Bencher, compression: TableCompression) {
+    fn parquet_deser_no_encoding(bencher: divan::Bencher, compression: TableCompression) {
         // write the block into temp memory buffers
         // prepare the metas
         // use deserialize_chunk to read back into block
         bencher
-            .with_inputs(|| prepare_format_file(FuseStorageFormat::Parquet, compression))
+            .with_inputs(|| prepare_format_file(FuseStorageFormat::Parquet, compression, false))
             .input_counter(|(a, _)| {
                 // Changes based on input.
                 BytesCount::usize(a.len())
             })
             .bench_refs(|(a, _)| {
-                let reader = ParquetRecordBatchReaderBuilder::try_new(a.clone())
-                    .unwrap()
-                    .with_batch_size(8192)
-                    .build()
-                    .unwrap();
-                let batch: Vec<Result<RecordBatch, arrow_schema::ArrowError>> = reader.collect();
-                let batch = batch.into_iter().map(|r| r.unwrap()).collect::<Vec<_>>();
-                let num_rows: usize = batch.iter().map(|b| b.num_rows()).sum();
-                assert_eq!(num_rows, NUM_ROWS);
+                deser_parquet_impl(a.clone());
+            });
+    }
+
+    #[divan::bench(args = [TableCompression::LZ4, TableCompression::Zstd])]
+    fn parquet_deser_encoding(bencher: divan::Bencher, compression: TableCompression) {
+        // write the block into temp memory buffers
+        // prepare the metas
+        // use deserialize_chunk to read back into block
+        bencher
+            .with_inputs(|| prepare_format_file(FuseStorageFormat::Parquet, compression, true))
+            .input_counter(|(a, _)| {
+                // Changes based on input.
+                BytesCount::usize(a.len())
+            })
+            .bench_refs(|(a, _)| {
+                deser_parquet_impl(a.clone());
             });
     }
 
@@ -103,7 +123,7 @@ mod dummy {
         // prepare the metas
         // use deserialize_chunk to read back into block
         bencher
-            .with_inputs(|| prepare_format_file(FuseStorageFormat::Native, compression))
+            .with_inputs(|| prepare_format_file(FuseStorageFormat::Native, compression, false))
             .input_counter(|(a, _)| {
                 // Changes based on input.
                 BytesCount::usize(a.len())
@@ -135,6 +155,7 @@ mod dummy {
     fn prepare_format_file(
         storage_format: FuseStorageFormat,
         compression: TableCompression,
+        enable_encoding: bool,
     ) -> (Bytes, TableSchemaRef) {
         let (datablock, schema) = read_parquet_file();
         // write the block into temp memory buffers
@@ -146,6 +167,7 @@ mod dummy {
             table_compression: compression,
             max_page_size,
             block_per_seg,
+            enable_encoding,
         };
         let schema = Arc::new(schema);
         let mut buffer = Vec::new();
