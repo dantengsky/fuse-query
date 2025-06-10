@@ -222,3 +222,14 @@ pub fn batch_read_column<R: NativeReadBuf>(
     let column = Column::concat_columns(columns.into_iter()).unwrap();
     Ok(column)
 }
+
+pub fn batch_read_columns<R: NativeReadBuf>(
+    readers: Vec<R>,
+    data_type: TableDataType,
+    page_metas: Vec<Vec<PageMeta>>,
+) -> Result<Vec<Column>> {
+    let results = read_nested_column(readers, data_type, vec![], page_metas)?;
+    let columns: Vec<Column> = results.iter().map(|(_, v)| v.clone()).collect();
+    // let column = Column::concat_columns(columns.into_iter()).unwrap();
+    Ok(columns)
+}

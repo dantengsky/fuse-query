@@ -28,6 +28,7 @@ use std::io::BufReader;
 
 use super::nested::InitNested;
 use super::PageMeta;
+use crate::read::batch_read::batch_read_columns;
 pub mod reader;
 
 pub trait NativeReadBuf: std::io::BufRead {
@@ -98,5 +99,14 @@ impl NativeColumnsReader {
         page_metas: Vec<Vec<PageMeta>>,
     ) -> Result<Column> {
         batch_read_column(readers, data_type, page_metas)
+    }
+
+    pub fn batch_read_columns<R: NativeReadBuf>(
+        &self,
+        readers: Vec<R>,
+        data_type: TableDataType,
+        page_metas: Vec<Vec<PageMeta>>,
+    ) -> Result<Vec<Column>> {
+        batch_read_columns(readers, data_type, page_metas)
     }
 }

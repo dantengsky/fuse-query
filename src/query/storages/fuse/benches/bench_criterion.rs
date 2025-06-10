@@ -153,6 +153,48 @@ fn bench_native_deser(c: &mut Criterion) {
         group.throughput(Throughput::Bytes(data.len() as u64));
 
         group.bench_with_input(
+            BenchmarkId::from_parameter(format!("{:?}/cols", compression)),
+            &(data.clone(), schema.clone()),
+            |b, (data, schema)| {
+                b.iter(|| {
+                    let mut seek_a = std::io::Cursor::new(data.clone());
+                    let metas =
+                        databend_common_native::read::reader::read_meta(&mut seek_a).unwrap();
+
+                    let reader = NativeColumnsReader::new().unwrap();
+                    let mut columns = Vec::with_capacity(schema.fields().len());
+
+                    for (meta, f) in metas.iter().zip(schema.fields().iter()) {
+                        let bs = data
+                            .slice(meta.offset as usize..(meta.offset + meta.total_len()) as usize);
+                        let cols = reader
+                            .batch_read_columns(vec![bs.as_ref()], f.data_type.clone(), vec![meta
+                                .pages
+                                .clone()])
+                            .unwrap();
+
+                        columns.push(cols);
+                    }
+                    // let datablock = DataBlock::new_from_columns(columns);
+                    // assert_eq!(datablock.num_rows(), NUM_ROWS);
+                    criterion::black_box(columns)
+                });
+            },
+        );
+    }
+    group.finish();
+}
+
+fn bench_native_deser_cols(c: &mut Criterion) {
+    let mut group = c.benchmark_group("native_deser");
+    // group.measurement_time(Duration::from_secs(3));
+
+    for compression in [TableCompression::LZ4, TableCompression::Zstd] {
+        let (data, schema) = prepare_format_file(FuseStorageFormat::Native, compression, false);
+
+        group.throughput(Throughput::Bytes(data.len() as u64));
+
+        group.bench_with_input(
             BenchmarkId::from_parameter(format!("{:?}", compression)),
             &(data.clone(), schema.clone()),
             |b, (data, schema)| {
