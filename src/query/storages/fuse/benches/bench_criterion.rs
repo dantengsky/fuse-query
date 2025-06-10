@@ -231,6 +231,7 @@ criterion_group!(
     benches,
     bench_parquet_deser_no_encoding,
     bench_parquet_deser_encoding,
-    bench_native_deser
+    bench_native_deser,
+    bench_native_deser_cols
 );
 criterion_main!(benches);
