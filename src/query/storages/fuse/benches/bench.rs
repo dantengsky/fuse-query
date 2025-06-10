@@ -47,14 +47,16 @@ mod dummy {
     use divan::counter::BytesCount;
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
-    const NUM_ROWS: usize = 6001215;
+    // const NUM_ROWS: usize = 6001215;
+    const NUM_ROWS: usize = 6002732;
 
     fn read_parquet_file() -> (DataBlock, TableSchema) {
         // 246M    /tmp/tpch_1/lineitem.parquet/
         // generate by duckdb:
         // CALL dbgen(sf=1)
         // EXPORT DATABASE '/tmp/tpch_1/' (FORMAT PARQUET)
-        let file = "/tmp/tpch_1/lineitem.parquet";
+        // let file = "/tmp/tpch_1/lineitem.parquet";
+        let file = "/data2/zhaobr/databend-workshop/databend_tpch/tpch_1000/lineitem/100.parquet";
         let file = std::fs::File::open(file).unwrap();
 
         // Create a sync parquet reader with batch_size.
