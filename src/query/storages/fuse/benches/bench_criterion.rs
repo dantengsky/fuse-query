@@ -28,7 +28,7 @@ use databend_common_expression::DataSchema;
 use databend_common_expression::TableSchema;
 use databend_common_expression::TableSchemaRef;
 use databend_common_native::read::NativeColumnsReader;
-use databend_common_storages_fuse::io::WriteSettings;
+use databend_common_storages_fuse::io::{serialize_block, WriteSettings};
 use databend_common_storages_fuse::FuseStorageFormat;
 use databend_storages_common_table_meta::table::TableCompression;
 use parquet::arrow::arrow_reader::ArrowReaderOptions;
