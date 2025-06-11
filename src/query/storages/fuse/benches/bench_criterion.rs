@@ -78,7 +78,7 @@ fn column_by_name(record_batch: &RecordBatch, names: &[String]) -> ArrayRef {
 /// 反序列化 Parquet 数据
 fn deser_parquet_impl(a: &Bytes, schema: &TableSchema) -> Vec<RecordBatch> {
     let meta_reader = parquet::arrow::arrow_reader::ArrowReaderMetadata::load(
-        &(*a).clone(),
+        a,
         ArrowReaderOptions::new(),
     )
     .unwrap();
@@ -100,7 +100,7 @@ fn deser_parquet_impl(a: &Bytes, schema: &TableSchema) -> Vec<RecordBatch> {
 
 fn deser_parquet_to_block_impl(a: &Bytes, schema: &TableSchema) -> DataBlock {
     let meta_reader = parquet::arrow::arrow_reader::ArrowReaderMetadata::load(
-        &a.clone(),
+        a,
         ArrowReaderOptions::new(),
     )
     .unwrap();
