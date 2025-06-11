@@ -142,7 +142,7 @@ fn prepare_format_file(
     };
     let schema = Arc::new(schema);
     let mut buffer = Vec::new();
-    //    let col_metas = serialize_block(&write_settings, &schema, datablock, &mut buffer).unwrap();
+    let _ = serialize_block(&write_settings, &schema, datablock, &mut buffer).unwrap();
 
     (buffer.into(), schema)
 }
@@ -197,8 +197,6 @@ fn bench_parquet_deser_encoding(c: &mut Criterion) {
 
 fn bench_parquet_deser_encoding_to_block(c: &mut Criterion) {
     let mut group = c.benchmark_group("parquet_deser_encoding");
-    // group.measurement_time(Duration::from_secs(3));
-
     for compression in [TableCompression::LZ4, TableCompression::Zstd] {
         let (data, schema) = prepare_format_file(FuseStorageFormat::Parquet, compression, true);
 
