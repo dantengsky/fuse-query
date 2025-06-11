@@ -10,6 +10,8 @@ edition = { workspace = true }
 databend-common-exception = { workspace = true }
 databend-common-expression = { workspace = true }
 databend-storages-common-table-meta = { workspace = true }
+
+arrow-schema= { workspace = true }
 parking_lot = { workspace = true }
 parquet = { workspace = true }
 

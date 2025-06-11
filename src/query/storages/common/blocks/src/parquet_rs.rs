@@ -33,21 +33,39 @@ pub fn blocks_to_parquet(
     encoding: bool,
 ) -> Result<FileMetaData> {
     assert!(!blocks.is_empty());
-    let props_builder = WriterProperties::builder()
+    let mut builder = WriterProperties::builder()
         .set_compression(compression.into())
         // use `usize::MAX` to effectively limit the number of row groups to 1
         .set_max_row_group_size(usize::MAX)
         .set_statistics_enabled(EnabledStatistics::None)
         .set_bloom_filter_enabled(false);
 
+    use arrow_schema::{DataType, SchemaRef};
+    use parquet::schema::types::ColumnPath;
+
+    let arrow_schema: SchemaRef = Arc::new(table_schema.into());
+
+    for field in arrow_schema.as_ref().fields() {
+        match field.data_type() {
+            DataType::Decimal128(_, _) |
+            DataType::Decimal256(_, _) => {
+                let path = ColumnPath::from(vec![field.name().to_string()]);
+                builder = builder.set_column_dictionary_enabled(path.clone(), false)
+                    .set_column_encoding(path, Encoding::DELTA_BINARY_PACKED);
+            }
+            _ => {
+            }
+        }
+    }
+
     let props =
     if encoding {
-        props_builder
+        builder
             .set_writer_version(WriterVersion::PARQUET_2_0)
             .set_dictionary_enabled(true)
             .build()
     } else {
-        props_builder
+        builder
             .set_encoding(Encoding::PLAIN)
             .set_dictionary_enabled(false)
             .build()
