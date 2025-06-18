@@ -331,6 +331,8 @@ impl FuseTable {
 
         // Status
         ctx.set_status_info("mutation: begin try to commit");
+        // TODO this is too late (by it self, segments are written with Default TableMetaTimestamps)
+        // TODO refactor
         let table_meta_timestamps =
             ctx.get_table_meta_timestamps(self, Some(base_snapshot.clone()))?;
 

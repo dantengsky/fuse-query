@@ -1532,27 +1532,27 @@ impl TableContext for QueryContext {
         previous_snapshot: Option<Arc<TableSnapshot>>,
     ) -> Result<TableMetaTimestamps> {
         let table_id = table.get_id();
-        {
-            // Defensively check that:
-            // For each table, the previous_snapshot's timestamp passed in is strictly increasing,
-            // Or put it another way, caller should always pass in the same or newer snapshot of the same table.
-            let table_snapshot_timestamp_history =
-                self.shared.get_table_snapshot_timestamp_history();
-            let mut history = table_snapshot_timestamp_history.lock();
-            let previous_snapshot_timestamp = previous_snapshot.as_ref().and_then(|s| s.timestamp);
-            if let Some(last_accessed) = history.get(&table_id) {
-                if last_accessed > &previous_snapshot_timestamp {
-                    return Err(ErrorCode::Internal(
-                        format!(
-                            "[QUERY-CTX] Generating new table meta timestamps failed: table_id = {}, previous_snapshot_timestamp {:?} is lesser than the snapshot timestamp accessed last time {:?}",
-                            table_id, previous_snapshot_timestamp, last_accessed
-                        )
-                    ));
-                }
-            }
-            history.insert(table_id, previous_snapshot_timestamp);
-            drop(history)
-        }
+        //{
+        //    // Defensively check that:
+        //    // For each table, the previous_snapshot's timestamp passed in is strictly increasing,
+        //    // Or put it another way, caller should always pass in the same or newer snapshot of the same table.
+        //    let table_snapshot_timestamp_history =
+        //        self.shared.get_table_snapshot_timestamp_history();
+        //    let mut history = table_snapshot_timestamp_history.lock();
+        //    let previous_snapshot_timestamp = previous_snapshot.as_ref().and_then(|s| s.timestamp);
+        //    if let Some(last_accessed) = history.get(&table_id) {
+        //        if last_accessed > &previous_snapshot_timestamp {
+        //            return Err(ErrorCode::Internal(
+        //                format!(
+        //                    "[QUERY-CTX] Generating new table meta timestamps failed: table_id = {}, previous_snapshot_timestamp {:?} is lesser than the snapshot timestamp accessed last time {:?}",
+        //                    table_id, previous_snapshot_timestamp, last_accessed
+        //                )
+        //            ));
+        //        }
+        //    }
+        //    history.insert(table_id, previous_snapshot_timestamp);
+        //    drop(history)
+        //}
 
         let delta = {
             let fuse_table = FuseTable::try_from_table(table)?;
@@ -1579,7 +1579,25 @@ impl TableContext for QueryContext {
                 ))
             })?
         };
-        let ts = TableMetaTimestamps::new(previous_snapshot, delta);
+        let table_snapshot_timestamp_history = self.shared.get_table_snapshot_timestamp_history();
+        let ts = {
+            let mut history = table_snapshot_timestamp_history.lock();
+            let txn_begin_timestamp = {
+                if let Some(last_accessed) = history.get(&table_id) {
+                    if let Some(txn_begin_timestamp) = last_accessed {
+                        Some(txn_begin_timestamp.clone())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            TableMetaTimestamps::new(previous_snapshot, delta, txn_begin_timestamp)
+        };
+
         Ok(ts)
     }
 
@@ -1679,7 +1697,7 @@ impl TableContext for QueryContext {
                         self.get_query_kind(),
                         case_sensitive,
                     )
-                    .await
+                        .await
                 } else {
                     let schema = Arc::new(TableSchema::new(vec![TableField::new(
                         "_$1",
@@ -1821,12 +1839,12 @@ impl TableContext for QueryContext {
     fn is_temp_table(&self, catalog_name: &str, database_name: &str, table_name: &str) -> bool {
         catalog_name == CATALOG_DEFAULT
             && self
-                .shared
-                .session
-                .session_ctx
-                .temp_tbl_mgr()
-                .lock()
-                .is_temp_table(database_name, table_name)
+            .shared
+            .session
+            .session_ctx
+            .temp_tbl_mgr()
+            .lock()
+            .is_temp_table(database_name, table_name)
     }
 
     fn add_m_cte_temp_table(&self, database_name: &str, table_name: &str) {

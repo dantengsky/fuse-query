@@ -76,27 +76,43 @@ pub fn monotonically_increased_timestamp(
 pub struct TableMetaTimestamps {
     pub segment_block_timestamp: DateTime<Utc>,
     pub snapshot_timestamp: DateTime<Utc>,
+    pub txn_start_timestamp: DateTime<Utc>,
 }
 
 impl TableMetaTimestamps {
-    pub fn new(previous_snapshot: Option<Arc<TableSnapshot>>, delta: Duration) -> Self {
+    pub fn new(
+        previous_snapshot: Option<Arc<TableSnapshot>>,
+        delta: Duration,
+        txn_start_timestamp: Option<DateTime<Utc>>,
+    ) -> Self {
         let snapshot_timestamp =
             monotonically_increased_timestamp(Utc::now(), &previous_snapshot.timestamp());
 
         let segment_block_timestamp = snapshot_timestamp + delta;
 
+        let txn_start_timestamp = match txn_start_timestamp {
+            None => segment_block_timestamp,
+            Some(ts) => {
+                assert!(ts <= segment_block_timestamp, "txn_start_timestamp {} must be lesser than or equal to segment_block_timestamp {}", ts, segment_block_timestamp);
+                ts
+            }
+        };
+
         Self {
             snapshot_timestamp,
             segment_block_timestamp,
+            txn_start_timestamp,
         }
     }
 }
 
 /// used in ut
+
+#[cfg(test)]
 impl Default for TableMetaTimestamps {
     fn default() -> Self {
         // for unit test, set delta to 1 hour
-        Self::new(None, Duration::hours(1))
+        Self::new(None, Duration::hours(1), None)
     }
 }
 

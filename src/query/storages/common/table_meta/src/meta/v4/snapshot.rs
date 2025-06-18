@@ -106,12 +106,14 @@ impl TableSnapshot {
         let TableMetaTimestamps {
             segment_block_timestamp,
             snapshot_timestamp,
+            txn_start_timestamp,
         } = table_meta_timestamps;
 
         let snapshot_timestamp =
             monotonically_increased_timestamp(snapshot_timestamp, &prev_snapshot.timestamp());
 
-        if segment_block_timestamp < snapshot_timestamp {
+        if txn_start_timestamp < snapshot_timestamp {
+            // TODO re-phrase this error message
             return Err(ErrorCode::TransactionTimeout(format!(
                 "Snapshot is generated too late, segment_block_timestamp: {:?}, snapshot_timestamp: {:?}",
                 segment_block_timestamp, snapshot_timestamp
@@ -133,6 +135,7 @@ impl TableSnapshot {
     }
 
     /// used in ut
+    #[cfg(test)]
     pub fn new_empty_snapshot(schema: TableSchema, prev_table_seq: Option<u64>) -> Self {
         Self::try_new(
             prev_table_seq,

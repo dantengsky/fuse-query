@@ -360,7 +360,7 @@ pub async fn do_vacuum2(
 
     if let Some(snapshot_cache) = CacheManager::instance().get_table_snapshot_cache() {
         for path in &snapshots_to_gc {
-            snapshot_cache.evict(path);
+            // snapshot_cache.evict(path);
         }
     }
 

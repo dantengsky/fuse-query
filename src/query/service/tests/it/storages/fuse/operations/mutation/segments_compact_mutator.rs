@@ -229,12 +229,16 @@ async fn check_count(result_stream: SendableDataBlockStream) -> Result<u64> {
     }
 }
 
+// TODO refactor this：
+// This is used by integration test only
 pub async fn compact_segment(ctx: Arc<QueryContext>, table: &Arc<dyn Table>) -> Result<()> {
     let fuse_table = FuseTable::try_from_table(table.as_ref())?;
     let mutator = build_mutator(fuse_table, ctx.clone(), None).await?.unwrap();
     mutator.try_commit(table.clone()).await
 }
 
+// TODO refactor this:
+// This is used by integration test only (indirectly through compact_segment())
 async fn build_mutator(
     tbl: &FuseTable,
     ctx: Arc<dyn TableContext>,
@@ -251,6 +255,9 @@ async fn build_mutator(
     if base_snapshot.summary.block_count <= 1 {
         return Ok(None);
     }
+
+    let table_meta_timestamps =
+        ctx.get_table_meta_timestamps(tbl.as_ref(), Some(base_snapshot.clone()))?;
 
     let block_per_seg = tbl.get_option("block_per_segment", 1000);
 
@@ -269,7 +276,7 @@ async fn build_mutator(
         tbl.cluster_key_id(),
     )?;
 
-    if segment_mutator.target_select().await? {
+    if segment_mutator.target_select(table_meta_timestamps).await? {
         Ok(Some(segment_mutator))
     } else {
         Ok(None)

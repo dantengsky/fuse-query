@@ -54,6 +54,9 @@ impl FuseTable {
             return Ok(());
         };
 
+        let table_meta_timestamps =
+            ctx.get_table_meta_timestamps(self, Some(compact_options.base_snapshot.clone()))?;
+
         let mut segment_mutator = SegmentCompactMutator::try_create(
             ctx.clone(),
             compact_options,
@@ -62,7 +65,7 @@ impl FuseTable {
             self.cluster_key_id(),
         )?;
 
-        if !segment_mutator.target_select().await? {
+        if !segment_mutator.target_select(table_meta_timestamps).await? {
             return Ok(());
         }
 

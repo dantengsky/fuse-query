@@ -152,6 +152,13 @@ data_path = "./.databend/stateless_test_data"
 # default is "none", which disable table data cache
 # use "disk" to enabled disk cache
 data_cache_storage = "none"
+#data_cache_storage = "disk"
+
+# bloom fiter meta cache 10G bytes
+disk_cache_table_bloom_index_meta_size = 10737418240 
+# bloom fiter meta cache 50G bytes
+disk_cache_table_bloom_index_data_size = 53687091200 
+sync_data = true
 
 [cache.disk]
 # cache path
