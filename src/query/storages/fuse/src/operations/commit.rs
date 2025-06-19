@@ -71,7 +71,7 @@ use crate::FuseTable;
 
 impl FuseTable {
     #[async_backtrace::framed]
-    pub fn do_commit(
+    pub fn do_commit_insertion(
         &self,
         ctx: Arc<dyn TableContext>,
         pipeline: &mut Pipeline,

@@ -295,6 +295,10 @@ where F: SnapshotGenerator + Send + Sync + 'static
     async fn clean_history(&self, purge_mode: &PurgeMode) -> Result<()> {
         {
             let table_info = self.table.get_table_info();
+            eprintln!(
+                "cleaning historical data. table: {}, ident: {}, purge_mode {:?}",
+                table_info.desc, table_info.ident, purge_mode
+            );
             info!(
                 "cleaning historical data. table: {}, ident: {}, purge_mode {:?}",
                 table_info.desc, table_info.ident, purge_mode
@@ -523,6 +527,7 @@ where F: SnapshotGenerator + Send + Sync + 'static
                         }
 
                         if let Some(purge_mode) = &self.purge_mode {
+                            // TODO BUGGY, if inside txn, we should not clean history
                             self.clean_history(purge_mode).await?;
                         }
 

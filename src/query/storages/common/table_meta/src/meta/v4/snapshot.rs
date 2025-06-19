@@ -108,14 +108,36 @@ impl TableSnapshot {
             snapshot_timestamp,
         } = table_meta_timestamps;
 
+        eprintln!(
+            "new snapshot, prev_snapshot_ts: {:?}, table meta snapshot ts: {}",
+            prev_snapshot.as_ref().map(|t| t.timestamp),
+            snapshot_timestamp,
+        );
+
         let snapshot_timestamp =
             monotonically_increased_timestamp(snapshot_timestamp, &prev_snapshot.timestamp());
 
-        if segment_block_timestamp < snapshot_timestamp {
-            return Err(ErrorCode::TransactionTimeout(format!(
-                "Snapshot is generated too late, segment_block_timestamp: {:?}, snapshot_timestamp: {:?}",
-                segment_block_timestamp, snapshot_timestamp
-            )));
+        eprintln!(
+            "snapshot_timestamp after adjustment ts: {}",
+            snapshot_timestamp,
+        );
+
+        // TODO doc the logic
+        if let Some(prev) = &prev_snapshot {
+            if let Some(prev_snapshot_timestamp) = &prev.timestamp {
+                if &segment_block_timestamp < prev_snapshot_timestamp {
+                    eprintln!(
+                        "Snapshot is generated too late, segment_block_timestamp: {:?}, snapshot_timestamp: {:?}",
+                        segment_block_timestamp, snapshot_timestamp
+                    );
+                    return Err(ErrorCode::TransactionTimeout(format!(
+                        "Snapshot is generated too late, segment_block_timestamp: {:?}, snapshot_timestamp: {:?}",
+                        segment_block_timestamp, snapshot_timestamp
+                    )));
+                }
+            } else {
+                return Err(ErrorCode::StorageOther("Too old data, no longer support"));
+            }
         }
 
         Ok(Self {

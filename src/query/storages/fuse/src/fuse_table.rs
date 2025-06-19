@@ -864,7 +864,7 @@ impl Table for FuseTable {
         deduplicated_label: Option<String>,
         table_meta_timestamps: TableMetaTimestamps,
     ) -> Result<()> {
-        self.do_commit(
+        self.do_commit_insertion(
             ctx,
             pipeline,
             copied_files,
