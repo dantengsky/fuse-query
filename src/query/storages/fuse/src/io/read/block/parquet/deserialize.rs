@@ -13,17 +13,27 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use arrow_array::RecordBatch;
 use arrow_schema::Schema;
+use databend_common_exception::ErrorCode;
+use databend_common_exception::Result;
 use databend_common_expression::ColumnId;
 use databend_common_expression::TableSchema;
+use databend_common_parquet2_reader::arrow::datatypes::Field;
+use databend_common_parquet2_reader::arrow::io::parquet::read::ArrayIter;
+use databend_common_parquet2_reader::arrow::io::parquet::read::InitNested;
+use databend_common_parquet2_reader::parquet::compression::Compression as ParquetCompression;
+use databend_common_parquet2_reader::parquet::metadata::ColumnDescriptor;
+use databend_common_parquet2_reader::parquet::read::PageMetaData;
+use databend_common_parquet2_reader::parquet::read::PageReader;
+use databend_storages_common_table_meta::meta::ColumnMeta;
 use databend_storages_common_table_meta::meta::Compression;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReader;
 use parquet::arrow::parquet_to_arrow_field_levels;
 use parquet::arrow::ArrowSchemaConverter;
 use parquet::arrow::ProjectionMask;
-use parquet::basic::Compression as ParquetCompression;
 
 use crate::io::read::block::block_reader_merge_io::DataItem;
 use crate::io::read::block::parquet::adapter::RowGroupImplBuilder;
@@ -75,4 +85,84 @@ pub fn column_chunks_to_record_batch(
     let record = record_reader.next().unwrap()?;
     assert!(record_reader.next().is_none());
     Ok(record)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn chunks_to_parquet_array_iter<'a>(
+    metas: Vec<&ColumnMeta>,
+    chunks: Vec<&'a [u8]>,
+    rows: usize,
+    column_descriptors: Vec<&ColumnDescriptor>,
+    field: Field,
+    init: Vec<InitNested>,
+    compression: &Compression,
+    //    uncompressed_buffer: Arc<UncompressedBuffer>,
+) -> Result<ArrayIter<'a>> {
+    let columns = metas
+        .iter()
+        .zip(chunks.into_iter().zip(column_descriptors.iter()))
+        .map(|(meta, (chunk, column_descriptor))| {
+            let meta = meta.as_parquet().unwrap();
+
+            let page_meta_data = PageMetaData {
+                column_start: meta.offset,
+                num_values: meta.num_values as i64,
+                compression: to_parquet_compression(compression)?,
+                descriptor: column_descriptor.descriptor.clone(),
+            };
+            let pages = PageReader::new_with_page_meta(
+                chunk,
+                page_meta_data,
+                Arc::new(|_, _| true),
+                vec![],
+                usize::MAX,
+            );
+
+            Ok(BuffedBasicDecompressor::new(
+                pages,
+                uncompressed_buffer.clone(),
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let types = column_descriptors
+        .iter()
+        .map(|column_descriptor| &column_descriptor.descriptor.primitive_type)
+        .collect::<Vec<_>>();
+
+    let array_iter = if init.is_empty() {
+        column_iter_to_arrays(columns, types, field, Some(rows), rows)?
+    } else {
+        nested_column_iter_to_arrays(columns, types, field, init, Some(rows), rows)?
+    };
+    Ok(array_iter)
+}
+
+fn to_parquet_compression(meta_compression: &Compression) -> Result<ParquetCompression> {
+    match meta_compression {
+        Compression::Lz4 => {
+            let err_msg = r#"Deprecated compression algorithm [Lz4] detected.
+
+                                        The Legacy compression algorithm [Lz4] is no longer supported.
+                                        To migrate data from old format, please consider re-create the table,
+                                        by using an old compatible version [v0.8.25-nightly … v0.7.12-nightly].
+
+                                        - Bring up the compatible version of databend-query
+                                        - re-create the table
+                                           Suppose the name of table is T
+                                            ~~~
+                                            create table tmp_t as select * from T;
+                                            drop table T all;
+                                            alter table tmp_t rename to T;
+                                            ~~~
+                                        Please note that the history of table T WILL BE LOST.
+                                       "#;
+            Err(ErrorCode::StorageOther(err_msg))
+        }
+        Compression::Lz4Raw => Ok(ParquetCompression::Lz4Raw),
+        Compression::Snappy => Ok(ParquetCompression::Snappy),
+        Compression::Zstd => Ok(ParquetCompression::Zstd),
+        Compression::Gzip => Ok(ParquetCompression::Gzip),
+        Compression::None => Ok(ParquetCompression::Uncompressed),
+    }
 }
