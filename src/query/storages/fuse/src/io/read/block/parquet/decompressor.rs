@@ -17,14 +17,13 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use databend_common_exception::Result;
 use databend_common_parquet2_reader::parquet::error::Error;
 use databend_common_parquet2_reader::parquet::page::CompressedPage;
 use databend_common_parquet2_reader::parquet::page::Page;
 use databend_common_parquet2_reader::parquet::read::decompress;
 use databend_common_parquet2_reader::parquet::FallibleStreamingIterator;
-// use streaming_decompression::Compressed;
-// use streaming_decompression::Decompressed;
+use streaming_decompression::Compressed;
+use streaming_decompression::Decompressed;
 
 // Note: cannot be accessed between multiple threads at the same time.
 pub struct UncompressedBuffer {
