@@ -33,7 +33,6 @@ use databend_storages_common_table_meta::meta::Compression;
 
 mod adapter;
 mod deserialize;
-// mod deserialize_with_parquet2;
 
 mod decompressor;
 mod parquet2;
@@ -46,6 +45,24 @@ use crate::io::BlockReader;
 
 impl BlockReader {
     pub(crate) fn deserialize_parquet_chunks(
+        &self,
+        num_rows: usize,
+        column_metas: &HashMap<ColumnId, ColumnMeta>,
+        column_chunks: HashMap<ColumnId, DataItem>,
+        compression: &Compression,
+        block_path: &str,
+    ) -> databend_common_exception::Result<DataBlock> {
+        self.column_chunks_to_data_block_2(
+            block_path,
+            num_rows,
+            compression,
+            column_metas,
+            column_chunks,
+            None,
+        )
+    }
+
+    pub(crate) fn deserialize_parquet_chunks_bak(
         &self,
         num_rows: usize,
         column_metas: &HashMap<ColumnId, ColumnMeta>,
