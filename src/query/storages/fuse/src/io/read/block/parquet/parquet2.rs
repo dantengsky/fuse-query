@@ -15,17 +15,21 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use arrow_array::RecordBatch;
 use databend_common_exception::ErrorCode;
 use databend_common_exception::Result;
+use databend_common_expression::Column;
 use databend_common_expression::ColumnId;
 use databend_common_expression::DataBlock;
 use databend_common_parquet2_reader::arrow::chunk::Chunk;
 use databend_common_parquet2_reader::arrow::datatypes::Field;
+use databend_common_parquet2_reader::arrow::datatypes::Schema;
 use databend_common_parquet2_reader::arrow::io::parquet::read::column_iter_to_arrays;
 use databend_common_parquet2_reader::arrow::io::parquet::read::nested_column_iter_to_arrays;
 use databend_common_parquet2_reader::arrow::io::parquet::read::ArrayIter;
 use databend_common_parquet2_reader::arrow::io::parquet::read::InitNested;
 use databend_common_parquet2_reader::arrow::io::parquet::write::to_parquet_schema;
+use databend_common_parquet2_reader::arrow::io::parquet::write::to_parquet_type;
 use databend_common_parquet2_reader::parquet::compression::Compression as ParquetCompression;
 use databend_common_parquet2_reader::parquet::metadata::ColumnDescriptor;
 use databend_common_parquet2_reader::parquet::metadata::SchemaDescriptor;
@@ -115,25 +119,31 @@ impl BlockReader {
         }
 
         // build data block
-        let chunk = Chunk::try_new(chunk_arrays)?;
+        // let chunk = Chunk::try_new(chunk_arrays)?;
         let data_block = if !need_to_fill_default_val {
-            DataBlock::from_arrow_chunk(&chunk, &self.data_schema())?
+            let record_batch = RecordBatch::try_new(
+                self.arrow_schema(),
+                chunk_arrays.into_iter().cloned().collect(),
+            )?;
+            let (block, _) = DataBlock::from_record_batch(&self.data_schema(), &record_batch)?;
+            block
         } else {
-            let data_schema = self.data_schema();
-            let mut default_vals = Vec::with_capacity(need_default_vals.len());
-            for (i, need_default_val) in need_default_vals.iter().enumerate() {
-                if !need_default_val {
-                    default_vals.push(None);
-                } else {
-                    default_vals.push(Some(self.default_vals[i].clone()));
-                }
-            }
-            DataBlock::create_with_default_value_and_chunk(
-                &data_schema,
-                &chunk,
-                &default_vals,
-                num_rows,
-            )?
+            todo!()
+            // let data_schema = self.data_schema();
+            // let mut default_vals = Vec::with_capacity(need_default_vals.len());
+            // for (i, need_default_val) in need_default_vals.iter().enumerate() {
+            //    if !need_default_val {
+            //        default_vals.push(None);
+            //    } else {
+            //        default_vals.push(Some(self.default_vals[i].clone()));
+            //    }
+            //}
+            // DataBlock::create_with_default_value_and_chunk(
+            //    &data_schema,
+            //    &chunk,
+            //    &default_vals,
+            //    num_rows,
+            //)?
         };
 
         // populate cache if necessary
@@ -145,7 +155,7 @@ impl BlockReader {
                         let meta = column_metas.get(&column_id).unwrap();
                         let (offset, len) = meta.offset_length();
                         let key = TableDataCacheKey::new(block_path, column_id, offset, len);
-                        cache.put(key.into(), Arc::new((array, size)))
+                        cache.insert(key.into(), (array, size));
                     }
                 }
             }
@@ -171,6 +181,20 @@ impl BlockReader {
         let mut field_column_descriptors = Vec::with_capacity(estimated_cap);
         let mut field_uncompressed_size = 0;
 
+        let arrow_schema = self.arrow_schema.as_ref();
+        let fields = arrow_schema
+            .fields()
+            .iter()
+            .map(|f| Field::from(f))
+            .collect::<Vec<_>>();
+        let arrow_schema = Schema::from(fields);
+        let parquet_schema_descriptor = to_parquet_schema(&arrow_schema).map_err(|e| {
+            ErrorCode::StorageOther(format!(
+                "failed to convert arrow schema to parquet schema, error: {}",
+                e
+            ))
+        })?;
+
         for (i, leaf_index) in indices.iter().enumerate() {
             let column_id = column.leaf_column_ids[i];
             if let Some(column_meta) = deserialization_context.column_metas.get(&column_id) {
@@ -182,9 +206,13 @@ impl BlockReader {
                             {
                                 &parquet_schema_descriptor.columns()[*leaf_index]
                             } else {
-                                // TODO refactor this, put it somewhere else
-                                let arrow_schema = self.arrow_schema.as_ref().into();
-                                let parquet_schema_descriptor = to_parquet_schema(&arrow_schema)?;
+                                //   // TODO refactor this, put it somewhere else
+                                //   // let arrow_schema = self.arrow_schema.as_ref().into();
+                                //   let arrow_schema = self.schema().into();
+                                //   let parquet_schema_descriptor = to_parquet_schema(&arrow_schema).map_err(|e|
+                                //       ErrorCode::StorageOther(
+                                //           format!("failed to convert arrow schema to parquet schema, error: {}", e)
+                                //   ))?;
 
                                 &parquet_schema_descriptor.columns()[*leaf_index]
                             };
@@ -224,31 +252,41 @@ impl BlockReader {
                 field_column_data,
                 num_rows,
                 field_column_descriptors,
-                column.field.clone(),
-                column.init.clone(),
+                column.field.clone().into(),
+                // TODO
+                // column.init.clone(),
+                vec![],
                 compression,
                 uncompressed_buffer
                     .clone()
                     .unwrap_or_else(|| UncompressedBuffer::new(0)),
             )?;
-            let array = array_iter.next().transpose()?.ok_or_else(|| {
-                ErrorCode::StorageOther(format!(
-                    "unexpected deserialization error, no array found for field {field_name} "
-                ))
-            })?;
+            let array = array_iter
+                .next()
+                .transpose()
+                .map_err(|e| {
+                    ErrorCode::StorageOther(format!(
+                        "unexpected deserialization error, while processing field {field_name}: {e} "
+                    ))
+                })?
+                .ok_or_else(|| {
+                    ErrorCode::StorageOther(format!(
+                        "unexpected deserialization error, no array found for field {field_name} "
+                    ))
+                })?;
             assert!(array_iter.next().is_none());
 
             // mark the array
             if is_nested {
                 // the array is not intended to be cached
                 // currently, caching of compound field columns is not support
-                Ok(Some(DeserializedArray::NoNeedToCache(array)))
+                Ok(Some(DeserializedArray::NoNeedToCache(array.into())))
             } else {
                 // the array is deserialized from raw bytes, should be cached
                 let column_id = column.leaf_column_ids[0];
                 Ok(Some(DeserializedArray::Deserialized((
                     column_id,
-                    array,
+                    array.into(),
                     field_uncompressed_size,
                 ))))
             }
@@ -301,9 +339,11 @@ impl BlockReader {
             .collect::<Vec<_>>();
 
         let array_iter = if init.is_empty() {
-            column_iter_to_arrays(columns, types, field, Some(rows), rows)?
+            column_iter_to_arrays(columns, types, field, Some(rows), rows)
+                .map_err(|e| ErrorCode::StorageOther(e.to_string()))?
         } else {
-            nested_column_iter_to_arrays(columns, types, field, init, Some(rows), rows)?
+            nested_column_iter_to_arrays(columns, types, field, init, Some(rows), rows)
+                .map_err(|e| ErrorCode::StorageOther(e.to_string()))?
         };
         Ok(array_iter)
     }
