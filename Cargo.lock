@@ -3953,6 +3953,8 @@ dependencies = [
  "databend-common-meta-kvapi",
  "databend-common-meta-types",
  "log",
+ "serde_json",
+ "tokio",
  "tokio-stream",
 ]
 

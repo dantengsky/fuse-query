@@ -23,6 +23,10 @@ databend-common-meta-kvapi = { workspace = true }
 databend-common-meta-types = { workspace = true }
 log = { workspace = true }
 tokio-stream = { workspace = true }
+tokio = { version = "1.39.2", features = ["rt", "rt-multi-thread", "macros"] }
+
+[dev-dependencies]
+serde_json = { workspace = true }
 
 [lints]
 workspace = true
