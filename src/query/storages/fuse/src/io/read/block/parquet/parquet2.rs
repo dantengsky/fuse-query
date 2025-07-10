@@ -121,8 +121,9 @@ impl BlockReader {
         // build data block
         // let chunk = Chunk::try_new(chunk_arrays)?;
         let data_block = if !need_to_fill_default_val {
+            let arrow_schema: arrow_schema::Schema = self.projected_schema.as_ref().into();
             let record_batch = RecordBatch::try_new(
-                self.arrow_schema(),
+                Arc::new(arrow_schema),
                 chunk_arrays.into_iter().cloned().collect(),
             )?;
             let (block, _) = DataBlock::from_record_batch(&self.data_schema(), &record_batch)?;
