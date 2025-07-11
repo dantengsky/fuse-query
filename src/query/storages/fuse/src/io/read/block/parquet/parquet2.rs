@@ -207,14 +207,6 @@ impl BlockReader {
                             {
                                 &parquet_schema_descriptor.columns()[*leaf_index]
                             } else {
-                                //   // TODO refactor this, put it somewhere else
-                                //   // let arrow_schema = self.arrow_schema.as_ref().into();
-                                //   let arrow_schema = self.schema().into();
-                                //   let parquet_schema_descriptor = to_parquet_schema(&arrow_schema).map_err(|e|
-                                //       ErrorCode::StorageOther(
-                                //           format!("failed to convert arrow schema to parquet schema, error: {}", e)
-                                //   ))?;
-
                                 &parquet_schema_descriptor.columns()[*leaf_index]
                             };
                             field_column_metas.push(column_meta);

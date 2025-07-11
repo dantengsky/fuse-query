@@ -260,21 +260,40 @@ where
     type Item = Result<MutablePrimitiveArray<T>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let maybe_state = utils::next(
-            &mut self.iter,
-            &mut self.items,
-            &mut self.dict,
-            &mut self.remaining,
-            self.chunk_size,
-            &IntDecoder::new(self.op),
-        );
-        match maybe_state {
-            utils::MaybeNext::Some(Ok((values, validity))) => {
-                Some(Ok(finish(&self.data_type, values, validity)))
+        // let maybe_state = utils::next(
+        //    &mut self.iter,
+        //    &mut self.items,
+        //    &mut self.dict,
+        //    &mut self.remaining,
+        //    self.chunk_size,
+        //    &IntDecoder::new(self.op),
+        //);
+        // match maybe_state {
+        //    utils::MaybeNext::Some(Ok((values, validity))) => {
+        //        Some(Ok(finish(&self.data_type, values, validity)))
+        //    }
+        //    utils::MaybeNext::Some(Err(e)) => Some(Err(e)),
+        //    utils::MaybeNext::None => None,
+        //    utils::MaybeNext::More => self.next(),
+        //}
+
+        loop {
+            let maybe_state = utils::next(
+                &mut self.iter,
+                &mut self.items,
+                &mut self.dict,
+                &mut self.remaining,
+                self.chunk_size,
+                &IntDecoder::new(self.op),
+            );
+            match maybe_state {
+                utils::MaybeNext::Some(Ok((values, validity))) => {
+                    return Some(Ok(finish(&self.data_type, values, validity)));
+                }
+                utils::MaybeNext::Some(Err(e)) => return Some(Err(e)),
+                utils::MaybeNext::None => return None,
+                utils::MaybeNext::More => continue,
             }
-            utils::MaybeNext::Some(Err(e)) => Some(Err(e)),
-            utils::MaybeNext::None => None,
-            utils::MaybeNext::More => self.next(),
         }
     }
 }
