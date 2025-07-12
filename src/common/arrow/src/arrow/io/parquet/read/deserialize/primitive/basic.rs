@@ -222,18 +222,18 @@ where
         decoded: &mut Self::DecodedState,
         remaining: usize,
     ) {
-        eprintln!(
-            "basic extend_from_state: state len={:?}, remaining={}",
-            state.len(),
-            remaining
-        );
+        // eprintln!(
+        //    "basic extend_from_state: state len={:?}, remaining={}",
+        //    state.len(),
+        //    remaining
+        //);
         let (values, validity) = decoded;
         match state {
             State::Optional(page_validity, page_values) => {
-                eprintln!(
-                    "extend_from_state: extend Optional: remaining={}",
-                    remaining
-                );
+                //        eprintln!(
+                //            "extend_from_state: extend Optional: remaining={}",
+                //            remaining
+                //        );
                 utils::extend_from_decoder(
                     validity,
                     page_validity,
@@ -243,10 +243,10 @@ where
                 )
             }
             State::Required(page) => {
-                eprintln!(
-                    "extend_from_state: extend Required: remaining={}",
-                    remaining
-                );
+                // eprintln!(
+                //    "extend_from_state: extend Required: remaining={}",
+                //    remaining
+                //);
                 values.extend(
                     page.values
                         .by_ref()
