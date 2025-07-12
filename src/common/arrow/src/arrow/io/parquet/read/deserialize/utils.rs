@@ -314,6 +314,8 @@ pub(super) fn extend_from_decoder<T: Default, P: Pushable<T>, I: Iterator<Item =
     pushable: &mut P,
     mut values_iter: I,
 ) {
+    eprintln!("extend_from_decoder: limit={:?}", limit);
+    eprintln!("extend_from_decoder: pushable.len={:?}", pushable.len());
     let limit = limit.unwrap_or(usize::MAX);
 
     let mut runs = vec![];
@@ -338,6 +340,10 @@ pub(super) fn extend_from_decoder<T: Default, P: Pushable<T>, I: Iterator<Item =
         };
         runs.push(run)
     }
+    eprintln!(
+        "extend_from_decoder: reserve_pushable={:?}",
+        reserve_pushable
+    );
     pushable.reserve(reserve_pushable);
     validity.reserve(reserve_pushable);
 
@@ -354,25 +360,32 @@ pub(super) fn extend_from_decoder<T: Default, P: Pushable<T>, I: Iterator<Item =
                 let iter = Zip::new(iter, &mut values_iter);
 
                 for item in iter {
+                    eprintln!("extend_from_decoder: push");
                     if let Some(item) = item {
                         pushable.push(item)
                     } else {
                         pushable.push_null()
                     }
                 }
+                eprintln!("extend_from_decoder: extend_from_slice");
                 validity.extend_from_slice(values, offset, length);
             }
             FilteredHybridEncoded::Repeated { is_set, length } => {
+                eprintln!("extend_from_decoder: Repeated");
                 validity.extend_constant(length, is_set);
                 if is_set {
                     for v in (&mut values_iter).take(length) {
                         pushable.push(v)
                     }
                 } else {
+                    eprintln!("extend_from_decoder: constant");
                     pushable.extend_constant(length, T::default());
                 }
             }
-            FilteredHybridEncoded::Skipped(valids) => for _ in values_iter.by_ref().take(valids) {},
+            FilteredHybridEncoded::Skipped(valids) => {
+                eprintln!("extend_from_decoder: skipped");
+                for _ in values_iter.by_ref().take(valids) {}
+            }
         };
     }
 }
@@ -428,6 +441,7 @@ pub(super) fn extend_from_new_page<'a, T: Decoder<'a>>(
     decoder: &T,
 ) {
     let capacity = chunk_size.unwrap_or(0);
+    eprintln!("extend_from_new_page: capacity={}", capacity);
     let chunk_size = chunk_size.unwrap_or(usize::MAX);
 
     let mut decoded = if let Some(decoded) = items.pop_back() {
@@ -442,6 +456,7 @@ pub(super) fn extend_from_new_page<'a, T: Decoder<'a>>(
 
     decoder.extend_from_state(&mut page, &mut decoded, additional);
     *remaining -= decoded.len() - existing;
+    eprintln!("items: capacity={}", items.capacity());
     items.push_back(decoded);
 
     while page.len() > 0 && *remaining > 0 {

@@ -23,6 +23,7 @@ use parquet2::page::split_buffer;
 use parquet2::page::DataPage;
 use parquet2::page::DictPage;
 use parquet2::schema::Repetition;
+use parquet2::types::decode;
 use parquet2::types::NativeType as ParquetNativeType;
 
 use super::super::utils;
@@ -152,7 +153,60 @@ where
     ) {
         let (values, validity) = decoded;
         match state {
-            State::Common(state) => self.0.extend_from_state(state, decoded, remaining),
+            State::Common(state) => {
+                eprintln!("extend_from_state: remaining={}", remaining);
+                match state {
+                    PrimitiveState::Required(page) => {
+                        eprintln!("processing required");
+                        // 预分配内存
+                        let additional = remaining.min(page.len());
+                        values.reserve(additional);
+
+                        // 批量处理
+                        const BATCH_SIZE: usize = 1024;
+                        let mut buffer = Vec::with_capacity(BATCH_SIZE.min(additional));
+
+                        let mut processed = 0;
+                        while processed < additional {
+                            let batch_size = (additional - processed).min(BATCH_SIZE);
+                            buffer.clear();
+
+                            // 从页面中提取一批值
+                            for _ in 0..batch_size {
+                                if let Some(chunk) = page.values.next() {
+                                    // 解码和转换
+                                    let decoded_value = decode::<P>(chunk);
+                                    let transformed_value = (self.0.op)(decoded_value);
+                                    buffer.push(transformed_value);
+                                } else {
+                                    break;
+                                }
+                            }
+
+                            // 批量添加到结果数组
+                            if !buffer.is_empty() {
+                                values.extend_from_slice(&buffer);
+                                processed += buffer.len();
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                    PrimitiveState::Optional(page_validity, page_values) => {
+                        // 对于可选值，我们需要处理有效性位图
+                        // 这部分比较复杂，暂时保留原有实现
+                        utils::extend_from_decoder(
+                            validity,
+                            page_validity,
+                            Some(remaining),
+                            values,
+                            page_values.values.by_ref().map(decode::<P>).map(self.0.op),
+                        );
+                    }
+                    // 其他状态暂时保留原有实现
+                    _ => self.0.extend_from_state(state, decoded, remaining),
+                }
+            }
             State::DeltaBinaryPackedRequired(state) => {
                 values.extend(
                     state
@@ -172,7 +226,7 @@ where
                         .by_ref()
                         .map(|x| x.unwrap().as_())
                         .map(self.0.op),
-                )
+                );
             }
             State::FilteredDeltaBinaryPackedRequired(page) => {
                 values.extend(
@@ -260,23 +314,6 @@ where
     type Item = Result<MutablePrimitiveArray<T>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        // let maybe_state = utils::next(
-        //    &mut self.iter,
-        //    &mut self.items,
-        //    &mut self.dict,
-        //    &mut self.remaining,
-        //    self.chunk_size,
-        //    &IntDecoder::new(self.op),
-        //);
-        // match maybe_state {
-        //    utils::MaybeNext::Some(Ok((values, validity))) => {
-        //        Some(Ok(finish(&self.data_type, values, validity)))
-        //    }
-        //    utils::MaybeNext::Some(Err(e)) => Some(Err(e)),
-        //    utils::MaybeNext::None => None,
-        //    utils::MaybeNext::More => self.next(),
-        //}
-
         loop {
             let maybe_state = utils::next(
                 &mut self.iter,
