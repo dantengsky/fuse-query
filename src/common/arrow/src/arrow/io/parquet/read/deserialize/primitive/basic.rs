@@ -34,6 +34,7 @@ use crate::arrow::array::MutablePrimitiveArray;
 use crate::arrow::bitmap::MutableBitmap;
 use crate::arrow::datatypes::DataType;
 use crate::arrow::error::Result;
+use crate::arrow::io::parquet::read::deserialize::utils::PageState;
 use crate::arrow::types::NativeType;
 
 #[derive(Debug)]
@@ -221,16 +222,31 @@ where
         decoded: &mut Self::DecodedState,
         remaining: usize,
     ) {
+        eprintln!(
+            "basic extend_from_state: state len={:?}, remaining={}",
+            state.len(),
+            remaining
+        );
         let (values, validity) = decoded;
         match state {
-            State::Optional(page_validity, page_values) => utils::extend_from_decoder(
-                validity,
-                page_validity,
-                Some(remaining),
-                values,
-                page_values.values.by_ref().map(decode).map(self.op),
-            ),
+            State::Optional(page_validity, page_values) => {
+                eprintln!(
+                    "extend_from_state: extend Optional: remaining={}",
+                    remaining
+                );
+                utils::extend_from_decoder(
+                    validity,
+                    page_validity,
+                    Some(remaining),
+                    values,
+                    page_values.values.by_ref().map(decode).map(self.op),
+                )
+            }
             State::Required(page) => {
+                eprintln!(
+                    "extend_from_state: extend Required: remaining={}",
+                    remaining
+                );
                 values.extend(
                     page.values
                         .by_ref()
