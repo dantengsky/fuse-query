@@ -314,8 +314,8 @@ pub(super) fn extend_from_decoder<T: Default, P: Pushable<T>, I: Iterator<Item =
     pushable: &mut P,
     mut values_iter: I,
 ) {
-    eprintln!("extend_from_decoder: limit={:?}", limit);
-    eprintln!("extend_from_decoder: pushable.len={:?}", pushable.len());
+    // eprintln!("extend_from_decoder: limit={:?}", limit);
+    // eprintln!("extend_from_decoder: pushable.len={:?}", pushable.len());
     let limit = limit.unwrap_or(usize::MAX);
 
     let mut runs = vec![];
@@ -340,10 +340,10 @@ pub(super) fn extend_from_decoder<T: Default, P: Pushable<T>, I: Iterator<Item =
         };
         runs.push(run)
     }
-    eprintln!(
-        "extend_from_decoder: reserve_pushable={:?}",
-        reserve_pushable
-    );
+    // eprintln!(
+    //    "extend_from_decoder: reserve_pushable={:?}",
+    //    reserve_pushable
+    //);
     pushable.reserve(reserve_pushable);
     validity.reserve(reserve_pushable);
 
@@ -441,7 +441,7 @@ pub(super) fn extend_from_new_page<'a, T: Decoder<'a>>(
     decoder: &T,
 ) {
     let capacity = chunk_size.unwrap_or(0);
-    eprintln!("extend_from_new_page: capacity={}", capacity);
+    // eprintln!("extend_from_new_page: capacity={}", capacity);
     let chunk_size = chunk_size.unwrap_or(usize::MAX);
 
     let mut decoded = if let Some(decoded) = items.pop_back() {
@@ -456,7 +456,7 @@ pub(super) fn extend_from_new_page<'a, T: Decoder<'a>>(
 
     decoder.extend_from_state(&mut page, &mut decoded, additional);
     *remaining -= decoded.len() - existing;
-    eprintln!("items: capacity={}", items.capacity());
+    // eprintln!("items: capacity={}", items.capacity());
     items.push_back(decoded);
 
     while page.len() > 0 && *remaining > 0 {

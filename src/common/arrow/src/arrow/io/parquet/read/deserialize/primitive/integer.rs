@@ -154,10 +154,10 @@ where
         let (values, validity) = decoded;
         match state {
             State::Common(state) => {
-                eprintln!("extend_from_state: remaining={}", remaining);
+                // eprintln!("extend_from_state: remaining={}", remaining);
                 match state {
                     PrimitiveState::Required(page) => {
-                        eprintln!("processing required");
+                        // eprintln!("processing required");
                         // 预分配内存
                         let additional = remaining.min(page.len());
                         values.reserve(additional);
