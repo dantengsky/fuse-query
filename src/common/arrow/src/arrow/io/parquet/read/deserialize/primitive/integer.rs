@@ -163,37 +163,59 @@ where
                         values.reserve(additional);
 
                         // 针对 int64 类型且 op 是 identity 函数的特殊优化
-                        if std::any::TypeId::of::<P>() == std::any::TypeId::of::<i64>() &&
-                           std::any::TypeId::of::<T>() == std::any::TypeId::of::<i64>() {
-                            // 使用直接迭代器方式，避免中间缓冲区
-                            let take_count = additional;
-                            let mut count = 0;
-                            for chunk in page.values.by_ref() {
-                                if count >= take_count {
-                                    break;
-                                }
-                                // 直接解码并添加，跳过 op 函数调用
-                                let decoded_value = decode::<P>(chunk);
-                                // 安全地将 P 类型转换为 T 类型（此处两者都是 i64）
+                        if std::any::TypeId::of::<P>() == std::any::TypeId::of::<i64>()
+                            && std::any::TypeId::of::<T>() == std::any::TypeId::of::<i64>()
+                        {
+                            // 尝试获取原始数据
+                            // 这里我们需要检查 page.values 背后的数据是否连续
+                            // 由于 page.values 是 ChunksExact 迭代器，我们需要找到一种方式来访问原始数据
+
+                            // 方法1: 如果我们能获取到第一个块，并且确定后续数据是连续的
+                            let mut peekable = page.values.clone().peekable();
+                            if let Some(first_chunk) = peekable.peek() {
+                                // 确保我们有足够的数据
+                                let available = page.len();
+                                let to_copy = additional.min(available);
+
                                 unsafe {
-                                    let value = std::mem::transmute_copy::<P, T>(&decoded_value);
-                                    values.push(value);
+                                    // 获取源指针
+                                    let src_ptr = first_chunk.as_ptr() as *const i64;
+
+                                    // 预分配目标空间
+                                    values.reserve(to_copy);
+                                    let old_len = values.len();
+                                    values.set_len(old_len + to_copy);
+
+                                    // 直接复制内存
+                                    // 注意：这里假设所有数据是连续的
+                                    std::ptr::copy_nonoverlapping(
+                                        src_ptr,
+                                        values.as_mut_ptr().add(old_len) as *mut i64,
+                                        to_copy,
+                                    );
+
+                                    // 消耗掉迭代器中的元素
+                                    //                                    for _ in 0..to_copy {
+                                    //                                        page.values.next();
+                                    //                                    }
                                 }
-                                count += 1;
+                            } else {
+                                // 回退到逐个处理
+                                values.extend(page.values.by_ref().take(additional).map(
+                                    |chunk| unsafe {
+                                        let ptr = chunk.as_ptr() as *const i64;
+                                        std::mem::transmute_copy::<i64, T>(&*ptr)
+                                    },
+                                ));
                             }
                         } else {
                             // 对于其他类型，使用更高效的直接迭代器方式
-                            let take_count = additional;
-                            let mut count = 0;
-                            for chunk in page.values.by_ref() {
-                                if count >= take_count {
-                                    break;
-                                }
-                                let decoded_value = decode::<P>(chunk);
-                                let transformed_value = (self.0.op)(decoded_value);
-                                values.push(transformed_value);
-                                count += 1;
-                            }
+                            values.extend(
+                                page.values
+                                    .by_ref()
+                                    .take(additional)
+                                    .map(|chunk| (self.0.op)(decode::<P>(chunk))),
+                            );
                         }
                     }
                     PrimitiveState::Optional(page_validity, page_values) => {
