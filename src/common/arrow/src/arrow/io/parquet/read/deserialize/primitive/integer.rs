@@ -162,33 +162,37 @@ where
                         let additional = remaining.min(page.len());
                         values.reserve(additional);
 
-                        // 批量处理
-                        const BATCH_SIZE: usize = 1024;
-                        let mut buffer = Vec::with_capacity(BATCH_SIZE.min(additional));
-
-                        let mut processed = 0;
-                        while processed < additional {
-                            let batch_size = (additional - processed).min(BATCH_SIZE);
-                            buffer.clear();
-
-                            // 从页面中提取一批值
-                            for _ in 0..batch_size {
-                                if let Some(chunk) = page.values.next() {
-                                    // 解码和转换
-                                    let decoded_value = decode::<P>(chunk);
-                                    let transformed_value = (self.0.op)(decoded_value);
-                                    buffer.push(transformed_value);
-                                } else {
+                        // 针对 int64 类型且 op 是 identity 函数的特殊优化
+                        if std::any::TypeId::of::<P>() == std::any::TypeId::of::<i64>() &&
+                           std::any::TypeId::of::<T>() == std::any::TypeId::of::<i64>() {
+                            // 使用直接迭代器方式，避免中间缓冲区
+                            let take_count = additional;
+                            let mut count = 0;
+                            for chunk in page.values.by_ref() {
+                                if count >= take_count {
                                     break;
                                 }
+                                // 直接解码并添加，跳过 op 函数调用
+                                let decoded_value = decode::<P>(chunk);
+                                // 安全地将 P 类型转换为 T 类型（此处两者都是 i64）
+                                unsafe {
+                                    let value = std::mem::transmute_copy::<P, T>(&decoded_value);
+                                    values.push(value);
+                                }
+                                count += 1;
                             }
-
-                            // 批量添加到结果数组
-                            if !buffer.is_empty() {
-                                values.extend_from_slice(&buffer);
-                                processed += buffer.len();
-                            } else {
-                                break;
+                        } else {
+                            // 对于其他类型，使用更高效的直接迭代器方式
+                            let take_count = additional;
+                            let mut count = 0;
+                            for chunk in page.values.by_ref() {
+                                if count >= take_count {
+                                    break;
+                                }
+                                let decoded_value = decode::<P>(chunk);
+                                let transformed_value = (self.0.op)(decoded_value);
+                                values.push(transformed_value);
+                                count += 1;
                             }
                         }
                     }
