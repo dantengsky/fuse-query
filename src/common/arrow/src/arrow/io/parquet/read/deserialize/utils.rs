@@ -454,6 +454,7 @@ pub(super) fn extend_from_new_page<'a, T: Decoder<'a>>(
 
     let additional = (chunk_size - existing).min(*remaining);
 
+    println!("extend_from_new_page: additional={}", additional);
     decoder.extend_from_state(&mut page, &mut decoded, additional);
     *remaining -= decoded.len() - existing;
     // eprintln!("items: capacity={}", items.capacity());
@@ -464,6 +465,11 @@ pub(super) fn extend_from_new_page<'a, T: Decoder<'a>>(
 
         let mut decoded = decoder.with_capacity(additional);
         decoder.extend_from_state(&mut page, &mut decoded, additional);
+        println!(
+            "extend_from_new_page2: additional={}, decoded len={}",
+            additional,
+            decoded.len()
+        );
         *remaining -= decoded.len();
         items.push_back(decoded)
     }
