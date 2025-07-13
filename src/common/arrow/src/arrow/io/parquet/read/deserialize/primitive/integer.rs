@@ -154,7 +154,7 @@ where
         let (values, validity) = decoded;
         match state {
             State::Common(state) => {
-                // eprintln!("extend_from_state: remaining={}", remaining);
+                eprintln!("integer rs extend_from_state: remaining={}", remaining);
                 match state {
                     PrimitiveState::Required(page) => {
                         // eprintln!("processing required");
@@ -166,6 +166,7 @@ where
                         if std::any::TypeId::of::<P>() == std::any::TypeId::of::<i64>()
                             && std::any::TypeId::of::<T>() == std::any::TypeId::of::<i64>()
                         {
+                            println!("int64 identity");
                             // 尝试获取原始数据
                             // 这里我们需要检查 page.values 背后的数据是否连续
                             // 由于 page.values 是 ChunksExact 迭代器，我们需要找到一种方式来访问原始数据
@@ -193,13 +194,18 @@ where
                                         values.as_mut_ptr().add(old_len) as *mut i64,
                                         to_copy,
                                     );
+                                    eprintln!("copy {to_copy} items");
 
                                     // 消耗掉迭代器中的元素
-                                    //                                    for _ in 0..to_copy {
-                                    //                                        page.values.next();
-                                    //                                    }
+                                    // for _ in 0..to_copy {
+                                    //    page.values.next();
+                                    //}
+
+                                    // 创建一个新的迭代器，跳过已处理的元素
+                                    page.values.nth(to_copy - 1);
                                 }
                             } else {
+                                eprintln!("fallback to fallback");
                                 // 回退到逐个处理
                                 values.extend(page.values.by_ref().take(additional).map(
                                     |chunk| unsafe {
