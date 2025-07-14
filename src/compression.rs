@@ -206,8 +206,11 @@ pub fn decompress(compression: Compression, input_buf: &[u8], output_buf: &mut [
         #[cfg(feature = "zstd")]
         Compression::Zstd => {
             use std::io::Read;
-            let mut decoder = zstd::Decoder::new(input_buf)?;
-            decoder.read_exact(output_buf).map_err(|e| e.into())
+            zstd::bulk::decompress_to_buffer(input_buf, output_buf)
+                .map(|_| ())
+                .map_err(|e| e.into())
+          //  let mut decoder = zstd::Decoder::new(input_buf)?;
+          //  decoder.read_exact(output_buf).map_err(|e| e.into())
         }
         #[cfg(not(feature = "zstd"))]
         Compression::Zstd => Err(Error::FeatureNotActive(
