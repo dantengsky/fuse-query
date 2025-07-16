@@ -211,13 +211,16 @@ pub fn page_iter_to_arrays<'a, I: Pages + 'a>(
             chunk_size,
             |x: i32| x as i128,
         ))),
-        (PhysicalType::Int64, Decimal(_, _)) => dyn_iter(iden(primitive::IntegerIter::new(
-            pages,
-            data_type,
-            num_rows,
-            chunk_size,
-            |x: i64| x as i128,
-        ))),
+        (PhysicalType::Int64, Decimal(p, s)) => {
+            println!("from int64 to decimal {p}, {s}");
+            dyn_iter(iden(primitive::IntegerIter::new(
+                pages,
+                data_type,
+                num_rows,
+                chunk_size,
+                |x: i64| x as i128,
+            )))
+        }
         (PhysicalType::FixedLenByteArray(n), Decimal(_, _)) if *n > 16 => {
             return Err(Error::NotYetImplemented(format!(
                 "Can't decode Decimal128 type from Fixed Size Byte Array of len {n:?}"
@@ -256,13 +259,16 @@ pub fn page_iter_to_arrays<'a, I: Pages + 'a>(
             chunk_size,
             |x: i32| i256(I256::new(x as i128)),
         ))),
-        (PhysicalType::Int64, Decimal256(_, _)) => dyn_iter(iden(primitive::IntegerIter::new(
-            pages,
-            data_type,
-            num_rows,
-            chunk_size,
-            |x: i64| i256(I256::new(x as i128)),
-        ))),
+        (PhysicalType::Int64, Decimal256(_, _)) => {
+            println!("from int64 to decimal256");
+            dyn_iter(iden(primitive::IntegerIter::new(
+                pages,
+                data_type,
+                num_rows,
+                chunk_size,
+                |x: i64| i256(I256::new(x as i128)),
+            )))
+        }
         (PhysicalType::FixedLenByteArray(n), Decimal256(_, _)) if *n <= 16 => {
             let n = *n;
 
