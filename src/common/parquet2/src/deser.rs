@@ -3,6 +3,7 @@ use std::i64;
 use databend_common_column::binview::Utf8ViewColumn;
 use databend_common_column::binview::View;
 use databend_common_column::buffer::Buffer;
+use databend_common_column::types::NativeType;
 use databend_common_exception::ErrorCode;
 use databend_common_exception::Result;
 use databend_common_expression::types::Number;
@@ -292,38 +293,52 @@ impl Iterator for StringIter<'_> {
                                 // Extract the string value
                                 let str_bytes = &binary_values[0..length];
 
+                                // TODO we may want to avoid this validation
                                 // Validate UTF-8
                                 match std::str::from_utf8(str_bytes) {
                                     Ok(_) => {
-                                        // Create View record properly according to the View struct definition
-                                        let view = View {
-                                            length: length as u32,
-                                            prefix: if length >= 4 {
-                                                u32::from_ne_bytes([
-                                                    str_bytes[0],
-                                                    str_bytes[1],
-                                                    str_bytes[2],
-                                                    str_bytes[3],
-                                                ])
-                                            } else if length > 0 {
-                                                // Pad with zeros for short strings
-                                                let mut prefix_bytes = [0u8; 4];
-                                                prefix_bytes[..length].copy_from_slice(str_bytes);
-                                                u32::from_ne_bytes(prefix_bytes)
-                                            } else {
-                                                0
-                                            },
-                                            buffer_idx: 0, // We only have one buffer
-                                            offset: offset as u32,
-                                            _align: [],
-                                        };
-                                        views.push(view);
+                                        // Create View record using the same approach as BinaryViewColumnBuilder
+                                        let len: u32 = length as u32;
+                                        let mut payload = [0u8; 16];
+                                        payload[0..4].copy_from_slice(&len.to_le_bytes());
 
-                                        // Append string bytes to the buffer
-                                        bytes.extend_from_slice(str_bytes);
-                                        offset += length;
+                                        if len <= 12 {
+                                            // |   len   |  prefix  |  remaining(zero-padded)  |
+                                            //     ^          ^             ^
+                                            // | 4 bytes | 4 bytes |      8 bytes              |
+                                            // For small strings (≤12 bytes), store data directly in the View
+                                            payload[4..4 + length].copy_from_slice(str_bytes);
+                                        } else {
+                                            // |   len   |  prefix  |  buffer |  offsets  |
+                                            //     ^          ^          ^         ^
+                                            // | 4 bytes | 4 bytes | 4 bytes |  4 bytes  |
+                                            //
+                                            // For larger strings, store prefix + buffer reference
+
+                                            // Set prefix (first 4 bytes)
+                                            payload[4..8].copy_from_slice(&str_bytes[..4]);
+
+                                            // We only use one buffer (index 0)
+                                            // Since payload is initialized to zero, we don't need to set it
+                                            // let buffer_idx: u32 = 0;
+                                            // payload[8..12].copy_from_slice(&buffer_idx.to_le_bytes());
+
+                                            // Set offset within buffer
+                                            let offset_u32 = offset as u32;
+                                            payload[12..16]
+                                                .copy_from_slice(&offset_u32.to_le_bytes());
+
+                                            // Append string bytes to the buffer
+                                            bytes.extend_from_slice(str_bytes);
+                                            offset += length;
+                                        }
+
+                                        // Create View from bytes
+                                        let view = View::from_le_bytes(payload);
+                                        views.push(view);
                                         count += 1;
                                     }
+
                                     Err(e) => {
                                         return Some(Err(ErrorCode::StorageOther(format!(
                                             "Invalid UTF-8 data in ByteArray: {}",
