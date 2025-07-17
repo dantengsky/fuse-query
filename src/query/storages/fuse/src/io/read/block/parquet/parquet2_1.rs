@@ -22,6 +22,7 @@ use databend_common_expression::Column;
 use databend_common_expression::ColumnId;
 use databend_common_expression::DataBlock;
 use databend_common_expression::TableField;
+use databend_common_expression::types::simple_type::SimpleValueType;
 use databend_common_p2_reader::page_iter_to_columns;
 use databend_common_p2_reader::BuffedBasicDecompressor;
 use databend_common_p2_reader::ColumnIter;

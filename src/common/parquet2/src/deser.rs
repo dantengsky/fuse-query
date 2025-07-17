@@ -1,6 +1,9 @@
+use std::i64;
+
 use databend_common_exception::ErrorCode;
 use databend_common_exception::Result;
 use databend_common_expression::types::Int64Type;
+use databend_common_expression::types::Number;
 use databend_common_expression::types::NumberDataType;
 use databend_common_expression::Column;
 use databend_common_expression::FromData;
@@ -158,7 +161,8 @@ impl Iterator for IntegerIter<'_> {
             }
         }
 
+        let col = Column::Number(i64::upcast_column(column_data.into()));
         // Return the collected data
-        Some(Ok(Int64Type::from_data(column_data)))
+        Some(Ok(col))
     }
 }
