@@ -1,5 +1,6 @@
 use std::i64;
 
+use databend_common_column::buffer::Buffer;
 use databend_common_exception::ErrorCode;
 use databend_common_exception::Result;
 use databend_common_expression::types::Int64Type;
@@ -81,7 +82,8 @@ impl Iterator for IntegerIter<'_> {
                         // TODO review this
                         return None; // No data collected and no more pages
                     } else {
-                        return Some(Ok(Int64Type::from_data(column_data)));
+                        let col = Column::Number(i64::upcast_column(Buffer::from(column_data)));
+                        return Some(Ok(col));
                     }
                 }
             };
@@ -142,7 +144,9 @@ impl Iterator for IntegerIter<'_> {
 
                             // If we've read all we need, return the column
                             if column_data.len() >= self.chunk_size.unwrap_or(self.num_rows) {
-                                return Some(Ok(Int64Type::from_data(column_data)));
+                                let col =
+                                    Column::Number(i64::upcast_column(Buffer::from(column_data)));
+                                return Some(Ok(col));
                             }
                         }
                         encoding => {
@@ -161,7 +165,7 @@ impl Iterator for IntegerIter<'_> {
             }
         }
 
-        let col = Column::Number(i64::upcast_column(column_data.into()));
+        let col = Column::Number(i64::upcast_column(Buffer::from(column_data)));
         // Return the collected data
         Some(Ok(col))
     }
