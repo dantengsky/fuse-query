@@ -34,8 +34,9 @@ use databend_storages_common_table_meta::meta::Compression;
 mod adapter;
 mod deserialize;
 
-mod decompressor;
+// mod decompressor;
 mod parquet2;
+mod parquet2_1;
 
 pub use adapter::RowGroupImplBuilder;
 pub use deserialize::column_chunks_to_record_batch;
@@ -52,7 +53,8 @@ impl BlockReader {
         compression: &Compression,
         block_path: &str,
     ) -> databend_common_exception::Result<DataBlock> {
-        self.column_chunks_to_data_block_2(
+        // self.column_chunks_to_data_block_2(
+        self.column_chunks_to_data_block_2_1(
             block_path,
             num_rows,
             compression,
