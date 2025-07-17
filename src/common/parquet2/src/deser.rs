@@ -1,13 +1,13 @@
 use std::i64;
 
+use databend_common_column::binview::Utf8ViewColumn;
+use databend_common_column::binview::View;
 use databend_common_column::buffer::Buffer;
 use databend_common_exception::ErrorCode;
 use databend_common_exception::Result;
-use databend_common_expression::types::Int64Type;
 use databend_common_expression::types::Number;
 use databend_common_expression::types::NumberDataType;
 use databend_common_expression::Column;
-use databend_common_expression::FromData;
 use databend_common_expression::TableDataType;
 use databend_common_expression::TableField;
 use parquet2::encoding::Encoding;
@@ -33,6 +33,9 @@ pub fn page_iter_to_columns<'a>(
     match (parquet_physical_type, field.data_type) {
         (PhysicalType::Int64, TableDataType::Number(NumberDataType::Int64)) => {
             Ok(Box::new(IntegerIter::new(pages, num_rows, chunk_size)))
+        }
+        (PhysicalType::ByteArray, TableDataType::String) => {
+            Ok(Box::new(StringIter::new(pages, num_rows, chunk_size)))
         }
         _ => unimplemented!(),
     }
@@ -118,6 +121,7 @@ impl Iterator for IntegerIter<'_> {
                     // Deserialize values based on encoding
                     match data_page.encoding() {
                         Encoding::Plain => {
+                            // TODO defensive check the len is multiple of size_of::<i64>
                             // For Plain encoding with INT64, we can do direct memory copy
                             // Calculate number of int64 values in the buffer
                             let num_values = values_buffer.len() / std::mem::size_of::<i64>();
@@ -128,6 +132,7 @@ impl Iterator for IntegerIter<'_> {
                             let to_read = remaining.min(num_values);
                             let old_len = column_data.len();
 
+                            // TODO buggy, assuming little endian, which might not be true
                             unsafe {
                                 // Get source pointer to the raw buffer
                                 let src_ptr = values_buffer.as_ptr() as *const i64;
@@ -168,5 +173,203 @@ impl Iterator for IntegerIter<'_> {
         let col = Column::Number(i64::upcast_column(Buffer::from(column_data)));
         // Return the collected data
         Some(Ok(col))
+    }
+}
+
+struct StringIter<'a> {
+    pages: BuffedBasicDecompressor<PageReader<&'a [u8]>>,
+    chunk_size: Option<usize>,
+    num_rows: usize,
+}
+
+impl<'a> StringIter<'a> {
+    pub fn new(
+        pages: BuffedBasicDecompressor<PageReader<&'a [u8]>>,
+        num_rows: usize,
+        chunk_size: Option<usize>,
+    ) -> StringIter<'a> {
+        Self {
+            pages,
+            chunk_size,
+            num_rows,
+        }
+    }
+}
+
+impl Iterator for StringIter<'_> {
+    type Item = Result<Column>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // Use View structure and buffer directly, similar to read_view_col implementation
+        let mut views = Vec::with_capacity(self.chunk_size.unwrap_or(self.num_rows));
+        let mut buffers = Vec::new();
+        let mut offset: usize = 0;
+        let mut bytes = Vec::new(); // Store all string bytes
+
+        while views.len() < self.chunk_size.unwrap_or(self.num_rows) {
+            let page = match self.pages.next() {
+                Err(e) => {
+                    return Some(Err(ErrorCode::StorageOther(format!(
+                        "Failed to get next page: {}",
+                        e
+                    ))))
+                }
+                Ok(Some(page)) => page,
+                Ok(None) => {
+                    if views.is_empty() {
+                        return None;
+                    } else {
+                        break;
+                    }
+                }
+            };
+
+            match page {
+                Page::Data(data_page) => {
+                    let physical_type = &data_page.descriptor.primitive_type.physical_type;
+                    let is_optional = data_page.descriptor.primitive_type.field_info.repetition
+                        == parquet2::schema::Repetition::Optional;
+
+                    if physical_type != &PhysicalType::ByteArray || is_optional {
+                        return Some(Err(ErrorCode::StorageOther(
+                            "Only BYTE_ARRAY required fields are supported in this implementation"
+                                .to_string(),
+                        )));
+                    }
+
+                    let (_, _, values_buffer) = match parquet2::page::split_buffer(&data_page) {
+                        Ok(result) => result,
+                        Err(e) => {
+                            return Some(Err(ErrorCode::StorageOther(format!(
+                                "Failed to split buffer: {}",
+                                e
+                            ))))
+                        }
+                    };
+
+                    match data_page.encoding() {
+                        Encoding::Plain => {
+                            // Parse binary data - Parquet ByteArray format is:
+                            // [4-byte length][data bytes]...[4-byte length][data bytes]...
+                            let mut binary_values = values_buffer;
+                            let remaining = self.chunk_size.unwrap_or(self.num_rows) - views.len();
+                            let mut count = 0;
+
+                            while !binary_values.is_empty() && count < remaining {
+                                if binary_values.len() < 4 {
+                                    return Some(Err(ErrorCode::StorageOther(
+                                        "Invalid binary data: not enough bytes for length prefix"
+                                            .to_string(),
+                                    )));
+                                }
+
+                                // Extract length (first 4 bytes as little-endian u32)
+                                let length_bytes = &binary_values[0..4];
+                                // TODO remove unwrap
+                                let length = u32::from_le_bytes(
+                                    length_bytes
+                                        .try_into()
+                                        .map_err(|e| {
+                                            ErrorCode::StorageOther(format!(
+                                                "Failed to read length prefix: {}",
+                                                e
+                                            ))
+                                        })
+                                        .unwrap(),
+                                ) as usize;
+
+                                // Skip the length bytes
+                                binary_values = &binary_values[4..];
+
+                                // Check if there are enough bytes for the string
+                                if binary_values.len() < length {
+                                    return Some(Err(ErrorCode::StorageOther(
+                                        "Invalid binary data: not enough bytes for string content"
+                                            .to_string(),
+                                    )));
+                                }
+
+                                // Extract the string value
+                                let str_bytes = &binary_values[0..length];
+
+                                // Validate UTF-8
+                                match std::str::from_utf8(str_bytes) {
+                                    Ok(_) => {
+                                        // Create View record properly according to the View struct definition
+                                        let view = View {
+                                            length: length as u32,
+                                            prefix: if length >= 4 {
+                                                u32::from_ne_bytes([
+                                                    str_bytes[0],
+                                                    str_bytes[1],
+                                                    str_bytes[2],
+                                                    str_bytes[3],
+                                                ])
+                                            } else if length > 0 {
+                                                // Pad with zeros for short strings
+                                                let mut prefix_bytes = [0u8; 4];
+                                                prefix_bytes[..length].copy_from_slice(str_bytes);
+                                                u32::from_ne_bytes(prefix_bytes)
+                                            } else {
+                                                0
+                                            },
+                                            buffer_idx: 0, // We only have one buffer
+                                            offset: offset as u32,
+                                            _align: [],
+                                        };
+                                        views.push(view);
+
+                                        // Append string bytes to the buffer
+                                        bytes.extend_from_slice(str_bytes);
+                                        offset += length;
+                                        count += 1;
+                                    }
+                                    Err(e) => {
+                                        return Some(Err(ErrorCode::StorageOther(format!(
+                                            "Invalid UTF-8 data in ByteArray: {}",
+                                            e
+                                        ))))
+                                    }
+                                }
+
+                                // Move to next string
+                                binary_values = &binary_values[length..];
+                            }
+
+                            if views.len() >= self.chunk_size.unwrap_or(self.num_rows) {
+                                break;
+                            }
+                        }
+                        encoding => {
+                            return Some(Err(ErrorCode::StorageOther(format!(
+                                "Encoding {:?} is not supported in this implementation",
+                                encoding
+                            ))))
+                        }
+                    }
+                }
+                _ => {
+                    return Some(Err(ErrorCode::StorageOther(
+                        "Only data pages are supported".to_string(),
+                    )))
+                }
+            }
+        }
+
+        if views.is_empty() {
+            return None;
+        }
+
+        // All strings collected, convert to Buffer
+        buffers.push(Buffer::from(bytes));
+
+        // Convert views Vec to Buffer
+        let views_buffer = Buffer::from(views);
+
+        // Safely create Utf8ViewColumn
+        let column =
+            unsafe { Utf8ViewColumn::new_unchecked_unknown_md(views_buffer, buffers.into(), None) };
+
+        Some(Ok(Column::String(column)))
     }
 }
