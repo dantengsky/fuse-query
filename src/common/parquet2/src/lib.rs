@@ -31,6 +31,8 @@
 // pub use reader::*;
 // pub use utils::*;
 
+extern crate core;
+
 mod decompressor;
 mod deser;
 
