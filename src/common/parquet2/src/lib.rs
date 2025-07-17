@@ -31,5 +31,8 @@
 // pub use reader::*;
 // pub use utils::*;
 
-mod deser;
 mod decompressor;
+mod deser;
+
+pub use decompressor::*;
+pub use deser::*;
