@@ -6,6 +6,9 @@ use databend_common_column::buffer::Buffer;
 use databend_common_column::types::NativeType;
 use databend_common_exception::ErrorCode;
 use databend_common_exception::Result;
+use databend_common_expression::types::Decimal64Type;
+use databend_common_expression::types::DecimalDataType;
+use databend_common_expression::types::DecimalSize;
 use databend_common_expression::types::Number;
 use databend_common_expression::types::NumberDataType;
 use databend_common_expression::Column;
@@ -21,6 +24,7 @@ use parquet2::FallibleStreamingIterator;
 use crate::decompressor::BuffedBasicDecompressor;
 
 pub type ColumnIter<'a> = Box<dyn Iterator<Item = Result<Column>> + Send + Sync + 'a>;
+
 pub fn page_iter_to_columns<'a>(
     mut columns: Vec<BuffedBasicDecompressor<PageReader<&'a [u8]>>>,
     mut types: Vec<&PrimitiveType>,
@@ -38,7 +42,17 @@ pub fn page_iter_to_columns<'a>(
         (PhysicalType::ByteArray, TableDataType::String) => {
             Ok(Box::new(StringIter::new(pages, num_rows, chunk_size)))
         }
-        _ => unimplemented!(),
+        (PhysicalType::Int64, TableDataType::Decimal(DecimalDataType::Decimal64(decimal_size))) => {
+            // Handle DECIMAL(15, 2) stored as Int64
+            Ok(Box::new(DecimalIter::new(
+                pages,
+                num_rows,
+                chunk_size,
+                decimal_size.precision(),
+                decimal_size.scale(),
+            )))
+        }
+        (py, tt) => unimplemented!("{py:?} -> {tt:?}"),
     }
 }
 
@@ -386,5 +400,134 @@ impl Iterator for StringIter<'_> {
             unsafe { Utf8ViewColumn::new_unchecked_unknown_md(views_buffer, buffers.into(), None) };
 
         Some(Ok(Column::String(column)))
+    }
+}
+
+struct DecimalIter<'a> {
+    pages: BuffedBasicDecompressor<PageReader<&'a [u8]>>,
+    chunk_size: Option<usize>,
+    num_rows: usize,
+    precision: u8,
+    scale: u8,
+}
+
+impl<'a> DecimalIter<'a> {
+    pub fn new(
+        pages: BuffedBasicDecompressor<PageReader<&'a [u8]>>,
+        num_rows: usize,
+        chunk_size: Option<usize>,
+        precision: u8,
+        scale: u8,
+    ) -> DecimalIter<'a> {
+        Self {
+            pages,
+            chunk_size,
+            num_rows,
+            precision,
+            scale,
+        }
+    }
+}
+
+impl Iterator for DecimalIter<'_> {
+    type Item = Result<Column>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut column_data = Vec::with_capacity(self.chunk_size.unwrap_or(self.num_rows));
+        while column_data.len() < self.chunk_size.unwrap_or(self.num_rows) {
+            let page = match self.pages.next() {
+                Err(e) => {
+                    return Some(Err(ErrorCode::StorageOther(format!(
+                        "Failed to get next page: {}",
+                        e
+                    ))))
+                }
+                Ok(Some(page)) => page,
+                Ok(None) => {
+                    if column_data.is_empty() {
+                        return None;
+                    } else {
+                        // Create a Decimal64 column with the values read so far
+                        let decimal_size = DecimalSize::new_unchecked(self.precision, self.scale);
+                        let col = Column::Decimal(
+                            databend_common_expression::types::DecimalColumn::Decimal64(
+                                Buffer::from(column_data),
+                                decimal_size,
+                            ),
+                        );
+                        return Some(Ok(col));
+                    }
+                }
+            };
+            match page {
+                Page::Data(data_page) => {
+                    if data_page.descriptor.primitive_type.physical_type != PhysicalType::Int64
+                        || data_page.descriptor.primitive_type.field_info.repetition
+                            == parquet2::schema::Repetition::Optional
+                    {
+                        return Some(Err(ErrorCode::StorageOther(
+                            "Only required Int64 fields supported for DECIMAL(15,2)".to_string(),
+                        )));
+                    }
+                    let (_, _, values_buffer) = match parquet2::page::split_buffer(&data_page) {
+                        Ok(result) => result,
+                        Err(e) => {
+                            return Some(Err(ErrorCode::StorageOther(format!(
+                                "Failed to split buffer: {}",
+                                e
+                            ))))
+                        }
+                    };
+                    match data_page.encoding() {
+                        Encoding::Plain => {
+                            let num_values = values_buffer.len() / std::mem::size_of::<i64>();
+                            let remaining =
+                                self.chunk_size.unwrap_or(self.num_rows) - column_data.len();
+                            let to_read = remaining.min(num_values);
+                            let old_len = column_data.len();
+
+                            // Direct copy from the buffer to our column data
+                            unsafe {
+                                // Get source pointer to the raw buffer
+                                let src_ptr = values_buffer.as_ptr() as *const i64;
+                                // Get destination pointer to our column data
+                                let dst_ptr = column_data.as_mut_ptr().add(old_len);
+                                // Copy the values directly
+                                std::ptr::copy_nonoverlapping(src_ptr, dst_ptr, to_read);
+                                // Update the length of our column data
+                                column_data.set_len(old_len + to_read);
+                            }
+
+                            if column_data.len() >= self.chunk_size.unwrap_or(self.num_rows) {
+                                break;
+                            }
+                        }
+                        encoding => {
+                            return Some(Err(ErrorCode::StorageOther(format!(
+                                "Encoding {:?} is not supported for DECIMAL(15,2)",
+                                encoding
+                            ))));
+                        }
+                    }
+                }
+                _ => {
+                    return Some(Err(ErrorCode::StorageOther(
+                        "Only data pages are supported".to_string(),
+                    )))
+                }
+            }
+        }
+
+        if column_data.is_empty() {
+            return None;
+        }
+
+        // Create a Decimal64 column with the specified precision and scale
+        let decimal_size = DecimalSize::new_unchecked(self.precision, self.scale);
+        let col = Column::Decimal(databend_common_expression::types::DecimalColumn::Decimal64(
+            Buffer::from(column_data),
+            decimal_size,
+        ));
+        Some(Ok(col))
     }
 }
