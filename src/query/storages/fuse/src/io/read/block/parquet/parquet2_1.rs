@@ -17,12 +17,12 @@ use std::sync::Arc;
 
 use databend_common_exception::ErrorCode;
 use databend_common_exception::Result;
+use databend_common_expression::types::simple_type::SimpleValueType;
 use databend_common_expression::BlockEntry;
 use databend_common_expression::Column;
 use databend_common_expression::ColumnId;
 use databend_common_expression::DataBlock;
 use databend_common_expression::TableField;
-use databend_common_expression::types::simple_type::SimpleValueType;
 use databend_common_p2_reader::page_iter_to_columns;
 use databend_common_p2_reader::BuffedBasicDecompressor;
 use databend_common_p2_reader::ColumnIter;
@@ -248,7 +248,7 @@ impl BlockReader {
                 field_column_data,
                 num_rows,
                 field_column_descriptors,
-                column.table_field.clone().into(),
+                column.table_field.clone(),
                 // TODO
                 // column.init.clone(),
                 vec![],
