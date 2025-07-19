@@ -17,28 +17,26 @@ use std::sync::Arc;
 
 use databend_common_exception::ErrorCode;
 use databend_common_exception::Result;
-use databend_common_expression::types::simple_type::SimpleValueType;
+use databend_common_expression::types::NumberDataType;
 use databend_common_expression::BlockEntry;
 use databend_common_expression::Column;
 use databend_common_expression::ColumnId;
 use databend_common_expression::DataBlock;
+use databend_common_expression::TableDataType;
 use databend_common_expression::TableField;
 use databend_common_p2_reader::page_iter_to_columns;
 use databend_common_p2_reader::BuffedBasicDecompressor;
 use databend_common_p2_reader::ColumnIter;
 use databend_common_p2_reader::UncompressedBuffer;
-use databend_common_parquet2_reader::arrow::datatypes::Field;
-use databend_common_parquet2_reader::arrow::datatypes::Schema;
-use databend_common_parquet2_reader::arrow::io::parquet::read::InitNested;
-use databend_common_parquet2_reader::arrow::io::parquet::write::to_parquet_schema;
-use databend_common_parquet2_reader::parquet::metadata::ColumnDescriptor;
-use databend_common_parquet2_reader::parquet::metadata::SchemaDescriptor;
-use databend_common_parquet2_reader::parquet::read::PageMetaData;
-use databend_common_parquet2_reader::parquet::read::PageReader;
 use databend_common_storage::ColumnNode;
-use databend_storages_common_cache::CacheAccessor;
 use databend_storages_common_table_meta::meta::ColumnMeta;
 use databend_storages_common_table_meta::meta::Compression;
+use parquet2::compression::Compression as ParquetCompression;
+use parquet2::metadata::Descriptor;
+use parquet2::read::PageMetaData;
+use parquet2::read::PageReader;
+use parquet2::schema::types::PhysicalType;
+use parquet2::schema::types::PrimitiveType;
 
 use super::BlockReader;
 use crate::io::read::block::block_reader_merge_io::DataItem;
@@ -49,7 +47,6 @@ pub struct FieldDeserializationContext<'a> {
     pub(crate) num_rows: usize,
     pub(crate) compression: &'a Compression,
     pub(crate) uncompressed_buffer: &'a Option<Arc<UncompressedBuffer>>,
-    pub(crate) parquet_schema_descriptor: &'a Option<SchemaDescriptor>,
 }
 impl BlockReader {
     pub(crate) fn column_chunks_to_data_block_2_1(
@@ -74,7 +71,6 @@ impl BlockReader {
             num_rows,
             compression,
             uncompressed_buffer: &uncompressed_buffer,
-            parquet_schema_descriptor: &None::<SchemaDescriptor>,
         };
         for column_node in &self.project_column_nodes {
             let deserialized_column = self
@@ -176,46 +172,104 @@ impl BlockReader {
         let uncompressed_buffer = deserialization_context.uncompressed_buffer;
         // column passed in may be a compound field (with sub leaves),
         // or a leaf column of compound field
-        let is_nested = column.is_nested;
         let estimated_cap = indices.len();
         let mut field_column_metas = Vec::with_capacity(estimated_cap);
         let mut field_column_data = Vec::with_capacity(estimated_cap);
         let mut field_column_descriptors = Vec::with_capacity(estimated_cap);
-        let mut field_uncompressed_size = 0;
+        // let mut field_uncompressed_size = 0;
+        let parquet_primitive_type = match column.table_field.data_type {
+            TableDataType::String => PrimitiveType::from_physical(
+                column.table_field.name.clone(),
+                PhysicalType::ByteArray,
+            ),
+            TableDataType::Number(number_type) => match number_type {
+                NumberDataType::Int8 => PrimitiveType::from_physical(
+                    column.table_field.name.clone(),
+                    PhysicalType::Int32,
+                ),
+                NumberDataType::Int16 => PrimitiveType::from_physical(
+                    column.table_field.name.clone(),
+                    PhysicalType::Int32,
+                ),
+                NumberDataType::Int32 => PrimitiveType::from_physical(
+                    column.table_field.name.clone(),
+                    PhysicalType::Int32,
+                ),
+                NumberDataType::Int64 => PrimitiveType::from_physical(
+                    column.table_field.name.clone(),
+                    PhysicalType::Int64,
+                ),
+                NumberDataType::UInt8 => PrimitiveType::from_physical(
+                    column.table_field.name.clone(),
+                    PhysicalType::Int32,
+                ),
+                NumberDataType::UInt16 => PrimitiveType::from_physical(
+                    column.table_field.name.clone(),
+                    PhysicalType::Int32,
+                ),
+                NumberDataType::UInt32 => PrimitiveType::from_physical(
+                    column.table_field.name.clone(),
+                    PhysicalType::Int64,
+                ),
+                NumberDataType::UInt64 => PrimitiveType::from_physical(
+                    column.table_field.name.clone(),
+                    PhysicalType::Int64,
+                ),
+                NumberDataType::Float32 => PrimitiveType::from_physical(
+                    column.table_field.name.clone(),
+                    PhysicalType::Float,
+                ),
+                NumberDataType::Float64 => PrimitiveType::from_physical(
+                    column.table_field.name.clone(),
+                    PhysicalType::Double,
+                ),
+            },
+            TableDataType::Decimal(decimal_type) => {
+                let precision = decimal_type.precision();
+                let _scale = decimal_type.scale();
+                if precision <= 9 {
+                    PrimitiveType::from_physical(
+                        column.table_field.name.clone(),
+                        PhysicalType::Int32,
+                    )
+                } else if precision <= 18 {
+                    PrimitiveType::from_physical(
+                        column.table_field.name.clone(),
+                        PhysicalType::Int64,
+                    )
+                } else {
+                    let len = decimal_length_from_precision(precision as usize);
+                    // For decimal256
+                    PrimitiveType::from_physical(
+                        column.table_field.name.clone(),
+                        PhysicalType::FixedLenByteArray(len),
+                    )
+                }
+            }
+            TableDataType::Date => {
+                PrimitiveType::from_physical(column.table_field.name.clone(), PhysicalType::Int32)
+            }
+            _ => unimplemented!(),
+        };
 
-        let arrow_schema = self.arrow_schema.as_ref();
-        let fields = arrow_schema
-            .fields()
-            .iter()
-            .map(|f| Field::from(f))
-            .collect::<Vec<_>>();
-        let arrow_schema = Schema::from(fields);
-        let parquet_schema_descriptor = to_parquet_schema(&arrow_schema).map_err(|e| {
-            ErrorCode::StorageOther(format!(
-                "failed to convert arrow schema to parquet schema, error: {}",
-                e
-            ))
-        })?;
+        let column_descriptor = Descriptor {
+            primitive_type: parquet_primitive_type,
+            max_def_level: 0,
+            max_rep_level: 0,
+        };
 
-        for (i, leaf_index) in indices.iter().enumerate() {
+        for (i, _leaf_index) in indices.iter().enumerate() {
             let column_id = column.leaf_column_ids[i];
             if let Some(column_meta) = deserialization_context.column_metas.get(&column_id) {
                 if let Some(chunk) = column_chunks.get(&column_id) {
                     match chunk {
                         DataItem::RawData(data) => {
-                            let column_descriptor = if let Some(parquet_schema_descriptor) =
-                                deserialization_context.parquet_schema_descriptor
-                            {
-                                &parquet_schema_descriptor.columns()[*leaf_index]
-                            } else {
-                                &parquet_schema_descriptor.columns()[*leaf_index]
-                            };
                             field_column_metas.push(column_meta);
                             field_column_data.push(data.as_ref());
-                            field_column_descriptors.push(column_descriptor);
-                            field_uncompressed_size += data.len();
+                            field_column_descriptors.push(&column_descriptor);
+                            // field_uncompressed_size += data.len();
                         }
-                        DataItem::ColumnArray(column_array) => {
+                        DataItem::ColumnArray(_column_array) => {
                             unimplemented!()
                             // if is_nested {
                             //    // TODO more context info for error message
@@ -249,9 +303,6 @@ impl BlockReader {
                 num_rows,
                 field_column_descriptors,
                 column.table_field.clone(),
-                // TODO
-                // column.init.clone(),
-                vec![],
                 compression,
                 uncompressed_buffer
                     .clone()
@@ -271,25 +322,7 @@ impl BlockReader {
                     ))
                 })?;
             assert!(array_iter.next().is_none());
-
             Ok(Some(array))
-
-            // println!(">>>>> array len: {}", array.len());
-
-            // mark the array
-            // if is_nested {
-            //    // the array is not intended to be cached
-            //    // currently, caching of compound field columns is not support
-            //    Ok(Some(DeserializedArray::NoNeedToCache(array.into())))
-            //} else {
-            //    // the array is deserialized from raw bytes, should be cached
-            //    let column_id = column.leaf_column_ids[0];
-            //    Ok(Some(DeserializedArray::Deserialized((
-            //        column_id,
-            //        array.into(),
-            //        field_uncompressed_size,
-            //    ))))
-            //}
         } else {
             Ok(None)
         }
@@ -300,9 +333,8 @@ impl BlockReader {
         metas: Vec<&ColumnMeta>,
         chunks: Vec<&'a [u8]>,
         rows: usize,
-        column_descriptors: Vec<&ColumnDescriptor>,
+        column_descriptors: Vec<&Descriptor>,
         field: TableField,
-        init: Vec<InitNested>,
         compression: &Compression,
         uncompressed_buffer: Arc<UncompressedBuffer>,
     ) -> Result<ColumnIter<'a>> {
@@ -316,7 +348,7 @@ impl BlockReader {
                     column_start: meta.offset,
                     num_values: meta.num_values as i64,
                     compression: Self::to_parquet_compression(compression)?,
-                    descriptor: column_descriptor.descriptor.clone(),
+                    descriptor: (*column_descriptor).clone(),
                 };
                 let pages = PageReader::new_with_page_meta(
                     chunk,
@@ -335,18 +367,51 @@ impl BlockReader {
 
         let types = column_descriptors
             .iter()
-            .map(|column_descriptor| &column_descriptor.descriptor.primitive_type)
+            .map(|column_descriptor| &column_descriptor.primitive_type)
             .collect::<Vec<_>>();
 
         page_iter_to_columns(columns, types, field, None, rows)
-
-        //        let array_iter = if init.is_empty() {
-        //            column_iter_to_arrays(columns, types, field, Some(rows), rows)
-        //                .map_err(|e| ErrorCode::StorageOther(e.to_string()))?
-        //        } else {
-        //            nested_column_iter_to_arrays(columns, types, field, init, Some(rows), rows)
-        //                .map_err(|e| ErrorCode::StorageOther(e.to_string()))?
-        //        };
-        //        Ok(array_iter)
     }
+
+    pub(crate) fn to_parquet_compression(
+        meta_compression: &Compression,
+    ) -> Result<ParquetCompression> {
+        match meta_compression {
+            Compression::Lz4 => {
+                let err_msg = r#"Deprecated compression algorithm [Lz4] detected.
+
+                                        The Legacy compression algorithm [Lz4] is no longer supported.
+                                        To migrate data from old format, please consider re-create the table,
+                                        by using an old compatible version [v0.8.25-nightly … v0.7.12-nightly].
+
+                                        - Bring up the compatible version of databend-query
+                                        - re-create the table
+                                           Suppose the name of table is T
+                                            ~~~
+                                            create table tmp_t as select * from T;
+                                            drop table T all;
+                                            alter table tmp_t rename to T;
+                                            ~~~
+                                        Please note that the history of table T WILL BE LOST.
+                                       "#;
+                Err(ErrorCode::StorageOther(err_msg))
+            }
+            Compression::Lz4Raw => Ok(ParquetCompression::Lz4Raw),
+            Compression::Snappy => Ok(ParquetCompression::Snappy),
+            Compression::Zstd => Ok(ParquetCompression::Zstd),
+            Compression::Gzip => Ok(ParquetCompression::Gzip),
+            Compression::None => Ok(ParquetCompression::Uncompressed),
+        }
+    }
+}
+
+fn decimal_length_from_precision(precision: usize) -> usize {
+    // digits = floor(log_10(2^(8*n - 1) - 1))
+    // ceil(digits) = log10(2^(8*n - 1) - 1)
+    // 10^ceil(digits) = 2^(8*n - 1) - 1
+    // 10^ceil(digits) + 1 = 2^(8*n - 1)
+    // log2(10^ceil(digits) + 1) = (8*n - 1)
+    // log2(10^ceil(digits) + 1) + 1 = 8*n
+    // (log2(10^ceil(a) + 1) + 1) / 8 = n
+    (((10.0_f64.powi(precision as i32) + 1.0).log2() + 1.0) / 8.0).ceil() as usize
 }

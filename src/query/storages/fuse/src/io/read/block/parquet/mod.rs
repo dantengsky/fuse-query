@@ -35,7 +35,7 @@ mod adapter;
 mod deserialize;
 
 // mod decompressor;
-mod parquet2;
+// mod parquet2;
 mod parquet2_1;
 
 pub use adapter::RowGroupImplBuilder;
@@ -64,7 +64,7 @@ impl BlockReader {
         )
     }
 
-    pub(crate) fn deserialize_parquet_chunks_bak(
+    pub fn deserialize_parquet_chunks_bak(
         &self,
         num_rows: usize,
         column_metas: &HashMap<ColumnId, ColumnMeta>,

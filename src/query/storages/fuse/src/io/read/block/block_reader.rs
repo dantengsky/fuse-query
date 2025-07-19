@@ -17,7 +17,6 @@ use std::sync::Arc;
 
 use arrow_schema::Field;
 use arrow_schema::Schema;
-use arrow_schema::SchemaRef;
 use databend_common_catalog::plan::Projection;
 use databend_common_catalog::table_context::TableContext;
 use databend_common_exception::ErrorCode;
@@ -44,7 +43,6 @@ pub struct BlockReader {
     pub(crate) operator: Operator,
     pub(crate) projection: Projection,
     pub(crate) projected_schema: TableSchemaRef,
-    pub(crate) arrow_schema: SchemaRef,
     pub(crate) project_indices: BTreeMap<FieldIndex, (ColumnId, Field, DataType)>,
     pub(crate) project_column_nodes: Vec<ColumnNode>,
     pub(crate) default_vals: Vec<Scalar>,
@@ -146,7 +144,6 @@ impl BlockReader {
             operator,
             projection,
             projected_schema,
-            arrow_schema: arrow_schema.into(),
             project_indices,
             project_column_nodes,
             default_vals,
@@ -193,10 +190,6 @@ impl BlockReader {
 
     pub fn schema(&self) -> TableSchemaRef {
         self.projected_schema.clone()
-    }
-
-    pub fn arrow_schema(&self) -> SchemaRef {
-        self.arrow_schema.clone()
     }
 
     pub fn data_fields(&self) -> Vec<DataField> {

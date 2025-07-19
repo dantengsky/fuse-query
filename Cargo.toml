@@ -10,7 +10,6 @@ resolver = "2"
 members = [
     "src/binaries",
     "src/common/auth",
-    "src/common/arrow",
     "src/common/base",
     "src/common/building",
     "src/common/cache",
@@ -162,7 +161,6 @@ databend-common-meta-types = { path = "src/meta/types" }
 databend-common-metrics = { path = "src/common/metrics" }
 databend-common-native = { path = "src/common/native" }
 databend-common-openai = { path = "src/common/openai" }
-databend-common-parquet2-reader = { path = "src/common/arrow" }
 databend-common-p2-reader = { path = "src/common/parquet2" }
 databend-common-pipeline-core = { path = "src/query/pipeline/core" }
 databend-common-pipeline-sinks = { path = "src/query/pipeline/sinks" }
