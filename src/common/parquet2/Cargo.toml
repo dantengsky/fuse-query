@@ -26,7 +26,7 @@ lz4 = { workspace = true }
 match-template = { workspace = true }
 num = { workspace = true, features = ["std"] }
 opendal = { workspace = true }
-parquet2 = { version = "0.17.0", default_features = false, features = ["serde_types", "async", "zstd", "snappy", "lz4"] }
+parquet2 = { version = "0.17.0", default-features = false, features = ["serde_types", "async", "zstd", "snappy", "lz4"] }
 parquet-format-safe = "0.2.0"
 rand = { workspace = true }
 ringbuffer = { workspace = true }

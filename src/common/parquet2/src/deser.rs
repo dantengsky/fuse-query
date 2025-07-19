@@ -6,7 +6,6 @@ use databend_common_column::buffer::Buffer;
 use databend_common_column::types::NativeType;
 use databend_common_exception::ErrorCode;
 use databend_common_exception::Result;
-use databend_common_expression::types::Decimal64Type;
 use databend_common_expression::types::DecimalDataType;
 use databend_common_expression::types::DecimalSize;
 use databend_common_expression::types::Number;
