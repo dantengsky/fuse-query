@@ -20,6 +20,7 @@ use parquet2::schema::types::PhysicalType;
 use parquet2::schema::types::PrimitiveType;
 use parquet2::FallibleStreamingIterator;
 
+use super::decimal::IntegerIter as DateIter;
 use crate::decompressor::BuffedBasicDecompressor;
 
 pub type ColumnIter<'a> = Box<dyn Iterator<Item = Result<Column>> + Send + Sync + 'a>;
@@ -50,6 +51,9 @@ pub fn page_iter_to_columns<'a>(
                 decimal_size.precision(),
                 decimal_size.scale(),
             )))
+        }
+        (PhysicalType::Int32, TableDataType::Date) => {
+            Ok(Box::new(DateIter::new(pages, num_rows, chunk_size)))
         }
         (py, tt) => unimplemented!("{py:?} -> {tt:?}"),
     }
