@@ -37,6 +37,7 @@ use parquet2::read::PageMetaData;
 use parquet2::read::PageReader;
 use parquet2::schema::types::PhysicalType;
 use parquet2::schema::types::PrimitiveType;
+use parquet2::schema::Repetition;
 
 use super::BlockReader;
 use crate::io::read::block::block_reader_merge_io::DataItem;
@@ -177,7 +178,7 @@ impl BlockReader {
         let mut field_column_data = Vec::with_capacity(estimated_cap);
         let mut field_column_descriptors = Vec::with_capacity(estimated_cap);
         // let mut field_uncompressed_size = 0;
-        let parquet_primitive_type = match column.table_field.data_type {
+        let mut parquet_primitive_type = match column.table_field.data_type {
             TableDataType::String => PrimitiveType::from_physical(
                 column.table_field.name.clone(),
                 PhysicalType::ByteArray,
@@ -251,6 +252,8 @@ impl BlockReader {
             }
             _ => unimplemented!(),
         };
+
+        parquet_primitive_type.field_info.repetition = Repetition::Required;
 
         let column_descriptor = Descriptor {
             primitive_type: parquet_primitive_type,
