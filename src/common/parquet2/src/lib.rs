@@ -36,7 +36,7 @@ extern crate core;
 mod decompressor;
 mod deser;
 
-mod decimal;
+mod number;
 
 pub use decompressor::*;
 pub use deser::*;
