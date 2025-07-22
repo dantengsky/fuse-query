@@ -20,7 +20,7 @@ use parquet2::schema::types::PhysicalType;
 use parquet2::schema::types::PrimitiveType;
 use parquet2::FallibleStreamingIterator;
 
-use super::decimal::IntegerIter as DateIter;
+use super::number::IntegerIter as DateIter;
 use crate::decompressor::BuffedBasicDecompressor;
 
 pub type ColumnIter<'a> = Box<dyn Iterator<Item = Result<Column>> + Send + Sync + 'a>;
@@ -312,57 +312,56 @@ impl Iterator for StringIter<'_> {
 
                                 // TODO we may want to avoid this validation
                                 // Validate UTF-8
-                                match std::str::from_utf8(str_bytes) {
-                                    Ok(_) => {
-                                        // Create View record using the same approach as BinaryViewColumnBuilder
-                                        let len: u32 = length as u32;
-                                        let mut payload = [0u8; 16];
-                                        payload[0..4].copy_from_slice(&len.to_le_bytes());
+                                // match std::str::from_utf8(str_bytes) {
+                                //    Ok(_) => {
+                                // Create View record using the same approach as BinaryViewColumnBuilder
+                                let len: u32 = length as u32;
+                                let mut payload = [0u8; 16];
+                                payload[0..4].copy_from_slice(&len.to_le_bytes());
 
-                                        if len <= 12 {
-                                            // |   len   |  prefix  |  remaining(zero-padded)  |
-                                            //     ^          ^             ^
-                                            // | 4 bytes | 4 bytes |      8 bytes              |
-                                            // For small strings (≤12 bytes), store data directly in the View
-                                            payload[4..4 + length].copy_from_slice(str_bytes);
-                                        } else {
-                                            // |   len   |  prefix  |  buffer |  offsets  |
-                                            //     ^          ^          ^         ^
-                                            // | 4 bytes | 4 bytes | 4 bytes |  4 bytes  |
-                                            //
-                                            // For larger strings, store prefix + buffer reference
+                                if len <= 12 {
+                                    // |   len   |  prefix  |  remaining(zero-padded)  |
+                                    //     ^          ^             ^
+                                    // | 4 bytes | 4 bytes |      8 bytes              |
+                                    // For small strings (≤12 bytes), store data directly in the View
+                                    payload[4..4 + length].copy_from_slice(str_bytes);
+                                } else {
+                                    // |   len   |  prefix  |  buffer |  offsets  |
+                                    //     ^          ^          ^         ^
+                                    // | 4 bytes | 4 bytes | 4 bytes |  4 bytes  |
+                                    //
+                                    // For larger strings, store prefix + buffer reference
 
-                                            // Set prefix (first 4 bytes)
-                                            payload[4..8].copy_from_slice(&str_bytes[..4]);
+                                    // Set prefix (first 4 bytes)
+                                    payload[4..8].copy_from_slice(&str_bytes[..4]);
 
-                                            // We only use one buffer (index 0)
-                                            // Since payload is initialized to zero, we don't need to set it
-                                            // let buffer_idx: u32 = 0;
-                                            // payload[8..12].copy_from_slice(&buffer_idx.to_le_bytes());
+                                    // We only use one buffer (index 0)
+                                    // Since payload is initialized to zero, we don't need to set it
+                                    // let buffer_idx: u32 = 0;
+                                    // payload[8..12].copy_from_slice(&buffer_idx.to_le_bytes());
 
-                                            // Set offset within buffer
-                                            let offset_u32 = offset as u32;
-                                            payload[12..16]
-                                                .copy_from_slice(&offset_u32.to_le_bytes());
+                                    // Set offset within buffer
+                                    let offset_u32 = offset as u32;
+                                    payload[12..16].copy_from_slice(&offset_u32.to_le_bytes());
 
-                                            // Append string bytes to the buffer
-                                            bytes.extend_from_slice(str_bytes);
-                                            offset += length;
-                                        }
-
-                                        // Create View from bytes
-                                        let view = View::from_le_bytes(payload);
-                                        views.push(view);
-                                        count += 1;
-                                    }
-
-                                    Err(e) => {
-                                        return Some(Err(ErrorCode::StorageOther(format!(
-                                            "Invalid UTF-8 data in ByteArray: {}",
-                                            e
-                                        ))))
-                                    }
+                                    // Append string bytes to the buffer
+                                    bytes.extend_from_slice(str_bytes);
+                                    offset += length;
                                 }
+
+                                // Create View from bytes
+                                let view = View::from_le_bytes(payload);
+                                views.push(view);
+                                count += 1;
+                                //   }
+
+                                //   Err(e) => {
+                                //       return Some(Err(ErrorCode::StorageOther(format!(
+                                //           "Invalid UTF-8 data in ByteArray: {}",
+                                //           e
+                                //       ))))
+                                //   }
+                                //}
 
                                 // Move to next string
                                 binary_values = &binary_values[length..];
