@@ -20,11 +20,8 @@
 mod decompressor;
 mod deser;
 mod string;
-
 mod date;
-
 mod decimal;
-
 mod number;
 
 pub use decompressor::*;
