@@ -23,7 +23,7 @@ mod string;
 mod date;
 mod decimal;
 mod number;
-mod field_type_mapping;
+mod util;
 
 pub use decompressor::*;
 pub use deser::*;
