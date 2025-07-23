@@ -12,20 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Direct deserialization from parquet2 to DataBlock without Arrow intermediate representation
-//!
-//! This crate provides functionality to directly deserialize Parquet data into DataBlock
-//! structures, bypassing the Arrow memory model for improved performance.
+use crate::number::IntegerIter;
 
-mod decompressor;
-mod deser;
-mod string;
-
-mod date;
-
-mod decimal;
-
-mod number;
-
-pub use decompressor::*;
-pub use deser::*;
+pub type DateIter<'a> = IntegerIter<'a, i32>;
