@@ -142,10 +142,13 @@ impl Iterator for StringIter<'_> {
                                 // Extract the string value
                                 let str_bytes = &binary_values[0..length];
 
-                                // TODO we may want to avoid this validation
+                                // TODO do we need this validation?
                                 // Validate UTF-8
                                 // match std::str::from_utf8(str_bytes) {
-                                //    Ok(_) => {
+                                // ...
+                                // }
+
+
                                 // Create View record using the same approach as BinaryViewColumnBuilder
                                 let len: u32 = length as u32;
                                 let mut payload = [0u8; 16];
@@ -185,15 +188,6 @@ impl Iterator for StringIter<'_> {
                                 let view = View::from_le_bytes(payload);
                                 views.push(view);
                                 count += 1;
-                                //   }
-
-                                //   Err(e) => {
-                                //       return Some(Err(ErrorCode::StorageOther(format!(
-                                //           "Invalid UTF-8 data in ByteArray: {}",
-                                //           e
-                                //       ))))
-                                //   }
-                                //}
 
                                 // Move to next string
                                 binary_values = &binary_values[length..];

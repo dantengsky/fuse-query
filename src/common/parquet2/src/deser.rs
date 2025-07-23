@@ -9,7 +9,6 @@ use parquet2::read::PageReader;
 use parquet2::schema::types::PhysicalType;
 use parquet2::schema::types::PrimitiveType;
 
-use super::number::DateIter;
 use super::number::Int64Iter;
 use super::string::StringIter;
 use crate::date::DateIter;
