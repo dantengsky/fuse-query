@@ -353,6 +353,7 @@ impl BlockReader {
                     compression: Self::to_parquet_compression(compression)?,
                     descriptor: (*column_descriptor).clone(),
                 };
+                // TODO reuse scratch and uncompressed_buffer
                 let pages = PageReader::new_with_page_meta(
                     chunk,
                     page_meta_data,
