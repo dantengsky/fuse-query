@@ -4,7 +4,7 @@ use parquet2::schema::types::PhysicalType;
 use parquet2::schema::types::PrimitiveType;
 use parquet2::schema::Repetition;
 
-fn from_table_filed_type(field_name: String, field_type: TableDataType) -> PrimitiveType {
+pub fn from_table_filed_type(field_name: String, field_type: &TableDataType) -> PrimitiveType {
     let mut parquet_primitive_type = match field_type {
         TableDataType::String => PrimitiveType::from_physical(field_name, PhysicalType::ByteArray),
         TableDataType::Number(number_type) => match number_type {

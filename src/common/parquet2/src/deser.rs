@@ -9,7 +9,7 @@ use parquet2::read::PageReader;
 use parquet2::schema::types::PhysicalType;
 use parquet2::schema::types::PrimitiveType;
 
-use super::number::Int64Iter;
+use super::number::{Int32Iter, Int64Iter};
 use super::string::StringIter;
 use crate::date::DateIter;
 use crate::decimal::DecimalIter;
@@ -28,6 +28,9 @@ pub fn page_iter_to_columns<'a>(
     let parquet_physical_type = &types.pop().unwrap().physical_type;
 
     match (parquet_physical_type, field.data_type) {
+        (PhysicalType::Int32, TableDataType::Number(NumberDataType::Int32)) => {
+            Ok(Box::new(Int32Iter::new(pages, num_rows, chunk_size)))
+        }
         (PhysicalType::Int64, TableDataType::Number(NumberDataType::Int64)) => {
             Ok(Box::new(Int64Iter::new(pages, num_rows, chunk_size)))
         }

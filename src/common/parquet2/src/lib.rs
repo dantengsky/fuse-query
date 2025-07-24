@@ -17,13 +17,14 @@
 //! This crate provides functionality to directly deserialize Parquet data into DataBlock
 //! structures, bypassing the Arrow memory model for improved performance.
 
-mod decompressor;
-mod deser;
-mod string;
 mod date;
 mod decimal;
+mod decompressor;
+mod deser;
 mod number;
+mod string;
 mod util;
 
 pub use decompressor::*;
 pub use deser::*;
+pub use util::from_table_filed_type;

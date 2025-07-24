@@ -116,7 +116,7 @@ impl<T: ParquetInteger> Iterator for IntegerIter<'_, T> {
                         ))));
                     }
 
-                    let (_, _, values_buffer) = match parquet2::page::split_buffer(&data_page) {
+                    let (_, _, values_buffer) = match parquet2::page::split_buffer(data_page) {
                         Ok(result) => result,
                         Err(e) => {
                             return Some(Err(ErrorCode::StorageOther(format!(
