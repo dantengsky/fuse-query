@@ -18,6 +18,7 @@ pub trait ParquetInteger: Copy + Send + Sync + 'static {
 
     /// Get the appropriate from_le_bytes function for this type
     #[cfg(target_endian = "big")]
+    #[inline]
     fn convert_from_le_bytes(bytes: &[u8]) -> Self;
 
     /// Create a column from a vector of this type
@@ -29,6 +30,7 @@ impl ParquetInteger for i32 {
         parquet2::schema::types::PhysicalType::Int32;
 
     #[cfg(target_endian = "big")]
+    #[inline]
     fn convert_from_le_bytes(bytes: &[u8]) -> Self {
         let mut byte_array = [0u8; 4];
         byte_array.copy_from_slice(bytes);
@@ -45,6 +47,7 @@ impl ParquetInteger for i64 {
         parquet2::schema::types::PhysicalType::Int64;
 
     #[cfg(target_endian = "big")]
+    #[inline]
     fn convert_from_le_bytes(bytes: &[u8]) -> Self {
         let mut byte_array = [0u8; 8];
         byte_array.copy_from_slice(bytes);
@@ -147,7 +150,7 @@ impl<T: ParquetInteger> Iterator for IntegerIter<'_, T> {
 
                                 #[cfg(target_endian = "big")]
                                 {
-                                    // On big endian systems, convert byte order efficiently
+                                    // On big endian systems, convert byte order
                                     let byte_size = std::mem::size_of::<T>();
                                     for i in 0..to_read {
                                         let byte_offset = i * byte_size;
