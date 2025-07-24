@@ -87,7 +87,7 @@ impl Iterator for StringIter<'_> {
                         )));
                     }
 
-                    let (_, _, values_buffer) = match parquet2::page::split_buffer(&data_page) {
+                    let (_, _, values_buffer) = match parquet2::page::split_buffer(data_page) {
                         Ok(result) => result,
                         Err(e) => {
                             return Some(Err(ErrorCode::StorageOther(format!(
@@ -147,7 +147,6 @@ impl Iterator for StringIter<'_> {
                                 // match std::str::from_utf8(str_bytes) {
                                 // ...
                                 // }
-
 
                                 // Create View record using the same approach as BinaryViewColumnBuilder
                                 let len: u32 = length as u32;

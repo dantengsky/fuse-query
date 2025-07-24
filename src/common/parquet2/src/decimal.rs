@@ -90,7 +90,7 @@ impl Iterator for DecimalIter<'_> {
                             "Only required Int64 fields supported for DECIMAL(15,2)".to_string(),
                         )));
                     }
-                    let (_, _, values_buffer) = match parquet2::page::split_buffer(&data_page) {
+                    let (_, _, values_buffer) = match parquet2::page::split_buffer(data_page) {
                         Ok(result) => result,
                         Err(e) => {
                             return Some(Err(ErrorCode::StorageOther(format!(
