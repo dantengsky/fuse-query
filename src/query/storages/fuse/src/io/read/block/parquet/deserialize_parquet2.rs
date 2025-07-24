@@ -30,7 +30,10 @@ use databend_common_p2_reader::BuffedBasicDecompressor;
 use databend_common_p2_reader::ColumnIter;
 use databend_common_p2_reader::UncompressedBuffer;
 use databend_common_storage::ColumnNode;
+use databend_storages_common_cache::CacheAccessor;
+use databend_storages_common_cache::CacheManager;
 use databend_storages_common_cache::SizedColumnArray;
+use databend_storages_common_cache::TableDataCacheKey;
 use databend_storages_common_table_meta::meta::ColumnMeta;
 use databend_storages_common_table_meta::meta::Compression;
 use parquet2::compression::Compression as ParquetCompression;
@@ -100,6 +103,12 @@ impl BlockReader {
             }
         }
 
+        let cache = if self.put_cache {
+            CacheManager::instance().get_table_data_array_cache()
+        } else {
+            None
+        };
+
         let mut block_entries = Vec::with_capacity(deserialized_column_arrays.len());
         for (col, table_data_type) in deserialized_column_arrays {
             let entry = match col {
@@ -109,8 +118,14 @@ impl BlockReader {
                         &(&table_data_type.clone()).into(),
                     )?)
                 }
-                DeserializedColumn::Column((_id, col, _size)) => {
-                    // TODO put it in cache
+                DeserializedColumn::Column((column_id, col, size)) => {
+                    if let Some(cache) = &cache {
+                        let meta = column_metas.get(&column_id).unwrap();
+                        let (offset, len) = meta.offset_length();
+                        let key = TableDataCacheKey::new(block_path, column_id, offset, len);
+                        let array = col.clone().into_arrow_rs();
+                        cache.insert(key.into(), (array, size));
+                    };
                     BlockEntry::Column(col)
                 }
             };
@@ -144,15 +159,15 @@ impl BlockReader {
     fn deserialize_field_using_parquet2<'a>(
         &self,
         deserialization_context: &'a FieldDeserializationContext,
-        column: &ColumnNode,
+        column_node: &ColumnNode,
     ) -> Result<Option<DeserializedColumn<'a>>> {
-        let is_nested = column.is_nested;
+        let is_nested = column_node.is_nested;
 
         if is_nested {
             unimplemented!()
         }
 
-        let indices = &column.leaf_indices;
+        let indices = &column_node.leaf_indices;
         let column_chunks = deserialization_context.column_chunks;
         let compression = deserialization_context.compression;
         let uncompressed_buffer = deserialization_context.uncompressed_buffer;
@@ -165,8 +180,8 @@ impl BlockReader {
         let mut field_uncompressed_size = 0;
 
         let parquet_primitive_type = from_table_filed_type(
-            column.table_field.name.clone(),
-            &column.table_field.data_type,
+            column_node.table_field.name.clone(),
+            &column_node.table_field.data_type,
         );
 
         let column_descriptor = Descriptor {
@@ -176,7 +191,7 @@ impl BlockReader {
         };
 
         for (i, _leaf_index) in indices.iter().enumerate() {
-            let column_id = column.leaf_column_ids[i];
+            let column_id = column_node.leaf_column_ids[i];
             if let Some(column_meta) = deserialization_context.column_metas.get(&column_id) {
                 if let Some(chunk) = column_chunks.get(&column_id) {
                     match chunk {
@@ -211,21 +226,21 @@ impl BlockReader {
 
         let num_rows = deserialization_context.num_rows;
         if !field_column_metas.is_empty() {
-            let field_name = column.field.name().to_owned();
+            let field_name = column_node.field.name().to_owned();
 
             // TODO reuse decompression buffer
-            let mut array_iter = Self::chunks_to_col_iter(
+            let mut column_iter = Self::chunks_to_col_iter(
                 field_column_metas,
                 field_column_data,
                 num_rows,
                 field_column_descriptors,
-                column.table_field.clone(),
+                column_node.table_field.clone(),
                 compression,
                 uncompressed_buffer
                     .clone()
                     .unwrap_or_else(|| UncompressedBuffer::new(0)),
             )?;
-            let array = array_iter
+            let column = column_iter
                 .next()
                 .transpose()
                 .map_err(|e| {
@@ -238,7 +253,7 @@ impl BlockReader {
                         "unexpected deserialization error, no array found for field {field_name} "
                     ))
                 })?;
-            assert!(array_iter.next().is_none());
+            assert!(column_iter.next().is_none());
 
             // mark the array
             if is_nested {
@@ -248,10 +263,10 @@ impl BlockReader {
                 unreachable!()
             } else {
                 // the array is deserialized from raw bytes, and intended to be cached
-                let column_id = column.leaf_column_ids[0];
+                let column_id = column_node.leaf_column_ids[0];
                 Ok(Some(DeserializedColumn::Column((
                     column_id,
-                    array,
+                    column,
                     field_uncompressed_size,
                 ))))
             }
