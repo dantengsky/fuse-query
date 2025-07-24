@@ -37,7 +37,7 @@ pub fn from_table_filed_type(field_name: String, field_type: &TableDataType) -> 
             }
         }
         TableDataType::Date => PrimitiveType::from_physical(field_name, PhysicalType::Int32),
-        _ => unimplemented!(),
+        t => unimplemented!("Unsupported type: {:?} ", t),
     };
 
     parquet_primitive_type.field_info.repetition = Repetition::Required;

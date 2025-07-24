@@ -36,7 +36,7 @@ impl ParquetInteger for i32 {
     }
 
     fn create_column(data: Vec<Self>) -> Column {
-        Column::Date(Buffer::from(data))
+        Column::Number(i32::upcast_column(Buffer::from(data)))
     }
 }
 
