@@ -9,11 +9,12 @@ use parquet2::read::PageReader;
 use parquet2::schema::types::PhysicalType;
 use parquet2::schema::types::PrimitiveType;
 
-use super::number::{Int32Iter, Int64Iter};
-use super::string::StringIter;
-use crate::date::DateIter;
-use crate::decimal::DecimalIter;
 use crate::decompressor::BuffedBasicDecompressor;
+use crate::column::DateIter;
+use crate::column::DecimalIter;
+use crate::column::Int32Iter;
+use crate::column::Int64Iter;
+use crate::column::StringIter;
 
 pub type ColumnIter<'a> = Box<dyn Iterator<Item = Result<Column>> + Send + Sync + 'a>;
 

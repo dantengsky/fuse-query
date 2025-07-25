@@ -23,8 +23,7 @@ use parquet2::page::Page;
 use parquet2::read::PageReader;
 use parquet2::schema::types::PhysicalType;
 use parquet2::FallibleStreamingIterator;
-
-use crate::BuffedBasicDecompressor;
+use crate::decompressor::BuffedBasicDecompressor;
 
 pub struct StringIter<'a> {
     pages: BuffedBasicDecompressor<PageReader<&'a [u8]>>,

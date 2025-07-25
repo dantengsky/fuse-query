@@ -15,8 +15,8 @@
 use databend_common_column::buffer::Buffer;
 use databend_common_expression::Column;
 
-use crate::number::IntegerIter;
-use crate::number::ParquetInteger;
+use crate::column::number::IntegerIter;
+use crate::column::number::ParquetInteger;
 
 #[derive(Copy, Clone)]
 #[repr(transparent)]

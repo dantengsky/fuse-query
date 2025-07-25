@@ -21,8 +21,7 @@ use parquet2::page::Page;
 use parquet2::read::PageReader;
 use parquet2::schema::types::PhysicalType;
 use streaming_decompression::FallibleStreamingIterator;
-
-use crate::BuffedBasicDecompressor;
+use crate::decompressor::BuffedBasicDecompressor;
 
 pub struct DecimalIter<'a> {
     pages: BuffedBasicDecompressor<PageReader<&'a [u8]>>,

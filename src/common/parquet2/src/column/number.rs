@@ -6,8 +6,7 @@ use parquet2::encoding::Encoding;
 use parquet2::page::Page;
 use parquet2::read::PageReader;
 use parquet2::FallibleStreamingIterator;
-
-use crate::BuffedBasicDecompressor;
+use crate::decompressor::BuffedBasicDecompressor;
 
 type Result<T> = databend_common_exception::Result<T>;
 
