@@ -29,10 +29,6 @@ use parquet2::read::PageFilter;
 use parquet2::read::PageMetaData;
 use parquet_format_safe::thrift::protocol::TCompactInputProtocol;
 
-use crate::borrowed_page::BorrowedCompressedDataPage;
-use crate::borrowed_page::BorrowedCompressedDictPage;
-use crate::borrowed_page::BorrowedCompressedPage;
-
 pub struct PageReader<'a> {
     // The source data slice
     reader: &'a [u8],
@@ -162,7 +158,7 @@ impl<'a> PageReader<'a> {
     }
 }
 
-pub(super) fn read_page_header_from_slice(
+pub(crate) fn read_page_header_from_slice(
     reader: &mut &[u8],
     max_size: usize,
 ) -> parquet2::error::Result<ParquetPageHeader> {
@@ -171,7 +167,7 @@ pub(super) fn read_page_header_from_slice(
     Ok(page_header)
 }
 
-pub(super) fn get_page_header(
+pub(crate) fn get_page_header(
     header: &ParquetPageHeader,
 ) -> parquet2::error::Result<Option<DataPageHeader>> {
     let type_ = header.type_.try_into()?;

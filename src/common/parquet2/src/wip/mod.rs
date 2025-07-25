@@ -17,15 +17,6 @@
 //! This crate provides functionality to directly deserialize Parquet data into DataBlock
 //! structures, bypassing the Arrow memory model for improved performance.
 
-pub mod column;
 pub mod decompressor;
-pub mod reader;
-pub mod util;
-
-mod wip;
-
-pub use decompressor::BuffedBasicDecompressor;
-pub use decompressor::UncompressedBuffer;
-pub use reader::*;
-pub use util::from_table_filed_type;
-pub use wip::page_reader::PageReader;
+pub mod page_reader;
+pub mod pages;
