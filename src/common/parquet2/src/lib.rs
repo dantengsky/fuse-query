@@ -23,6 +23,8 @@ mod util;
 mod column;
 mod decompressor;
 
+mod column_reader;
+
 pub use reader::*;
 pub use util::from_table_filed_type;
 pub use decompressor::BuffedBasicDecompressor;
