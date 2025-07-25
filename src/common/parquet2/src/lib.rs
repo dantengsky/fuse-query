@@ -25,7 +25,11 @@ mod decompressor;
 
 mod column_reader;
 
+mod borrowed_page;
+
 pub use reader::*;
 pub use util::from_table_filed_type;
 pub use decompressor::BuffedBasicDecompressor;
 pub use decompressor::UncompressedBuffer;
+pub use borrowed_page::{BorrowedCompressedPage, BorrowedCompressedDataPage, BorrowedCompressedDictPage};
+pub use column_reader::PageReader;
