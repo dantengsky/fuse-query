@@ -20,20 +20,20 @@ use databend_common_exception::ErrorCode;
 use databend_common_expression::Column;
 use parquet2::encoding::Encoding;
 use parquet2::page::Page;
+use parquet2::read::Decompressor;
 use parquet2::read::PageReader;
 use parquet2::schema::types::PhysicalType;
 use parquet2::FallibleStreamingIterator;
-use crate::decompressor::BuffedBasicDecompressor;
 
 pub struct StringIter<'a> {
-    pages: BuffedBasicDecompressor<PageReader<&'a [u8]>>,
+    pages: Decompressor<PageReader<&'a [u8]>>,
     chunk_size: Option<usize>,
     num_rows: usize,
 }
 
 impl<'a> StringIter<'a> {
     pub fn new(
-        pages: BuffedBasicDecompressor<PageReader<&'a [u8]>>,
+        pages: Decompressor<PageReader<&'a [u8]>>,
         num_rows: usize,
         chunk_size: Option<usize>,
     ) -> StringIter<'a> {
@@ -113,19 +113,14 @@ impl Iterator for StringIter<'_> {
                                 }
 
                                 // Extract length (first 4 bytes as little-endian u32)
-                                let length_bytes = &binary_values[0..4];
-                                // TODO remove unwrap
-                                let length = u32::from_le_bytes(
-                                    length_bytes
-                                        .try_into()
-                                        .map_err(|e| {
-                                            ErrorCode::StorageOther(format!(
-                                                "Failed to read length prefix: {}",
-                                                e
-                                            ))
-                                        })
-                                        .unwrap(),
-                                ) as usize;
+                                // Optimized for little-endian machines
+                                let length_array = [
+                                    binary_values[0],
+                                    binary_values[1],
+                                    binary_values[2],
+                                    binary_values[3],
+                                ];
+                                let length = u32::from_le_bytes(length_array) as usize;
 
                                 // Skip the length bytes
                                 binary_values = &binary_values[4..];

@@ -5,11 +5,11 @@ use databend_common_expression::types::NumberDataType;
 use databend_common_expression::Column;
 use databend_common_expression::TableDataType;
 use databend_common_expression::TableField;
+use parquet2::read::Decompressor;
 use parquet2::read::PageReader;
 use parquet2::schema::types::PhysicalType;
 use parquet2::schema::types::PrimitiveType;
 
-use crate::decompressor::BuffedBasicDecompressor;
 use crate::column::DateIter;
 use crate::column::DecimalIter;
 use crate::column::Int32Iter;
@@ -19,7 +19,7 @@ use crate::column::StringIter;
 pub type ColumnIter<'a> = Box<dyn Iterator<Item = Result<Column>> + Send + Sync + 'a>;
 
 pub fn page_iter_to_columns<'a>(
-    mut columns: Vec<BuffedBasicDecompressor<PageReader<&'a [u8]>>>,
+    mut columns: Vec<Decompressor<PageReader<&'a [u8]>>>,
     mut types: Vec<&PrimitiveType>,
     field: TableField,
     chunk_size: Option<usize>,

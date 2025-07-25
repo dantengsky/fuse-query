@@ -18,13 +18,13 @@ use databend_common_expression::types::DecimalSize;
 use databend_common_expression::Column;
 use parquet2::encoding::Encoding;
 use parquet2::page::Page;
+use parquet2::read::Decompressor;
 use parquet2::read::PageReader;
 use parquet2::schema::types::PhysicalType;
 use streaming_decompression::FallibleStreamingIterator;
-use crate::decompressor::BuffedBasicDecompressor;
 
 pub struct DecimalIter<'a> {
-    pages: BuffedBasicDecompressor<PageReader<&'a [u8]>>,
+    pages: Decompressor<PageReader<&'a [u8]>>,
     chunk_size: Option<usize>,
     num_rows: usize,
     precision: u8,
@@ -33,7 +33,7 @@ pub struct DecimalIter<'a> {
 
 impl<'a> DecimalIter<'a> {
     pub fn new(
-        pages: BuffedBasicDecompressor<PageReader<&'a [u8]>>,
+        pages: Decompressor<PageReader<&'a [u8]>>,
         num_rows: usize,
         chunk_size: Option<usize>,
         precision: u8,

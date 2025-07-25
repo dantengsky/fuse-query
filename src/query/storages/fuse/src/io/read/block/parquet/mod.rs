@@ -60,7 +60,6 @@ impl BlockReader {
                 compression,
                 column_metas,
                 column_chunks,
-                None,
             )
         } else {
             self.deserialize_using_arrow(

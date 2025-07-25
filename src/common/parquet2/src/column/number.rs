@@ -4,9 +4,8 @@ use databend_common_expression::types::Number;
 use databend_common_expression::Column;
 use parquet2::encoding::Encoding;
 use parquet2::page::Page;
-use parquet2::read::PageReader;
+use parquet2::read::{Decompressor, PageReader};
 use parquet2::FallibleStreamingIterator;
-use crate::decompressor::BuffedBasicDecompressor;
 
 type Result<T> = databend_common_exception::Result<T>;
 
@@ -60,7 +59,7 @@ impl ParquetInteger for i64 {
 
 /// Generic iterator for reading integer values from Parquet pages
 pub struct IntegerIter<'a, T: ParquetInteger> {
-    pages: BuffedBasicDecompressor<PageReader<&'a [u8]>>,
+    pages: Decompressor<PageReader<&'a [u8]>>,
     chunk_size: Option<usize>,
     num_rows: usize,
     _phantom: std::marker::PhantomData<T>,
@@ -68,7 +67,7 @@ pub struct IntegerIter<'a, T: ParquetInteger> {
 
 impl<'a, T: ParquetInteger> IntegerIter<'a, T> {
     pub fn new(
-        pages: BuffedBasicDecompressor<PageReader<&'a [u8]>>,
+        pages: Decompressor<PageReader<&'a [u8]>>,
         num_rows: usize,
         chunk_size: Option<usize>,
     ) -> Self {

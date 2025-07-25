@@ -15,11 +15,6 @@
 //! Zero-copy decompressor that works with the new PageReader API
 //! This is an experimental version that integrates with the zero-copy PageReader
 
-use std::cell::UnsafeCell;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
-use std::sync::Arc;
-
 use parquet2::compression::Compression;
 use parquet2::error::Error;
 use parquet2::metadata::Descriptor;
@@ -30,14 +25,14 @@ use parquet2::FallibleStreamingIterator;
 
 use crate::wip::page_reader::PageReader;
 
-pub struct ZeroCopyDecompressor<'a> {
+pub struct Decompressor<'a> {
     page_reader: PageReader<'a>,
     decompression_buffer: Vec<u8>,
     current_page: Option<Page>,
     was_decompressed: bool,
 }
 
-impl<'a> ZeroCopyDecompressor<'a> {
+impl<'a> Decompressor<'a> {
     pub fn new(page_reader: PageReader<'a>, decompression_buffer: Vec<u8>) -> Self {
         Self {
             page_reader,
@@ -146,7 +141,7 @@ impl<'a> ZeroCopyDecompressor<'a> {
     }
 }
 
-impl<'a> FallibleStreamingIterator for ZeroCopyDecompressor<'a> {
+impl<'a> FallibleStreamingIterator for Decompressor<'a> {
     type Item = Page;
     type Error = Error;
 

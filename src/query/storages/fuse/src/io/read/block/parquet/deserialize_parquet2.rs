@@ -26,9 +26,7 @@ use databend_common_expression::Scalar;
 use databend_common_expression::TableField;
 use databend_common_p2_reader::from_table_filed_type;
 use databend_common_p2_reader::page_iter_to_columns;
-use databend_common_p2_reader::BuffedBasicDecompressor;
 use databend_common_p2_reader::ColumnIter;
-use databend_common_p2_reader::UncompressedBuffer;
 use databend_common_storage::ColumnNode;
 use databend_storages_common_cache::CacheAccessor;
 use databend_storages_common_cache::CacheManager;
@@ -38,6 +36,7 @@ use databend_storages_common_table_meta::meta::ColumnMeta;
 use databend_storages_common_table_meta::meta::Compression;
 use parquet2::compression::Compression as ParquetCompression;
 use parquet2::metadata::Descriptor;
+use parquet2::read::Decompressor;
 use parquet2::read::PageMetaData;
 use parquet2::read::PageReader;
 
@@ -49,7 +48,6 @@ pub struct FieldDeserializationContext<'a> {
     pub(crate) column_chunks: &'a HashMap<ColumnId, DataItem<'a>>,
     pub(crate) num_rows: usize,
     pub(crate) compression: &'a Compression,
-    pub(crate) uncompressed_buffer: &'a Option<Arc<UncompressedBuffer>>,
 }
 
 enum DeserializedColumn<'a> {
@@ -65,7 +63,6 @@ impl BlockReader {
         compression: &Compression,
         column_metas: &HashMap<ColumnId, ColumnMeta>,
         column_chunks: HashMap<ColumnId, DataItem>,
-        uncompressed_buffer: Option<Arc<UncompressedBuffer>>,
     ) -> Result<DataBlock> {
         if column_chunks.is_empty() {
             return self.build_default_values_block(num_rows);
@@ -79,7 +76,6 @@ impl BlockReader {
             column_chunks: &column_chunks,
             num_rows,
             compression,
-            uncompressed_buffer: &uncompressed_buffer,
         };
 
         for column_node in &self.project_column_nodes {
@@ -170,7 +166,6 @@ impl BlockReader {
         let indices = &column_node.leaf_indices;
         let column_chunks = deserialization_context.column_chunks;
         let compression = deserialization_context.compression;
-        let uncompressed_buffer = deserialization_context.uncompressed_buffer;
         // column passed in may be a compound field (with sub leaves),
         // or a leaf column of compound field
         let estimated_cap = indices.len();
@@ -184,6 +179,7 @@ impl BlockReader {
             &column_node.table_field.data_type,
         );
 
+        // TODO calculate max_def_level and max_rep_level
         let column_descriptor = Descriptor {
             primitive_type: parquet_primitive_type,
             max_def_level: 0,
@@ -236,9 +232,6 @@ impl BlockReader {
                 field_column_descriptors,
                 column_node.table_field.clone(),
                 compression,
-                uncompressed_buffer
-                    .clone()
-                    .unwrap_or_else(|| UncompressedBuffer::new(0)),
             )?;
             let column = column_iter
                 .next()
@@ -283,7 +276,6 @@ impl BlockReader {
         column_descriptors: Vec<&Descriptor>,
         field: TableField,
         compression: &Compression,
-        uncompressed_buffer: Arc<UncompressedBuffer>,
     ) -> Result<ColumnIter<'a>> {
         let columns = metas
             .iter()
@@ -306,10 +298,7 @@ impl BlockReader {
                     usize::MAX,
                 );
 
-                Ok(BuffedBasicDecompressor::new(
-                    pages,
-                    uncompressed_buffer.clone(),
-                ))
+                Ok(Decompressor::new(pages, vec![]))
             })
             .collect::<Result<Vec<_>>>()?;
 
