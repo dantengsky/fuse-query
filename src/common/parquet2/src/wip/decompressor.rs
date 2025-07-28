@@ -112,12 +112,7 @@ impl<'a> FallibleStreamingIterator for Decompressor<'a> {
     type Error = Error;
 
     fn advance(&mut self) -> Result<(), Self::Error> {
-        if let Some(page) = self.current_page.as_mut() {
-            if self.was_decompressed {
-                self.buffer = std::mem::take(page.buffer_mut());
-            }
-        }
-
+        self.current_page = None;
         // Get the next page from our zero-copy PageReader
         let page_tuple = self.page_reader.next_page()?;
 
