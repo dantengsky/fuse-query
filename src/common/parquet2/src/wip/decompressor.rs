@@ -49,6 +49,7 @@ impl<'a> Decompressor<'a> {
         uncompressed_buffer: &mut Vec<u8>,
     ) -> parquet2::error::Result<Page> {
         uncompressed_buffer.reserve(compressed_page.uncompressed_size());
+        uncompressed_buffer.clear();
 
         if !compressed_page.is_compressed() {
             // No decompression needed - copy directly from the borrowed slice
@@ -111,7 +112,11 @@ impl<'a> FallibleStreamingIterator for Decompressor<'a> {
     type Error = Error;
 
     fn advance(&mut self) -> Result<(), Self::Error> {
-        self.current_page = None;
+        if let Some(page) = self.current_page.as_mut() {
+            if self.was_decompressed {
+                self.buffer = std::mem::take(page.buffer_mut());
+            }
+        }
 
         // Get the next page from our zero-copy PageReader
         let page_tuple = self.page_reader.next_page()?;
