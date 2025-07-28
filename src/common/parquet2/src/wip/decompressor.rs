@@ -48,8 +48,12 @@ impl<'a> Decompressor<'a> {
         compressed_page: BorrowedCompressedPage<'_>,
         uncompressed_buffer: &mut Vec<u8>,
     ) -> parquet2::error::Result<Page> {
-        uncompressed_buffer.reserve(compressed_page.uncompressed_size());
-        uncompressed_buffer.clear();
+        // TODO not correct for v2 pages
+        let uncompressed_size = compressed_page.uncompressed_size();
+        uncompressed_buffer.reserve(uncompressed_size);
+        unsafe {
+            uncompressed_buffer.set_len(uncompressed_size);
+        }
 
         if !compressed_page.is_compressed() {
             // No decompression needed - copy directly from the borrowed slice
