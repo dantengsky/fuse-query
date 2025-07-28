@@ -48,14 +48,11 @@ impl<'a> Decompressor<'a> {
         compressed_page: BorrowedCompressedPage<'_>,
         uncompressed_buffer: &mut Vec<u8>,
     ) -> parquet2::error::Result<Page> {
-        // Ensure the buffer has enough capacity
-        uncompressed_buffer.clear();
         uncompressed_buffer.reserve(compressed_page.uncompressed_size());
 
-        let decompressed_data = if !compressed_page.is_compressed() {
+        if !compressed_page.is_compressed() {
             // No decompression needed - copy directly from the borrowed slice
             uncompressed_buffer.extend_from_slice(compressed_page.data());
-            uncompressed_buffer.as_mut_slice()
         } else {
             // Decompress directly into the buffer
             match compressed_page.compression() {
@@ -65,7 +62,6 @@ impl<'a> Decompressor<'a> {
                             .map_err(|e| {
                                 Error::OutOfSpec(format!("LZ4 decompression failed: {}", e))
                             })?;
-                    &mut uncompressed_buffer[..decompressed_len]
                 }
                 Compression::Zstd => {
                     use std::io::Read;
@@ -76,7 +72,6 @@ impl<'a> Decompressor<'a> {
                     decoder.read_to_end(uncompressed_buffer).map_err(|e| {
                         Error::OutOfSpec(format!("Zstd decompression failed: {}", e))
                     })?;
-                    uncompressed_buffer.as_mut_slice()
                 }
                 _ => {
                     return Err(Error::FeatureNotSupported(format!(
@@ -92,12 +87,12 @@ impl<'a> Decompressor<'a> {
         let page = match compressed_page {
             BorrowedCompressedPage::Data(compressed_data_page) => Page::Data(DataPage::new(
                 compressed_data_page.header,
-                decompressed_data.to_vec(),
+                std::mem::take(uncompressed_buffer),
                 compressed_data_page.descriptor,
                 None,
             )),
             BorrowedCompressedPage::Dict(compressed_dict_page) => Page::Dict(DictPage::new(
-                decompressed_data.to_vec(),
+                std::mem::take(uncompressed_buffer),
                 compressed_dict_page.num_values,
                 compressed_dict_page.is_sorted,
             )),
