@@ -65,14 +65,11 @@ impl<'a> Decompressor<'a> {
                             })?;
                 }
                 Compression::Zstd => {
-                    use std::io::Read;
-                    let mut decoder = zstd::stream::read::Decoder::new(compressed_page.data())
+                    zstd::bulk::decompress_to_buffer(compressed_page.data(), uncompressed_buffer)
+                        .map(|_| ())
                         .map_err(|e| {
-                            Error::OutOfSpec(format!("Zstd decoder creation failed: {}", e))
+                            Error::OutOfSpec(format!("Zstd decompression failed: {}", e))
                         })?;
-                    decoder.read_to_end(uncompressed_buffer).map_err(|e| {
-                        Error::OutOfSpec(format!("Zstd decompression failed: {}", e))
-                    })?;
                 }
                 _ => {
                     return Err(Error::FeatureNotSupported(format!(
