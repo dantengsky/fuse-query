@@ -26,7 +26,9 @@ use databend_common_expression::Scalar;
 use databend_common_expression::TableField;
 use databend_common_p2_reader::from_table_filed_type;
 use databend_common_p2_reader::page_iter_to_columns;
+use databend_common_p2_reader::wip::decompressor::Decompressor;
 use databend_common_p2_reader::ColumnIter;
+use databend_common_p2_reader::PageReader;
 use databend_common_storage::ColumnNode;
 use databend_storages_common_cache::CacheAccessor;
 use databend_storages_common_cache::CacheManager;
@@ -36,9 +38,7 @@ use databend_storages_common_table_meta::meta::ColumnMeta;
 use databend_storages_common_table_meta::meta::Compression;
 use parquet2::compression::Compression as ParquetCompression;
 use parquet2::metadata::Descriptor;
-use parquet2::read::Decompressor;
 use parquet2::read::PageMetaData;
-use parquet2::read::PageReader;
 
 use super::BlockReader;
 use crate::io::read::block::block_reader_merge_io::DataItem;
@@ -290,13 +290,7 @@ impl BlockReader {
                     descriptor: (*column_descriptor).clone(),
                 };
                 // TODO reuse scratch and uncompressed_buffer
-                let pages = PageReader::new_with_page_meta(
-                    chunk,
-                    page_meta_data,
-                    Arc::new(|_, _| true),
-                    vec![],
-                    usize::MAX,
-                );
+                let pages = PageReader::new_with_page_meta(chunk, page_meta_data, usize::MAX);
 
                 Ok(Decompressor::new(pages, vec![]))
             })

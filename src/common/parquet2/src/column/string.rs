@@ -20,20 +20,20 @@ use databend_common_exception::ErrorCode;
 use databend_common_expression::Column;
 use parquet2::encoding::Encoding;
 use parquet2::page::Page;
-use parquet2::read::Decompressor;
-use parquet2::read::PageReader;
 use parquet2::schema::types::PhysicalType;
 use parquet2::FallibleStreamingIterator;
 
+use crate::wip::decompressor::Decompressor;
+
 pub struct StringIter<'a> {
-    pages: Decompressor<PageReader<&'a [u8]>>,
+    pages: Decompressor<'a>,
     chunk_size: Option<usize>,
     num_rows: usize,
 }
 
 impl<'a> StringIter<'a> {
     pub fn new(
-        pages: Decompressor<PageReader<&'a [u8]>>,
+        pages: Decompressor<'a>,
         num_rows: usize,
         chunk_size: Option<usize>,
     ) -> StringIter<'a> {
@@ -219,14 +219,12 @@ impl Iterator for StringIter<'_> {
         let views_buffer = Buffer::from(views);
 
         // Safely create Utf8ViewColumn
-        let column = unsafe {
-            Utf8ViewColumn::new_unchecked(
-                views_buffer,
-                buffers.into(),
-                total_bytes_len,
-                total_buffer_len,
-            )
-        };
+        let column = Utf8ViewColumn::new_unchecked(
+            views_buffer,
+            buffers.into(),
+            total_bytes_len,
+            total_buffer_len,
+        );
 
         Some(Ok(Column::String(column)))
     }

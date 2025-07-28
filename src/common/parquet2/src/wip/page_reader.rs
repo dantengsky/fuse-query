@@ -25,9 +25,12 @@ use parquet2::metadata::Descriptor;
 use parquet2::page::DataPageHeader;
 use parquet2::page::PageType;
 use parquet2::page::ParquetPageHeader;
-use parquet2::read::PageFilter;
 use parquet2::read::PageMetaData;
 use parquet_format_safe::thrift::protocol::TCompactInputProtocol;
+
+use crate::wip::pages::BorrowedCompressedDataPage;
+use crate::wip::pages::BorrowedCompressedDictPage;
+use crate::wip::pages::BorrowedCompressedPage;
 
 pub struct PageReader<'a> {
     // The source data slice
@@ -41,8 +44,6 @@ pub struct PageReader<'a> {
     // The number of total values in this column chunk.
     total_num_values: i64,
 
-    pages_filter: PageFilter,
-
     descriptor: Descriptor,
 
     // Maximum page size (compressed or uncompressed) to limit allocations
@@ -54,13 +55,8 @@ impl<'a> PageReader<'a> {
     ///
     /// It assumes that the reader has been `seeked` to the beginning of `column`.
     /// The parameter `max_header_size`
-    pub fn new(
-        reader: &'a [u8],
-        column: &ColumnChunkMetaData,
-        pages_filter: PageFilter,
-        max_page_size: usize,
-    ) -> Self {
-        Self::new_with_page_meta(reader, column.into(), pages_filter, max_page_size)
+    pub fn new(reader: &'a [u8], column: &ColumnChunkMetaData, max_page_size: usize) -> Self {
+        Self::new_with_page_meta(reader, column.into(), max_page_size)
     }
 
     /// Create a a new [`parquet2::read::PageReader`] with [`PageMetaData`].
@@ -69,7 +65,6 @@ impl<'a> PageReader<'a> {
     pub fn new_with_page_meta(
         reader: &'a [u8],
         reader_meta: PageMetaData,
-        pages_filter: PageFilter,
         max_page_size: usize,
     ) -> Self {
         Self {
@@ -78,7 +73,6 @@ impl<'a> PageReader<'a> {
             compression: reader_meta.compression,
             seen_num_values: 0,
             descriptor: reader_meta.descriptor,
-            pages_filter,
             max_page_size,
         }
     }
@@ -86,8 +80,8 @@ impl<'a> PageReader<'a> {
     /// Zero-copy page reading that borrows data from the slice instead of copying
     pub fn next_page(
         &mut self,
-    ) -> parquet2::error::Result<Option<(DataPageHeader, &[u8], Compression, usize, Descriptor)>>
-    {
+        //) -> parquet2::error::Result<Option<(DataPageHeader, &[u8], Compression, usize, Descriptor)>>
+    ) -> parquet2::error::Result<Option<BorrowedCompressedPage>> {
         if self.seen_num_values >= self.total_num_values {
             return Ok(None);
         };
@@ -124,12 +118,14 @@ impl<'a> PageReader<'a> {
                             .to_string(),
                     )
                 })?;
-                Ok(Some((
-                    DataPageHeader::V1(header),
-                    data_slice,
-                    self.compression,
-                    page_header.uncompressed_page_size.try_into()?,
-                    self.descriptor.clone(),
+                Ok(Some(BorrowedCompressedPage::Data(
+                    BorrowedCompressedDataPage::new(
+                        DataPageHeader::V1(header),
+                        data_slice,
+                        self.compression,
+                        page_header.uncompressed_page_size.try_into()?,
+                        self.descriptor.clone(),
+                    ),
                 )))
             }
             PageType::DataPageV2 => {
@@ -139,20 +135,34 @@ impl<'a> PageReader<'a> {
                             .to_string(),
                     )
                 })?;
-                Ok(Some((
-                    DataPageHeader::V2(header),
-                    data_slice,
-                    self.compression,
-                    page_header.uncompressed_page_size.try_into()?,
-                    self.descriptor.clone(),
+                Ok(Some(BorrowedCompressedPage::Data(
+                    BorrowedCompressedDataPage::new(
+                        DataPageHeader::V2(header),
+                        data_slice,
+                        self.compression,
+                        page_header.uncompressed_page_size.try_into()?,
+                        self.descriptor.clone(),
+                    ),
                 )))
             }
             PageType::DictionaryPage => {
-                // For now, skip dictionary pages or handle them separately
-                // This is a simplified implementation
-                Err(Error::OutOfSpec(
-                    "Dictionary pages not yet supported in simplified API".to_string(),
-                ))
+                let dict_header = page_header.dictionary_page_header.as_ref().ok_or_else(|| {
+                    Error::OutOfSpec(
+                        "The page header type is a dictionary page but the dictionary header is empty".to_string(),
+                    )
+                })?;
+                let num_values = dict_header.num_values.try_into()?;
+                let is_sorted = dict_header.is_sorted.unwrap_or(false);
+
+                Ok(Some(BorrowedCompressedPage::Dict(
+                    BorrowedCompressedDictPage::new(
+                        data_slice,
+                        self.compression,
+                        page_header.uncompressed_page_size.try_into()?,
+                        num_values,
+                        is_sorted,
+                    ),
+                )))
             }
         }
     }

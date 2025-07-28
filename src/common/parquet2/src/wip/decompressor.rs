@@ -17,13 +17,13 @@
 
 use parquet2::compression::Compression;
 use parquet2::error::Error;
-use parquet2::metadata::Descriptor;
 use parquet2::page::DataPage;
-use parquet2::page::DataPageHeader;
+use parquet2::page::DictPage;
 use parquet2::page::Page;
 use parquet2::FallibleStreamingIterator;
 
 use crate::wip::page_reader::PageReader;
+use crate::wip::pages::BorrowedCompressedPage;
 
 pub struct Decompressor<'a> {
     page_reader: PageReader<'a>,
@@ -45,35 +45,32 @@ impl<'a> Decompressor<'a> {
     /// Decompress borrowed page data directly into the uncompressed buffer
     /// This avoids the Vec<u8> copy by working directly with the borrowed slice
     fn decompress_borrowed_page(
-        header: DataPageHeader,
-        compressed_data: &[u8],
-        compression: Compression,
-        uncompressed_size: usize,
-        descriptor: Descriptor,
+        compressed_page: BorrowedCompressedPage<'_>,
         uncompressed_buffer: &mut Vec<u8>,
     ) -> parquet2::error::Result<Page> {
         // Ensure the buffer has enough capacity
         uncompressed_buffer.clear();
-        uncompressed_buffer.reserve(uncompressed_size);
+        uncompressed_buffer.reserve(compressed_page.uncompressed_size());
 
-        let decompressed_data = if compression == Compression::Uncompressed {
+        let decompressed_data = if !compressed_page.is_compressed() {
             // No decompression needed - copy directly from the borrowed slice
-            uncompressed_buffer.extend_from_slice(compressed_data);
+            uncompressed_buffer.extend_from_slice(compressed_page.data());
             uncompressed_buffer.as_mut_slice()
         } else {
             // Decompress directly into the buffer
-            match compression {
+            match compressed_page.compression() {
                 Compression::Lz4 => {
                     let decompressed_len =
-                        lz4_flex::decompress_into(compressed_data, uncompressed_buffer).map_err(
-                            |e| Error::OutOfSpec(format!("LZ4 decompression failed: {}", e)),
-                        )?;
+                        lz4_flex::decompress_into(compressed_page.data(), uncompressed_buffer)
+                            .map_err(|e| {
+                                Error::OutOfSpec(format!("LZ4 decompression failed: {}", e))
+                            })?;
                     &mut uncompressed_buffer[..decompressed_len]
                 }
                 Compression::Zstd => {
                     use std::io::Read;
-                    let mut decoder =
-                        zstd::stream::read::Decoder::new(compressed_data).map_err(|e| {
+                    let mut decoder = zstd::stream::read::Decoder::new(compressed_page.data())
+                        .map_err(|e| {
                             Error::OutOfSpec(format!("Zstd decoder creation failed: {}", e))
                         })?;
                     decoder.read_to_end(uncompressed_buffer).map_err(|e| {
@@ -84,7 +81,7 @@ impl<'a> Decompressor<'a> {
                 _ => {
                     return Err(Error::FeatureNotSupported(format!(
                         "Compression {:?} not supported",
-                        compression
+                        compressed_page.compression()
                     )));
                 }
             }
@@ -92,9 +89,21 @@ impl<'a> Decompressor<'a> {
 
         // Create a DataPage from the decompressed data
         // Note: We need to take ownership of the buffer data here
-        let data_page = DataPage::new(header, decompressed_data.to_vec(), descriptor, None);
+        let page = match compressed_page {
+            BorrowedCompressedPage::Data(compressed_data_page) => Page::Data(DataPage::new(
+                compressed_data_page.header,
+                decompressed_data.to_vec(),
+                compressed_data_page.descriptor,
+                None,
+            )),
+            BorrowedCompressedPage::Dict(compressed_dict_page) => Page::Dict(DictPage::new(
+                decompressed_data.to_vec(),
+                compressed_dict_page.num_values,
+                compressed_dict_page.is_sorted,
+            )),
+        };
 
-        Ok(Page::Data(data_page))
+        Ok(page)
     }
 
     fn into_buffer(self) -> Vec<u8> {
@@ -112,19 +121,14 @@ impl<'a> FallibleStreamingIterator for Decompressor<'a> {
         // Get the next page from our zero-copy PageReader
         let page_tuple = self.page_reader.next_page()?;
 
-        if let Some((header, data, compression, uncompressed_size, descriptor)) = page_tuple {
+        // if let Some((header, data, compression, uncompressed_size, descriptor)) = page_tuple {
+        if let Some(page) = page_tuple {
             // Set decompression flag
-            self.was_decompressed = compression != Compression::Uncompressed;
+            self.was_decompressed = page.compression() != Compression::Uncompressed;
 
             // Decompress the page directly into the buffer
-            let decompress_page = Self::decompress_borrowed_page(
-                header,
-                data,
-                compression,
-                uncompressed_size,
-                descriptor,
-                &mut self.decompression_buffer,
-            )?;
+            let decompress_page =
+                Self::decompress_borrowed_page(page, &mut self.decompression_buffer)?;
 
             self.current_page = Some(decompress_page);
         }
