@@ -63,44 +63,6 @@ impl<'a> Decompressor<'a> {
         } else {
             // Decompress directly into the buffer
             match compression {
-                #[cfg(feature = "compression")]
-                Compression::Snappy => {
-                    use snap::raw::Decoder;
-                    let mut decoder = Decoder::new();
-                    let decompressed_len = decoder
-                        .decompress(compressed_data, uncompressed_buffer)
-                        .map_err(|e| {
-                            Error::OutOfSpec(format!("Snappy decompression failed: {}", e))
-                        })?;
-                    &mut uncompressed_buffer[..decompressed_len]
-                }
-                #[cfg(feature = "compression")]
-                Compression::Gzip => {
-                    use std::io::Read;
-
-                    use flate2::read::GzDecoder;
-                    let mut decoder = GzDecoder::new(compressed_data);
-                    decoder.read_to_end(uncompressed_buffer).map_err(|e| {
-                        Error::OutOfSpec(format!("Gzip decompression failed: {}", e))
-                    })?;
-                    uncompressed_buffer.as_mut_slice()
-                }
-                #[cfg(feature = "compression")]
-                Compression::Lzo => {
-                    return Err(Error::FeatureNotSupported(
-                        "LZO compression not supported".to_string(),
-                    ));
-                }
-                #[cfg(feature = "compression")]
-                Compression::Brotli => {
-                    use std::io::Read;
-                    let mut decoder = brotli::Decompressor::new(compressed_data, 4096);
-                    decoder.read_to_end(uncompressed_buffer).map_err(|e| {
-                        Error::OutOfSpec(format!("Brotli decompression failed: {}", e))
-                    })?;
-                    uncompressed_buffer.as_mut_slice()
-                }
-                #[cfg(feature = "compression")]
                 Compression::Lz4 => {
                     let decompressed_len =
                         lz4_flex::decompress_into(compressed_data, uncompressed_buffer).map_err(
@@ -108,7 +70,6 @@ impl<'a> Decompressor<'a> {
                         )?;
                     &mut uncompressed_buffer[..decompressed_len]
                 }
-                #[cfg(feature = "compression")]
                 Compression::Zstd => {
                     use std::io::Read;
                     let mut decoder =

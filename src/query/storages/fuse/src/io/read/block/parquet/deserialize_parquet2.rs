@@ -179,7 +179,7 @@ impl BlockReader {
             &column_node.table_field.data_type,
         );
 
-        // TODO calculate max_def_level and max_rep_level
+        // TODO calculate max_def_level and max_rep_level from Field
         let column_descriptor = Descriptor {
             primitive_type: parquet_primitive_type,
             max_def_level: 0,

@@ -23,6 +23,7 @@ env_logger = { workspace = true }
 hashbrown_v0_14 = { workspace = true }
 log = { workspace = true }
 lz4 = { workspace = true }
+lz4_flex = { version = "^0.9" }
 match-template = { workspace = true }
 num = { workspace = true, features = ["std"] }
 opendal = { workspace = true }

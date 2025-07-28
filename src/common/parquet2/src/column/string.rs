@@ -55,6 +55,8 @@ impl Iterator for StringIter<'_> {
         let mut offset: usize = 0;
         let mut bytes = Vec::new(); // Store all string bytes
 
+        let mut total_bytes_len = 0;
+
         while views.len() < self.chunk_size.unwrap_or(self.num_rows) {
             let page = match self.pages.next() {
                 Err(e) => {
@@ -180,6 +182,7 @@ impl Iterator for StringIter<'_> {
                                 // Create View from bytes
                                 let view = View::from_le_bytes(payload);
                                 views.push(view);
+                                total_bytes_len += view.length as usize;
                                 count += 1;
 
                                 // Move to next string
@@ -210,6 +213,8 @@ impl Iterator for StringIter<'_> {
             return None;
         }
 
+        // For all plain encoding strings, a single buffer is used
+        let total_buffer_len = bytes.len();
         // All strings collected, convert to Buffer
         buffers.push(Buffer::from(bytes));
 
@@ -217,8 +222,14 @@ impl Iterator for StringIter<'_> {
         let views_buffer = Buffer::from(views);
 
         // Safely create Utf8ViewColumn
-        let column =
-            unsafe { Utf8ViewColumn::new_unchecked_unknown_md(views_buffer, buffers.into(), None) };
+        let column = unsafe {
+            Utf8ViewColumn::new_unchecked(
+                views_buffer,
+                buffers.into(),
+                total_bytes_len,
+                total_buffer_len,
+            )
+        };
 
         Some(Ok(Column::String(column)))
     }
