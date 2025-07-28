@@ -49,15 +49,16 @@ impl Iterator for StringIter<'_> {
     type Item = databend_common_exception::Result<Column>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        let limit = self.chunk_size.unwrap_or(self.num_rows);
         // Use View structure and buffer directly, similar to read_view_col implementation
-        let mut views = Vec::with_capacity(self.chunk_size.unwrap_or(self.num_rows));
+        let mut views = Vec::with_capacity(limit);
         let mut buffers = Vec::new();
         let mut offset: usize = 0;
         let mut bytes = Vec::new(); // Store all string bytes
 
         let mut total_bytes_len = 0;
 
-        while views.len() < self.chunk_size.unwrap_or(self.num_rows) {
+        while views.len() < limit {
             let page = match self.pages.next() {
                 Err(e) => {
                     return Some(Err(ErrorCode::StorageOther(format!(
@@ -138,11 +139,7 @@ impl Iterator for StringIter<'_> {
                                 // Extract the string value
                                 let str_bytes = &binary_values[0..length];
 
-                                // TODO do we need this validation?
-                                // Validate UTF-8
-                                // match std::str::from_utf8(str_bytes) {
-                                // ...
-                                // }
+                                // TODO do we need validate utf8?
 
                                 // Create View record using the same approach as BinaryViewColumnBuilder
                                 let len: u32 = length as u32;
