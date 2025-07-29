@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Zero-copy decompressor that works with the new PageReader API
+//! Simple decompressor that works with the new PageReader API
 //! This is an experimental version that integrates with the zero-copy PageReader
 
 use parquet2::compression::Compression;
@@ -48,7 +48,7 @@ impl<'a> Decompressor<'a> {
         compressed_page: BorrowedCompressedPage<'_>,
         uncompressed_buffer: &mut Vec<u8>,
     ) -> parquet2::error::Result<Page> {
-        // TODO not correct for v2 pages
+        // TODO Here we are assuming V1 pages, this is not correct for v2 pages
         let uncompressed_size = compressed_page.uncompressed_size();
         uncompressed_buffer.reserve(uncompressed_size);
         unsafe {
@@ -117,7 +117,6 @@ impl<'a> FallibleStreamingIterator for Decompressor<'a> {
         // Get the next page from our zero-copy PageReader
         let page_tuple = self.page_reader.next_page()?;
 
-        // if let Some((header, data, compression, uncompressed_size, descriptor)) = page_tuple {
         if let Some(page) = page_tuple {
             // Set decompression flag
             self.was_decompressed = page.compression() != Compression::Uncompressed;

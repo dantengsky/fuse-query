@@ -18,11 +18,11 @@
 //! structures, bypassing the Arrow memory model for improved performance.
 
 pub mod column;
-pub mod reader;
+pub mod column_reader;
 pub mod util;
 
 pub mod wip;
 
-pub use reader::*;
+pub use column_reader::*;
 pub use util::from_table_filed_type;
 pub use wip::page_reader::PageReader;

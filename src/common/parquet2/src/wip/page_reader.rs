@@ -32,9 +32,10 @@ use crate::wip::pages::BorrowedCompressedDataPage;
 use crate::wip::pages::BorrowedCompressedDictPage;
 use crate::wip::pages::BorrowedCompressedPage;
 
+/// A reader for parquet pages, which reads data from a slice
 pub struct PageReader<'a> {
     // The source data slice
-    reader: &'a [u8],
+    raw_data_slice: &'a [u8],
 
     compression: Compression,
 
@@ -51,24 +52,17 @@ pub struct PageReader<'a> {
 }
 
 impl<'a> PageReader<'a> {
-    /// Returns a new [`parquet2::read::PageReader`].
-    ///
-    /// It assumes that the reader has been `seeked` to the beginning of `column`.
-    /// The parameter `max_header_size`
-    pub fn new(reader: &'a [u8], column: &ColumnChunkMetaData, max_page_size: usize) -> Self {
-        Self::new_with_page_meta(reader, column.into(), max_page_size)
+    pub fn new(raw_data: &'a [u8], column: &ColumnChunkMetaData, max_page_size: usize) -> Self {
+        Self::new_with_page_meta(raw_data, column.into(), max_page_size)
     }
 
-    /// Create a a new [`parquet2::read::PageReader`] with [`PageMetaData`].
-    ///
-    /// It assumes that the reader has been `seeked` to the beginning of `column`.
     pub fn new_with_page_meta(
-        reader: &'a [u8],
+        raw_data: &'a [u8],
         reader_meta: PageMetaData,
         max_page_size: usize,
     ) -> Self {
         Self {
-            reader,
+            raw_data_slice: raw_data,
             total_num_values: reader_meta.num_values,
             compression: reader_meta.compression,
             seen_num_values: 0,
@@ -77,16 +71,13 @@ impl<'a> PageReader<'a> {
         }
     }
 
-    /// Zero-copy page reading that borrows data from the slice instead of copying
-    pub fn next_page(
-        &mut self,
-        //) -> parquet2::error::Result<Option<(DataPageHeader, &[u8], Compression, usize, Descriptor)>>
-    ) -> parquet2::error::Result<Option<BorrowedCompressedPage>> {
+    pub fn next_page(&mut self) -> parquet2::error::Result<Option<BorrowedCompressedPage>> {
         if self.seen_num_values >= self.total_num_values {
             return Ok(None);
         };
 
-        let page_header = read_page_header_from_slice(&mut self.reader, self.max_page_size)?;
+        let page_header =
+            read_page_header_from_slice(&mut self.raw_data_slice, self.max_page_size)?;
 
         self.seen_num_values += get_page_header(&page_header)?
             .map(|x| x.num_values() as i64)
@@ -98,16 +89,16 @@ impl<'a> PageReader<'a> {
             return Err(Error::WouldOverAllocate);
         }
 
-        if self.reader.len() < read_size {
+        if self.raw_data_slice.len() < read_size {
             return Err(Error::OutOfSpec(
                 "Not enough data in slice for page".to_string(),
             ));
         }
 
         // Zero-copy: borrow the data directly from the slice
-        let data_slice = &self.reader[..read_size];
+        let data_slice = &self.raw_data_slice[..read_size];
         // Advance the reader position
-        self.reader = &self.reader[read_size..];
+        self.raw_data_slice = &self.raw_data_slice[read_size..];
 
         // Extract page information and return as tuple for zero-copy access
         match page_header.type_.try_into()? {
@@ -168,7 +159,7 @@ impl<'a> PageReader<'a> {
     }
 }
 
-pub(crate) fn read_page_header_from_slice(
+fn read_page_header_from_slice(
     reader: &mut &[u8],
     max_size: usize,
 ) -> parquet2::error::Result<ParquetPageHeader> {
@@ -188,6 +179,8 @@ pub(crate) fn get_page_header(
                     "The page header type is a v1 data page but the v1 header is empty".to_string(),
                 )
             })?;
+
+            // Validate encodings
             let _: Encoding = header.encoding.try_into()?;
             let _: Encoding = header.repetition_level_encoding.try_into()?;
             let _: Encoding = header.definition_level_encoding.try_into()?;
@@ -200,6 +193,7 @@ pub(crate) fn get_page_header(
                     "The page header type is a v1 data page but the v1 header is empty".to_string(),
                 )
             })?;
+            // Validate encoding
             let _: Encoding = header.encoding.try_into()?;
             Some(DataPageHeader::V2(header))
         }
