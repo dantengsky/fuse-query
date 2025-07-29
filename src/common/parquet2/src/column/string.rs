@@ -53,8 +53,6 @@ impl Iterator for StringIter<'_> {
         // Use View structure and buffer directly, similar to read_view_col implementation
         let mut views = Vec::with_capacity(limit);
         let mut buffers = Vec::new();
-        let mut offset: usize = 0;
-        let mut bytes = Vec::new(); // Store all string bytes
 
         let mut total_bytes_len = 0;
 
@@ -101,10 +99,15 @@ impl Iterator for StringIter<'_> {
 
                     match data_page.encoding() {
                         Encoding::Plain => {
+                            let estimated_capacity = values_buffer.len();
+                            let mut page_bytes = Vec::with_capacity(estimated_capacity);
+                            let mut page_offset = 0usize;
+                            let current_buffer_index = buffers.len() as u32;
+
                             // Parse binary data - Parquet ByteArray format is:
                             // [4-byte length][data bytes]...[4-byte length][data bytes]...
                             let mut binary_values = values_buffer;
-                            let remaining = self.chunk_size.unwrap_or(self.num_rows) - views.len();
+                            let remaining = limit - views.len();
                             let mut count = 0;
 
                             while !binary_values.is_empty() && count < remaining {
@@ -162,18 +165,17 @@ impl Iterator for StringIter<'_> {
                                     // Set prefix (first 4 bytes)
                                     payload[4..8].copy_from_slice(&str_bytes[..4]);
 
-                                    // We only use one buffer (index 0)
-                                    // Since payload is initialized to zero, we don't need to set it
-                                    // let buffer_idx: u32 = 0;
-                                    // payload[8..12].copy_from_slice(&buffer_idx.to_le_bytes());
+                                    // Set buffer index (当前页面的缓冲区索引)
+                                    payload[8..12]
+                                        .copy_from_slice(&current_buffer_index.to_le_bytes());
 
-                                    // Set offset within buffer
-                                    let offset_u32 = offset as u32;
+                                    // Set offset within current page buffer
+                                    let offset_u32 = page_offset as u32;
                                     payload[12..16].copy_from_slice(&offset_u32.to_le_bytes());
 
-                                    // Append string bytes to the buffer
-                                    bytes.extend_from_slice(str_bytes);
-                                    offset += length;
+                                    // Append string bytes to the current page buffer
+                                    page_bytes.extend_from_slice(str_bytes);
+                                    page_offset += length;
                                 }
 
                                 // Create View from bytes
@@ -186,7 +188,12 @@ impl Iterator for StringIter<'_> {
                                 binary_values = &binary_values[length..];
                             }
 
-                            if views.len() >= self.chunk_size.unwrap_or(self.num_rows) {
+                            // 将当前页面的缓冲区添加到 buffers 中（如果有数据的话）
+                            if !page_bytes.is_empty() {
+                                buffers.push(Buffer::from(page_bytes));
+                            }
+
+                            if views.len() >= limit {
                                 break;
                             }
                         }
@@ -210,10 +217,8 @@ impl Iterator for StringIter<'_> {
             return None;
         }
 
-        // For all plain encoding strings, a single buffer is used
-        let total_buffer_len = bytes.len();
-        // All strings collected, convert to Buffer
-        buffers.push(Buffer::from(bytes));
+        // 计算总的缓冲区长度
+        let total_buffer_len = buffers.iter().map(|b| b.len()).sum();
 
         // Convert views Vec to Buffer
         let views_buffer = Buffer::from(views);

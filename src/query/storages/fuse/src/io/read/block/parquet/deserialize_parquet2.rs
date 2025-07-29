@@ -107,6 +107,7 @@ impl BlockReader {
 
         let mut block_entries = Vec::with_capacity(deserialized_column_arrays.len());
         for (col, table_data_type) in deserialized_column_arrays {
+            // TODO we should cache Column when new deserializer is reader
             let entry = match col {
                 DeserializedColumn::FromCache(arrow_array) => {
                     BlockEntry::Column(Column::from_arrow_rs(
@@ -159,6 +160,7 @@ impl BlockReader {
     ) -> Result<Option<DeserializedColumn<'a>>> {
         let is_nested = column_node.is_nested;
 
+        // TODO field with nested type will be handled later
         if is_nested {
             unimplemented!()
         }
@@ -179,7 +181,7 @@ impl BlockReader {
             &column_node.table_field.data_type,
         );
 
-        // TODO calculate max_def_level and max_rep_level from Field
+        // TODO calculate max_def_level and max_rep_level from Field type
         let column_descriptor = Descriptor {
             primitive_type: parquet_primitive_type,
             max_def_level: 0,
@@ -336,7 +338,7 @@ impl BlockReader {
     }
 }
 
-pub fn create_with_opt_default_value(
+fn create_with_opt_default_value(
     block_entries: Vec<BlockEntry>,
     schema: &DataSchema,
     default_vals: &[Option<Scalar>],
