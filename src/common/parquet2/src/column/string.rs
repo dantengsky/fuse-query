@@ -165,7 +165,7 @@ impl Iterator for StringIter<'_> {
                                     // Set prefix (first 4 bytes)
                                     payload[4..8].copy_from_slice(&str_bytes[..4]);
 
-                                    // Set buffer index (当前页面的缓冲区索引)
+                                    // Set buffer index (current page buffer index)
                                     payload[8..12]
                                         .copy_from_slice(&current_buffer_index.to_le_bytes());
 
@@ -188,7 +188,7 @@ impl Iterator for StringIter<'_> {
                                 binary_values = &binary_values[length..];
                             }
 
-                            // 将当前页面的缓冲区添加到 buffers 中（如果有数据的话）
+                            // Add current page buffer to buffers if it has data
                             if !page_bytes.is_empty() {
                                 buffers.push(Buffer::from(page_bytes));
                             }
@@ -217,7 +217,7 @@ impl Iterator for StringIter<'_> {
             return None;
         }
 
-        // 计算总的缓冲区长度
+        // Calculate total buffer length
         let total_buffer_len = buffers.iter().map(|b| b.len()).sum();
 
         // Convert views Vec to Buffer
