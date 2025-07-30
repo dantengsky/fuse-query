@@ -289,11 +289,12 @@ impl<'a> StringIter<'a> {
                     // Use unsafe direct memory operations to eliminate Vec::push overhead
                     unsafe {
                         let views_ptr = views.as_mut_ptr().add(start_len);
-                        let mut count = 0;
 
+                        // Pre-decode all indices into a buffer to reduce decoder.next() overhead
+                        let mut indices = Vec::with_capacity(remaining);
                         for _ in 0..remaining {
-                            let index = match decoder.next() {
-                                Some(Ok(idx)) => idx as usize,
+                            match decoder.next() {
+                                Some(Ok(idx)) => indices.push(idx as usize),
                                 Some(Err(e)) => {
                                     return Err(ErrorCode::Internal(format!(
                                         "Failed to decode RLE/Bit-packed indices: {}",
@@ -302,7 +303,10 @@ impl<'a> StringIter<'a> {
                                 }
                                 None => break,
                             };
+                        }
 
+                        // Batch process all indices with direct memory writes
+                        for (i, &index) in indices.iter().enumerate() {
                             if index >= dict_views.len() {
                                 return Err(ErrorCode::Internal(format!(
                                     "Dictionary index {} out of bounds (dictionary size: {})",
@@ -312,13 +316,12 @@ impl<'a> StringIter<'a> {
                             }
 
                             // Direct memory write - no Vec::push overhead
-                            *views_ptr.add(count) = *dict_views.get_unchecked(index);
+                            *views_ptr.add(i) = *dict_views.get_unchecked(index);
                             *total_bytes_len += *dict_lens.get_unchecked(index);
-                            count += 1;
                         }
 
                         // Update Vec length once at the end
-                        views.set_len(start_len + count);
+                        views.set_len(start_len + indices.len());
                     }
                 }
 
@@ -377,11 +380,12 @@ impl<'a> StringIter<'a> {
                 // Use unsafe direct memory operations to eliminate Vec::push overhead
                 unsafe {
                     let views_ptr = views.as_mut_ptr().add(start_len);
-                    let mut count = 0;
 
+                    // Pre-decode all indices into a buffer to reduce decoder.next() overhead
+                    let mut indices = Vec::with_capacity(remaining);
                     for _ in 0..remaining {
-                        let index = match decoder.next() {
-                            Some(Ok(idx)) => idx as usize,
+                        match decoder.next() {
+                            Some(Ok(idx)) => indices.push(idx as usize),
                             Some(Err(e)) => {
                                 return Err(ErrorCode::Internal(format!(
                                     "Failed to decode RLE/Bit-packed indices: {}",
@@ -390,7 +394,10 @@ impl<'a> StringIter<'a> {
                             }
                             None => break,
                         };
+                    }
 
+                    // Batch process all indices with direct memory writes
+                    for (i, &index) in indices.iter().enumerate() {
                         if index >= dict.len() {
                             return Err(ErrorCode::Internal(format!(
                                 "Dictionary index {} out of bounds (dictionary size: {})",
@@ -400,13 +407,12 @@ impl<'a> StringIter<'a> {
                         }
 
                         // Direct memory write - no capacity check, no add_ptr overhead
-                        *views_ptr.add(count) = Self::create_inline_view(&dict[index]);
+                        *views_ptr.add(i) = Self::create_inline_view(&dict[index]);
                         *total_bytes_len += dict_lens[index];
-                        count += 1;
                     }
 
                     // Update Vec length once at the end
-                    views.set_len(start_len + count);
+                    views.set_len(start_len + indices.len());
                 }
             } else {
                 return Err(ErrorCode::Internal(
