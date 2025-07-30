@@ -422,11 +422,10 @@ impl<'a> StringIter<'a> {
         Ok(())
     }
 
+    // TODO rename this, it is not only called for processing small strings
     /// Create an inline View for small strings (≤12 bytes) with maximum performance
     #[inline]
     fn create_inline_view(string_data: &[u8]) -> View {
-        debug_assert!(string_data.len() <= 12);
-
         unsafe {
             let mut payload = [0u8; 16];
             let len = string_data.len() as u32;
