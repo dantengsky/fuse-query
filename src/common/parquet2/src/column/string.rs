@@ -15,7 +15,6 @@
 use databend_common_column::binview::Utf8ViewColumn;
 use databend_common_column::binview::View;
 use databend_common_column::buffer::Buffer;
-use databend_common_column::types::NativeType;
 use databend_common_exception::ErrorCode;
 use databend_common_expression::Column;
 use parquet2::encoding::hybrid_rle::HybridRleDecoder;
@@ -86,6 +85,8 @@ impl<'a> StringIter<'a> {
     }
 
     /// Create a View from a string slice, handling both inline and buffer storage
+    /// Optimized version to reduce memory copies and improve performance
+    #[inline]
     fn create_view_from_string(
         string_data: &[u8],
         page_bytes: &mut Vec<u8>,
@@ -93,29 +94,63 @@ impl<'a> StringIter<'a> {
         buffer_index: u32,
     ) -> View {
         let len = string_data.len() as u32;
-        let mut payload = [0u8; 16];
-        payload[0..4].copy_from_slice(&len.to_le_bytes());
 
         if len <= 12 {
-            // Small string: store inline
-            payload[4..4 + len as usize].copy_from_slice(string_data);
+            // Small string: store inline - use unsafe for better performance
+            unsafe {
+                let mut payload = [0u8; 16];
+                // Directly write length as little-endian bytes
+                payload
+                    .as_mut_ptr()
+                    .cast::<u32>()
+                    .write_unaligned(len.to_le());
+
+                // Copy string data directly without bounds checking
+                std::ptr::copy_nonoverlapping(
+                    string_data.as_ptr(),
+                    payload.as_mut_ptr().add(4),
+                    len as usize,
+                );
+
+                // Use transmute for maximum performance - no validation overhead
+                std::mem::transmute::<[u8; 16], View>(payload)
+            }
         } else {
             // Large string: store in buffer
-            // Set prefix (first 4 bytes)
-            payload[4..8].copy_from_slice(&string_data[0..4]);
+            unsafe {
+                let mut payload = [0u8; 16];
+                let payload_ptr = payload.as_mut_ptr();
 
-            // Set buffer index
-            payload[8..12].copy_from_slice(&buffer_index.to_le_bytes());
+                // Write all fields directly as u32 values
+                payload_ptr.cast::<u32>().write_unaligned(len.to_le());
 
-            // Set offset
-            payload[12..16].copy_from_slice(&(*page_offset as u32).to_le_bytes());
+                // Copy prefix (first 4 bytes) directly
+                std::ptr::copy_nonoverlapping(string_data.as_ptr(), payload_ptr.add(4), 4);
 
-            // Append string bytes to the current page buffer
-            page_bytes.extend_from_slice(string_data);
-            *page_offset += string_data.len();
+                // Write buffer index and offset
+                payload_ptr
+                    .add(8)
+                    .cast::<u32>()
+                    .write_unaligned(buffer_index.to_le());
+                payload_ptr
+                    .add(12)
+                    .cast::<u32>()
+                    .write_unaligned((*page_offset as u32).to_le());
+
+                // Reserve space if needed to avoid reallocations
+                let new_size = page_bytes.len() + string_data.len();
+                if page_bytes.capacity() < new_size {
+                    page_bytes.reserve(string_data.len().max(4096)); // Reserve at least 4KB
+                }
+
+                // Append string bytes to the current page buffer
+                page_bytes.extend_from_slice(string_data);
+                *page_offset += string_data.len();
+
+                // Use transmute for maximum performance - no validation overhead
+                std::mem::transmute::<[u8; 16], View>(payload)
+            }
         }
-
-        View::from_le_bytes(payload)
     }
 
     /// Process plain encoded data page
@@ -171,7 +206,7 @@ impl<'a> StringIter<'a> {
                 bytes.extend_from_slice(str_bytes);
             }
 
-            views.push(View::from_le_bytes(payload));
+            views.push(unsafe { std::mem::transmute::<[u8; 16], View>(payload) });
             // Accumulate total bytes length immediately
             *total_bytes_len += len as usize;
         }
@@ -294,12 +329,21 @@ impl<'a> StringIter<'a> {
         let remaining = data_page.num_values();
 
         match data_page.encoding() {
-            Encoding::Plain => {
-                self.process_plain_encoding(values_buffer, remaining, views, buffers, total_bytes_len)
-            }
-            Encoding::RleDictionary | Encoding::PlainDictionary => {
-                self.process_rle_dictionary_encoding(values_buffer, remaining, views, buffers, total_bytes_len)
-            }
+            Encoding::Plain => self.process_plain_encoding(
+                values_buffer,
+                remaining,
+                views,
+                buffers,
+                total_bytes_len,
+            ),
+            Encoding::RleDictionary | Encoding::PlainDictionary => self
+                .process_rle_dictionary_encoding(
+                    values_buffer,
+                    remaining,
+                    views,
+                    buffers,
+                    total_bytes_len,
+                ),
             _ => Err(ErrorCode::Internal(format!(
                 "Unsupported encoding for string column: {:?}",
                 data_page.encoding()
@@ -343,7 +387,12 @@ impl Iterator for StringIter<'_> {
                     }
 
                     // Process data page and handle potential errors
-                    if let Err(e) = self.process_data_page(&data_page, &mut views, &mut buffers, &mut total_bytes_len) {
+                    if let Err(e) = self.process_data_page(
+                        &data_page,
+                        &mut views,
+                        &mut buffers,
+                        &mut total_bytes_len,
+                    ) {
                         return Some(Err(e));
                     }
                     continue;
