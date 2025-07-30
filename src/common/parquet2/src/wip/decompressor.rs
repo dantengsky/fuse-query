@@ -86,7 +86,7 @@ impl<'a> Decompressor<'a> {
         };
 
         // Create a DataPage from the decompressed data
-        // Note: We need to take ownership of the buffer data here
+        // Note: We take ownership of the buffer data here
         let page = match compressed_page {
             BorrowedCompressedPage::Data(compressed_data_page) => Page::Data(DataPage::new(
                 compressed_data_page.header,

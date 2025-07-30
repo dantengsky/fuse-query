@@ -18,6 +18,7 @@ use databend_common_column::buffer::Buffer;
 use databend_common_column::types::NativeType;
 use databend_common_exception::ErrorCode;
 use databend_common_expression::Column;
+use parquet2::encoding::hybrid_rle::HybridRleDecoder;
 use parquet2::encoding::Encoding;
 use parquet2::page::Page;
 use parquet2::schema::types::PhysicalType;
@@ -29,6 +30,7 @@ pub struct StringIter<'a> {
     pages: Decompressor<'a>,
     chunk_size: Option<usize>,
     num_rows: usize,
+    dictionary: Option<Vec<Vec<u8>>>,
 }
 
 impl<'a> StringIter<'a> {
@@ -41,6 +43,7 @@ impl<'a> StringIter<'a> {
             pages,
             chunk_size,
             num_rows,
+            dictionary: None,
         }
     }
 }
@@ -50,14 +53,16 @@ impl Iterator for StringIter<'_> {
 
     fn next(&mut self) -> Option<Self::Item> {
         let limit = self.chunk_size.unwrap_or(self.num_rows);
-        // Use View structure and buffer directly, similar to read_view_col implementation
         let mut views = Vec::with_capacity(limit);
         let mut buffers = Vec::new();
 
         let mut total_bytes_len = 0;
 
+        let mut page_bytes = Vec::new();
+        let mut page_offset = 0usize;
+
         while views.len() < limit {
-            let page = match self.pages.next() {
+            let page = match self.pages.next_owned() {
                 Err(e) => {
                     return Some(Err(ErrorCode::StorageOther(format!(
                         "Failed to get next page: {}",
@@ -87,7 +92,7 @@ impl Iterator for StringIter<'_> {
                         )));
                     }
 
-                    let (_, _, values_buffer) = match parquet2::page::split_buffer(data_page) {
+                    let (_, _, values_buffer) = match parquet2::page::split_buffer(&data_page) {
                         Ok(result) => result,
                         Err(e) => {
                             return Some(Err(ErrorCode::StorageOther(format!(
@@ -142,8 +147,6 @@ impl Iterator for StringIter<'_> {
                                 // Extract the string value
                                 let str_bytes = &binary_values[0..length];
 
-                                // TODO do we need validate utf8?
-
                                 // Create View record using the same approach as BinaryViewColumnBuilder
                                 let len: u32 = length as u32;
                                 let mut payload = [0u8; 16];
@@ -197,18 +200,198 @@ impl Iterator for StringIter<'_> {
                                 break;
                             }
                         }
-                        encoding => {
+                        Encoding::RleDictionary => {
+                            // RLE Dictionary format: bit_width (1 byte) + RLE/Bit-packed encoded indices
+                            if values_buffer.is_empty() {
+                                return Some(Err(ErrorCode::Internal(
+                                    "Empty data for RLE dictionary encoding".to_string(),
+                                )));
+                            }
+
+                            let bit_width = values_buffer[0] as usize;
+                            let current_buffer_index = buffers.len() as u32;
+
+                            if bit_width == 0 {
+                                // All indices are 0, repeat dictionary[0] for all values
+                                if let Some(ref dict) = self.dictionary {
+                                    if dict.is_empty() {
+                                        return Some(Err(ErrorCode::Internal(
+                                            "Empty dictionary for RLE dictionary encoding"
+                                                .to_string(),
+                                        )));
+                                    }
+                                    let dict_entry = &dict[0];
+                                    for _ in 0..(limit - views.len()) {
+                                        let len = dict_entry.len() as u32;
+                                        let mut payload = [0u8; 16];
+                                        payload[0..4].copy_from_slice(&len.to_le_bytes());
+
+                                        if len <= 12 {
+                                            // Small string: store inline
+                                            payload[4..4 + len as usize]
+                                                .copy_from_slice(dict_entry);
+                                        } else {
+                                            // Large string: store in buffer
+                                            // Set prefix (first 4 bytes)
+                                            payload[4..8].copy_from_slice(&dict_entry[..4]);
+
+                                            // Set buffer index
+                                            payload[8..12].copy_from_slice(
+                                                &current_buffer_index.to_le_bytes(),
+                                            );
+
+                                            // Set offset
+                                            payload[12..16].copy_from_slice(
+                                                &(page_offset as u32).to_le_bytes(),
+                                            );
+
+                                            // Append string bytes to the current page buffer
+                                            page_bytes.extend_from_slice(dict_entry);
+                                            page_offset += len as usize;
+                                        }
+
+                                        let view = View::from_le_bytes(payload);
+                                        views.push(view);
+                                        total_bytes_len += view.length as usize;
+                                    }
+                                } else {
+                                    return Some(Err(ErrorCode::Internal(
+                                        "Dictionary not found for RLE dictionary encoding"
+                                            .to_string(),
+                                    )));
+                                }
+                            } else {
+                                // Decode RLE/Bit-packed indices
+                                let remaining = limit - views.len();
+                                match HybridRleDecoder::try_new(
+                                    &values_buffer[1..],
+                                    bit_width as u32,
+                                    remaining,
+                                ) {
+                                    Ok(mut decoder) => {
+                                        let mut indices = Vec::with_capacity(remaining);
+                                        for _ in 0..remaining {
+                                            match decoder.next() {
+                                                Some(Ok(index)) => {
+                                                    indices.push(index as usize);
+                                                }
+                                                Some(Err(e)) => {
+                                                    return Some(Err(ErrorCode::Internal(format!(
+                                                        "Failed to decode RLE/Bit-packed indices: {}",
+                                                        e
+                                                    ))));
+                                                }
+                                                None => break,
+                                            }
+                                        }
+
+                                        if let Some(ref dict) = self.dictionary {
+                                            for &index in &indices {
+                                                if index >= dict.len() {
+                                                    return Some(Err(ErrorCode::Internal(format!(
+                                                        "Dictionary index {} out of bounds (dictionary size: {})",
+                                                        index, dict.len()
+                                                    ))));
+                                                }
+
+                                                let dict_entry = &dict[index];
+                                                let len = dict_entry.len() as u32;
+                                                let mut payload = [0u8; 16];
+                                                payload[0..4].copy_from_slice(&len.to_le_bytes());
+
+                                                if len <= 12 {
+                                                    // Small string: store inline
+                                                    payload[4..4 + len as usize]
+                                                        .copy_from_slice(dict_entry);
+                                                } else {
+                                                    // Large string: store in buffer
+                                                    // Set prefix (first 4 bytes)
+                                                    payload[4..8].copy_from_slice(&dict_entry[..4]);
+
+                                                    // Set buffer index
+                                                    payload[8..12].copy_from_slice(
+                                                        &current_buffer_index.to_le_bytes(),
+                                                    );
+
+                                                    // Set offset
+                                                    payload[12..16].copy_from_slice(
+                                                        &(page_offset as u32).to_le_bytes(),
+                                                    );
+
+                                                    // Append string bytes to the current page buffer
+                                                    page_bytes.extend_from_slice(dict_entry);
+                                                    page_offset += len as usize;
+                                                }
+
+                                                let view = View::from_le_bytes(payload);
+                                                views.push(view);
+                                                total_bytes_len += view.length as usize;
+                                            }
+                                        } else {
+                                            return Some(Err(ErrorCode::Internal(
+                                                "Dictionary not found for RLE dictionary encoding"
+                                                    .to_string(),
+                                            )));
+                                        }
+                                    }
+                                    Err(e) => {
+                                        return Some(Err(ErrorCode::Internal(format!(
+                                            "Failed to create RLE decoder: {}",
+                                            e
+                                        ))));
+                                    }
+                                }
+                            }
+                        }
+                        other_encoding => {
                             return Some(Err(ErrorCode::StorageOther(format!(
                                 "Encoding {:?} is not supported in this implementation",
-                                encoding
+                                other_encoding
                             ))))
                         }
                     }
                 }
-                _ => {
-                    return Some(Err(ErrorCode::StorageOther(
-                        "Only data pages are supported".to_string(),
-                    )))
+                Page::Dict(dict_page) => {
+                    // Throw OutOfSpec error if more than one DictPage is encountered
+                    let dict_buffer = &dict_page.buffer;
+
+                    // Parse dictionary entries (length-prefixed strings)
+                    let mut dictionary = Vec::new();
+                    let mut dict_offset = 0usize;
+
+                    while dict_offset < dict_buffer.len() {
+                        if dict_buffer.len() - dict_offset < 4 {
+                            return Some(Err(ErrorCode::StorageOther(
+                                "Invalid dictionary data: not enough bytes for length prefix"
+                                    .to_string(),
+                            )));
+                        }
+
+                        // Extract length (first 4 bytes as little-endian u32)
+                        let length_array = [
+                            dict_buffer[dict_offset],
+                            dict_buffer[dict_offset + 1],
+                            dict_buffer[dict_offset + 2],
+                            dict_buffer[dict_offset + 3],
+                        ];
+                        let length = u32::from_le_bytes(length_array) as usize;
+                        dict_offset += 4;
+
+                        // Check if there are enough bytes for the string
+                        if dict_buffer.len() - dict_offset < length {
+                            return Some(Err(ErrorCode::StorageOther(
+                                "Invalid dictionary data: not enough bytes for string content"
+                                    .to_string(),
+                            )));
+                        }
+
+                        // Extract the string value
+                        let str_bytes = &dict_buffer[dict_offset..dict_offset + length];
+                        dictionary.push(str_bytes.to_vec());
+                        dict_offset += length;
+                    }
+
+                    self.dictionary = Some(dictionary);
                 }
             }
         }
