@@ -232,6 +232,102 @@ impl<'a> StringIter<'a> {
         }
 
         let bit_width = values_buffer[0] as usize;
+
+        if let Some(ref dict) = self.dictionary {
+            // Fast path optimization for small dictionaries with all small strings
+            let all_small_strings = dict.iter().all(|s| s.len() <= 12);
+
+            if all_small_strings && dict.len() <= 16 {
+                // Pre-compute Views for all dictionary entries to avoid repeated computation
+                let mut dict_views: Vec<View> = Vec::with_capacity(dict.len());
+                let mut dict_lens: Vec<usize> = Vec::with_capacity(dict.len());
+
+                for dict_entry in dict.iter() {
+                    let view = Self::create_inline_view(dict_entry);
+                    dict_views.push(view);
+                    dict_lens.push(dict_entry.len());
+                }
+
+                // Pre-allocate exact capacity to eliminate all Vec::push overhead
+                let start_len = views.len();
+                views.reserve_exact(remaining);
+
+                if bit_width == 0 {
+                    // All indices are 0, repeat dictionary[0] for all values
+                    if dict_views.is_empty() {
+                        return Err(ErrorCode::Internal(
+                            "Empty dictionary for RLE dictionary encoding".to_string(),
+                        ));
+                    }
+
+                    let view = dict_views[0];
+                    let entry_len = dict_lens[0];
+
+                    // Optimized bulk fill using unsafe direct memory operations
+                    unsafe {
+                        let views_ptr = views.as_mut_ptr().add(start_len);
+
+                        // Fill all positions with the same view - much faster than loop + push
+                        for i in 0..remaining {
+                            *views_ptr.add(i) = view;
+                        }
+
+                        // Update Vec length once
+                        views.set_len(start_len + remaining);
+
+                        // Bulk update total_bytes_len
+                        *total_bytes_len += entry_len * remaining;
+                    }
+                } else {
+                    // Decode RLE/Bit-packed indices using HybridRleDecoder
+                    let mut decoder =
+                        HybridRleDecoder::try_new(&values_buffer[1..], bit_width as u32, remaining)
+                            .map_err(|e| {
+                                ErrorCode::Internal(format!("Failed to create RLE decoder: {}", e))
+                            })?;
+
+                    // Use unsafe direct memory operations to eliminate Vec::push overhead
+                    unsafe {
+                        let views_ptr = views.as_mut_ptr().add(start_len);
+                        let mut count = 0;
+
+                        for _ in 0..remaining {
+                            let index = match decoder.next() {
+                                Some(Ok(idx)) => idx as usize,
+                                Some(Err(e)) => {
+                                    return Err(ErrorCode::Internal(format!(
+                                        "Failed to decode RLE/Bit-packed indices: {}",
+                                        e
+                                    )));
+                                }
+                                None => break,
+                            };
+
+                            if index >= dict_views.len() {
+                                return Err(ErrorCode::Internal(format!(
+                                    "Dictionary index {} out of bounds (dictionary size: {})",
+                                    index,
+                                    dict_views.len()
+                                )));
+                            }
+
+                            // Direct memory write - no Vec::push overhead
+                            *views_ptr.add(count) = *dict_views.get_unchecked(index);
+                            *total_bytes_len += *dict_lens.get_unchecked(index);
+                            count += 1;
+                        }
+
+                        // Update Vec length once at the end
+                        views.set_len(start_len + count);
+                    }
+                }
+
+                // No buffers needed for all-small-string case
+                return Ok(());
+            }
+        }
+
+        // Fallback to general case for large strings or large dictionaries
         let current_buffer_index = buffers.len() as u32;
         let mut page_bytes = Vec::new();
         let mut page_offset = 0usize;
@@ -271,36 +367,46 @@ impl<'a> StringIter<'a> {
                     })?;
 
             if let Some(ref dict) = self.dictionary {
-                for _ in 0..remaining {
-                    let index = match decoder.next() {
-                        Some(Ok(idx)) => idx as usize,
-                        Some(Err(e)) => {
+                // Pre-allocate exact capacity to eliminate all capacity checks
+                let start_len = views.len();
+                views.reserve_exact(remaining);
+
+                // Pre-compute dictionary entry lengths for faster access
+                let dict_lens: Vec<usize> = dict.iter().map(|s| s.len()).collect();
+
+                // Use unsafe direct memory operations to eliminate Vec::push overhead
+                unsafe {
+                    let views_ptr = views.as_mut_ptr().add(start_len);
+                    let mut count = 0;
+
+                    for _ in 0..remaining {
+                        let index = match decoder.next() {
+                            Some(Ok(idx)) => idx as usize,
+                            Some(Err(e)) => {
+                                return Err(ErrorCode::Internal(format!(
+                                    "Failed to decode RLE/Bit-packed indices: {}",
+                                    e
+                                )));
+                            }
+                            None => break,
+                        };
+
+                        if index >= dict.len() {
                             return Err(ErrorCode::Internal(format!(
-                                "Failed to decode RLE/Bit-packed indices: {}",
-                                e
+                                "Dictionary index {} out of bounds (dictionary size: {})",
+                                index,
+                                dict.len()
                             )));
                         }
-                        None => break,
-                    };
 
-                    if index >= dict.len() {
-                        return Err(ErrorCode::Internal(format!(
-                            "Dictionary index {} out of bounds (dictionary size: {})",
-                            index,
-                            dict.len()
-                        )));
+                        // Direct memory write - no capacity check, no add_ptr overhead
+                        *views_ptr.add(count) = Self::create_inline_view(&dict[index]);
+                        *total_bytes_len += dict_lens[index];
+                        count += 1;
                     }
 
-                    let dict_entry = &dict[index];
-                    let view = Self::create_view_from_string(
-                        dict_entry,
-                        &mut page_bytes,
-                        &mut page_offset,
-                        current_buffer_index,
-                    );
-                    views.push(view);
-                    // Accumulate total bytes length immediately
-                    *total_bytes_len += dict_entry.len();
+                    // Update Vec length once at the end
+                    views.set_len(start_len + count);
                 }
             } else {
                 return Err(ErrorCode::Internal(
@@ -314,6 +420,33 @@ impl<'a> StringIter<'a> {
         }
 
         Ok(())
+    }
+
+    /// Create an inline View for small strings (≤12 bytes) with maximum performance
+    #[inline]
+    fn create_inline_view(string_data: &[u8]) -> View {
+        debug_assert!(string_data.len() <= 12);
+
+        unsafe {
+            let mut payload = [0u8; 16];
+            let len = string_data.len() as u32;
+
+            // Write length directly
+            payload
+                .as_mut_ptr()
+                .cast::<u32>()
+                .write_unaligned(len.to_le());
+
+            // Copy string data directly without bounds checking
+            std::ptr::copy_nonoverlapping(
+                string_data.as_ptr(),
+                payload.as_mut_ptr().add(4),
+                len as usize,
+            );
+
+            // Use transmute for maximum performance
+            std::mem::transmute::<[u8; 16], View>(payload)
+        }
     }
 
     /// Process a data page based on its encoding type
