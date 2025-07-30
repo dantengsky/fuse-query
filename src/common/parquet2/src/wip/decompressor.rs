@@ -60,9 +60,10 @@ impl<'a> Decompressor<'a> {
             uncompressed_buffer.extend_from_slice(compressed_page.data());
         } else {
             // Decompress directly into the buffer
+            // TODO verifiy decompressed size?
             match compressed_page.compression() {
                 Compression::Lz4 => {
-                    let decompressed_len =
+                    let _decompressed_len =
                         lz4_flex::decompress_into(compressed_page.data(), uncompressed_buffer)
                             .map_err(|e| {
                                 Error::OutOfSpec(format!("LZ4 decompression failed: {}", e))
@@ -103,8 +104,27 @@ impl<'a> Decompressor<'a> {
         Ok(page)
     }
 
-    fn into_buffer(self) -> Vec<u8> {
+    pub fn into_buffer(self) -> Vec<u8> {
         self.decompression_buffer
+    }
+
+    // TODO Implement IntoIterator and drop FallibleStreamingIterator
+    pub fn next_owned(&mut self) -> Result<Option<Page>, Error> {
+        // Get the next page from our zero-copy PageReader
+        let page_tuple = self.page_reader.next_page()?;
+
+        if let Some(page) = page_tuple {
+            // Set decompression flag
+            self.was_decompressed = page.compression() != Compression::Uncompressed;
+
+            // Decompress the page directly into the buffer
+            let decompress_page =
+                Self::decompress_borrowed_page(page, &mut self.decompression_buffer)?;
+
+            Ok(Some(decompress_page))
+        } else {
+            Ok(None)
+        }
     }
 }
 

@@ -23,12 +23,8 @@ use databend_common_expression::ColumnId;
 use databend_common_expression::DataBlock;
 use databend_common_expression::DataSchema;
 use databend_common_expression::Scalar;
-use databend_common_expression::TableField;
+use databend_common_p2_reader::chunk_to_col_iter;
 use databend_common_p2_reader::from_table_filed_type;
-use databend_common_p2_reader::page_iter_to_columns;
-use databend_common_p2_reader::wip::decompressor::Decompressor;
-use databend_common_p2_reader::ColumnIter;
-use databend_common_p2_reader::PageReader;
 use databend_common_storage::ColumnNode;
 use databend_storages_common_cache::CacheAccessor;
 use databend_storages_common_cache::CacheManager;
@@ -36,9 +32,7 @@ use databend_storages_common_cache::SizedColumnArray;
 use databend_storages_common_cache::TableDataCacheKey;
 use databend_storages_common_table_meta::meta::ColumnMeta;
 use databend_storages_common_table_meta::meta::Compression;
-use parquet2::compression::Compression as ParquetCompression;
 use parquet2::metadata::Descriptor;
-use parquet2::read::PageMetaData;
 
 use super::BlockReader;
 use crate::io::read::block::block_reader_merge_io::DataItem;
@@ -165,16 +159,8 @@ impl BlockReader {
             unimplemented!()
         }
 
-        let indices = &column_node.leaf_indices;
         let column_chunks = deserialization_context.column_chunks;
         let compression = deserialization_context.compression;
-        // column passed in may be a compound field (with sub leaves),
-        // or a leaf column of compound field
-        let estimated_cap = indices.len();
-        let mut field_column_metas = Vec::with_capacity(estimated_cap);
-        let mut field_column_data = Vec::with_capacity(estimated_cap);
-        let mut field_column_descriptors = Vec::with_capacity(estimated_cap);
-        let mut field_uncompressed_size = 0;
 
         let parquet_primitive_type = from_table_filed_type(
             column_node.table_field.name.clone(),
@@ -188,152 +174,66 @@ impl BlockReader {
             max_rep_level: 0,
         };
 
-        for (i, _leaf_index) in indices.iter().enumerate() {
-            let column_id = column_node.leaf_column_ids[i];
-            if let Some(column_meta) = deserialization_context.column_metas.get(&column_id) {
-                if let Some(chunk) = column_chunks.get(&column_id) {
-                    match chunk {
-                        DataItem::RawData(data) => {
-                            field_column_metas.push(column_meta);
-                            field_column_data.push(data.as_ref());
-                            field_column_descriptors.push(&column_descriptor);
-                            field_uncompressed_size += data.len();
-                        }
-                        DataItem::ColumnArray(column_array) => {
-                            if is_nested {
-                                // TODO more context info for error message
-                                return Err(ErrorCode::StorageOther(
-                                    "unexpected nested field: nested leaf field hits cached",
-                                ));
-                            }
-                            // since it is not nested, one column is enough
-                            return Ok(Some(DeserializedColumn::FromCache(column_array)));
-                        }
+        // Since we only support leaf column now
+        let leaf_column_id = 0;
+
+        let column_id = column_node.leaf_column_ids[leaf_column_id];
+        if let Some(column_meta) = deserialization_context.column_metas.get(&column_id) {
+            if let Some(chunk) = column_chunks.get(&column_id) {
+                match chunk {
+                    DataItem::RawData(data) => {
+                        let field_uncompressed_size = data.len();
+                        let num_rows = deserialization_context.num_rows;
+                        let field_name = column_node.field.name().to_owned();
+
+                        let mut column_iter = chunk_to_col_iter(
+                            column_meta,
+                            data,
+                            num_rows,
+                            &column_descriptor,
+                            column_node.table_field.clone(),
+                            compression,
+                        )?;
+
+                        // TODO reuse decompression buffer
+                        let column = column_iter
+                                .next()
+                                .transpose()
+                                .map_err(|e| {
+                                    ErrorCode::StorageOther(format!(
+                                        "unexpected deserialization error, while processing field {field_name}: {e} "
+                                    ))
+                                })?
+                                .ok_or_else(|| {
+                                    ErrorCode::StorageOther(format!(
+                                        "unexpected deserialization error, no array found for field {field_name} "
+                                    ))
+                                })?;
+                        assert!(column_iter.next().is_none());
+                        // the array is deserialized from raw bytes, and intended to be cached
+                        Ok(Some(DeserializedColumn::Column((
+                            column_id,
+                            column,
+                            field_uncompressed_size,
+                        ))))
                     }
-                } else {
-                    // TODO review this further
-                    // If the column is the source of virtual columns, it may be ignored.
-                    return Ok(None);
+                    DataItem::ColumnArray(column_array) => {
+                        if is_nested {
+                            // TODO more context info for error message
+                            return Err(ErrorCode::StorageOther(
+                                "unexpected nested field: nested leaf field hits cached",
+                            ));
+                        }
+                        // since it is not nested, one column is enough
+                        Ok(Some(DeserializedColumn::FromCache(column_array)))
+                    }
                 }
             } else {
-                // TODO review this
-                // no column meta of given column id
-                break;
-            }
-        }
-
-        let num_rows = deserialization_context.num_rows;
-        if !field_column_metas.is_empty() {
-            let field_name = column_node.field.name().to_owned();
-
-            // TODO reuse decompression buffer
-            let mut column_iter = Self::chunks_to_col_iter(
-                field_column_metas,
-                field_column_data,
-                num_rows,
-                field_column_descriptors,
-                column_node.table_field.clone(),
-                compression,
-            )?;
-            let column = column_iter
-                .next()
-                .transpose()
-                .map_err(|e| {
-                    ErrorCode::StorageOther(format!(
-                        "unexpected deserialization error, while processing field {field_name}: {e} "
-                    ))
-                })?
-                .ok_or_else(|| {
-                    ErrorCode::StorageOther(format!(
-                        "unexpected deserialization error, no array found for field {field_name} "
-                    ))
-                })?;
-            assert!(column_iter.next().is_none());
-
-            // mark the array
-            if is_nested {
-                //  // the array is not intended to be cached
-                //  // currently, caching of compound field columns is not support
-                //  Ok(Some(DeserializedArray::NoNeedToCache(array)))
-                unreachable!()
-            } else {
-                // the array is deserialized from raw bytes, and intended to be cached
-                let column_id = column_node.leaf_column_ids[0];
-                Ok(Some(DeserializedColumn::Column((
-                    column_id,
-                    column,
-                    field_uncompressed_size,
-                ))))
+                // If the column is the source of virtual columns, it may be ignored.
+                Ok(None)
             }
         } else {
             Ok(None)
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn chunks_to_col_iter<'a>(
-        metas: Vec<&ColumnMeta>,
-        chunks: Vec<&'a [u8]>,
-        rows: usize,
-        column_descriptors: Vec<&Descriptor>,
-        field: TableField,
-        compression: &Compression,
-    ) -> Result<ColumnIter<'a>> {
-        let columns = metas
-            .iter()
-            .zip(chunks.into_iter().zip(column_descriptors.iter()))
-            .map(|(meta, (chunk, column_descriptor))| {
-                let meta = meta.as_parquet().unwrap();
-
-                let page_meta_data = PageMetaData {
-                    column_start: meta.offset,
-                    num_values: meta.num_values as i64,
-                    compression: Self::to_parquet_compression(compression)?,
-                    descriptor: (*column_descriptor).clone(),
-                };
-                // TODO reuse scratch and uncompressed_buffer
-                let pages = PageReader::new_with_page_meta(chunk, page_meta_data, usize::MAX);
-
-                Ok(Decompressor::new(pages, vec![]))
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        let types = column_descriptors
-            .iter()
-            .map(|column_descriptor| &column_descriptor.primitive_type)
-            .collect::<Vec<_>>();
-
-        page_iter_to_columns(columns, types, field, None, rows)
-    }
-
-    pub(crate) fn to_parquet_compression(
-        meta_compression: &Compression,
-    ) -> Result<ParquetCompression> {
-        match meta_compression {
-            Compression::Lz4 => {
-                let err_msg = r#"Deprecated compression algorithm [Lz4] detected.
-
-                                        The Legacy compression algorithm [Lz4] is no longer supported.
-                                        To migrate data from old format, please consider re-create the table,
-                                        by using an old compatible version [v0.8.25-nightly … v0.7.12-nightly].
-
-                                        - Bring up the compatible version of databend-query
-                                        - re-create the table
-                                           Suppose the name of table is T
-                                            ~~~
-                                            create table tmp_t as select * from T;
-                                            drop table T all;
-                                            alter table tmp_t rename to T;
-                                            ~~~
-                                        Please note that the history of table T WILL BE LOST.
-                                       "#;
-                Err(ErrorCode::StorageOther(err_msg))
-            }
-            Compression::Lz4Raw => Ok(ParquetCompression::Lz4Raw),
-            Compression::Snappy => Ok(ParquetCompression::Snappy),
-            Compression::Zstd => Ok(ParquetCompression::Zstd),
-            Compression::Gzip => Ok(ParquetCompression::Gzip),
-            Compression::None => Ok(ParquetCompression::Uncompressed),
         }
     }
 }
