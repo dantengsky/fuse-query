@@ -58,9 +58,6 @@ impl Iterator for StringIter<'_> {
 
         let mut total_bytes_len = 0;
 
-        let mut page_bytes = Vec::new();
-        let mut page_offset = 0usize;
-
         while views.len() < limit {
             let page = match self.pages.next_owned() {
                 Err(e) => {
@@ -211,6 +208,9 @@ impl Iterator for StringIter<'_> {
                             let bit_width = values_buffer[0] as usize;
                             let current_buffer_index = buffers.len() as u32;
 
+                            let mut page_bytes = Vec::new();
+                            let mut page_offset = 0usize;
+
                             if bit_width == 0 {
                                 // All indices are 0, repeat dictionary[0] for all values
                                 if let Some(ref dict) = self.dictionary {
@@ -259,6 +259,10 @@ impl Iterator for StringIter<'_> {
                                         "Dictionary not found for RLE dictionary encoding"
                                             .to_string(),
                                     )));
+                                }
+
+                                if !page_bytes.is_empty() {
+                                    buffers.push(Buffer::from(page_bytes));
                                 }
                             } else {
                                 // Decode RLE/Bit-packed indices
@@ -333,6 +337,10 @@ impl Iterator for StringIter<'_> {
                                                     .to_string(),
                                             )));
                                         }
+
+                                        if !page_bytes.is_empty() {
+                                            buffers.push(Buffer::from(page_bytes));
+                                        }
                                     }
                                     Err(e) => {
                                         return Some(Err(ErrorCode::Internal(format!(
@@ -392,6 +400,7 @@ impl Iterator for StringIter<'_> {
                     }
 
                     self.dictionary = Some(dictionary);
+                    continue;
                 }
             }
         }
