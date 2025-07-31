@@ -29,6 +29,7 @@ pub struct StringIter<'a> {
     chunk_size: Option<usize>,
     num_rows: usize,
     dictionary: Option<Vec<Vec<u8>>>,
+    cached_dict_views: Option<Vec<View>>,
 }
 
 impl<'a> StringIter<'a> {
@@ -42,6 +43,7 @@ impl<'a> StringIter<'a> {
             chunk_size,
             num_rows,
             dictionary: None,
+            cached_dict_views: None,
         }
     }
 
@@ -220,7 +222,7 @@ impl<'a> StringIter<'a> {
 
     /// Process RLE dictionary encoded data page
     fn process_rle_dictionary_encoding(
-        &self,
+        &mut self,
         values_buffer: &[u8],
         remaining: usize,
         views: &mut Vec<View>,
@@ -268,8 +270,15 @@ impl<'a> StringIter<'a> {
 
                     // Pre-compute dictionary views for better performance
                     // Safe since we're in the small strings path (all ≤12 bytes)
-                    let dict_views: Vec<View> =
-                        dict.iter().map(|s| Self::create_inline_view(s)).collect();
+                    // Use caching to avoid repeated create_inline_view calls
+                    if self.cached_dict_views.is_none() {
+                        self.cached_dict_views = Some(
+                            dict.iter()
+                                .map(|s| Self::create_inline_view(s))
+                                .collect::<Vec<_>>(),
+                        );
+                    }
+                    let dict_views = self.cached_dict_views.as_ref().unwrap();
 
                     // Get raw indices first for efficient processing
                     let mut indices = vec![0i32; remaining];
@@ -404,7 +413,7 @@ impl<'a> StringIter<'a> {
 
     /// Process a data page based on its encoding type
     fn process_data_page(
-        &self,
+        &mut self,
         data_page: &parquet2::page::DataPage,
         views: &mut Vec<View>,
         buffers: &mut Vec<Buffer<u8>>,
