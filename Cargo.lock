@@ -4047,6 +4047,7 @@ dependencies = [
  "match-template",
  "num",
  "opendal",
+ "parquet",
  "parquet-format-safe",
  "parquet2",
  "rand 0.8.5",

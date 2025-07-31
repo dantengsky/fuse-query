@@ -17,7 +17,7 @@ use databend_common_column::binview::View;
 use databend_common_column::buffer::Buffer;
 use databend_common_exception::ErrorCode;
 use databend_common_expression::Column;
-use parquet2::encoding::hybrid_rle::HybridRleDecoder;
+use parquet::encodings::rle::RleDecoder;
 use parquet2::encoding::Encoding;
 use parquet2::page::Page;
 use parquet2::schema::types::PhysicalType;
@@ -231,204 +231,133 @@ impl<'a> StringIter<'a> {
             return Err(ErrorCode::Internal("Empty RLE dictionary data".to_string()));
         }
 
-        let bit_width = values_buffer[0] as usize;
+        let bit_width = values_buffer[0];
 
         if let Some(ref dict) = self.dictionary {
             // Fast path optimization for small dictionaries with all small strings
             let all_small_strings = dict.iter().all(|s| s.len() <= 12);
 
             if all_small_strings && dict.len() <= 16 {
-                // Pre-compute Views for all dictionary entries to avoid repeated computation
-                let mut dict_views: Vec<View> = Vec::with_capacity(dict.len());
-                let mut dict_lens: Vec<usize> = Vec::with_capacity(dict.len());
-
-                for dict_entry in dict.iter() {
-                    let view = Self::create_inline_view(dict_entry);
-                    dict_views.push(view);
-                    dict_lens.push(dict_entry.len());
-                }
-
                 // Pre-allocate exact capacity to eliminate all Vec::push overhead
                 let start_len = views.len();
                 views.reserve_exact(remaining);
 
                 if bit_width == 0 {
                     // All indices are 0, repeat dictionary[0] for all values
-                    if dict_views.is_empty() {
+                    if dict.is_empty() {
                         return Err(ErrorCode::Internal(
                             "Empty dictionary for RLE dictionary encoding".to_string(),
                         ));
                     }
 
-                    let view = dict_views[0];
-                    let entry_len = dict_lens[0];
-
-                    // Optimized bulk fill using unsafe direct memory operations
-                    unsafe {
-                        let views_ptr = views.as_mut_ptr().add(start_len);
-
-                        // Fill all positions with the same view - much faster than loop + push
-                        for i in 0..remaining {
-                            *views_ptr.add(i) = view;
-                        }
-
-                        // Update Vec length once
-                        views.set_len(start_len + remaining);
-
-                        // Bulk update total_bytes_len
-                        *total_bytes_len += entry_len * remaining;
+                    let dict_entry = &dict[0];
+                    for _ in 0..remaining {
+                        // TODO bench this, seems to be a hotspot
+                        // Safe to use create_inline_view since we're in the small strings path
+                        views.push(Self::create_inline_view(dict_entry));
+                        *total_bytes_len += dict_entry.len();
                     }
                 } else {
-                    // Decode RLE/Bit-packed indices using HybridRleDecoder
-                    let mut decoder =
-                        HybridRleDecoder::try_new(&values_buffer[1..], bit_width as u32, remaining)
-                            .map_err(|e| {
-                                ErrorCode::Internal(format!("Failed to create RLE decoder: {}", e))
-                            })?;
+                    // Use official parquet RleDecoder for safe and efficient decoding
+                    let mut rle_decoder = RleDecoder::new(bit_width);
+                    rle_decoder.set_data(bytes::Bytes::copy_from_slice(&values_buffer[1..]));
 
-                    // Use unsafe direct memory operations to eliminate Vec::push overhead
-                    unsafe {
-                        let views_ptr = views.as_mut_ptr().add(start_len);
+                    // Ensure views has enough capacity
+                    views.resize(start_len + remaining, View::default());
 
-                        // Pre-decode all indices into a buffer to reduce decoder.next() overhead
-                        let mut indices = Vec::with_capacity(remaining);
-                        for _ in 0..remaining {
-                            match decoder.next() {
-                                Some(Ok(idx)) => indices.push(idx as usize),
-                                Some(Err(e)) => {
-                                    return Err(ErrorCode::Internal(format!(
-                                        "Failed to decode RLE/Bit-packed indices: {}",
-                                        e
-                                    )));
-                                }
-                                None => break,
-                            };
-                        }
-
-                        // Batch process all indices with direct memory writes
-                        for (i, &index) in indices.iter().enumerate() {
-                            if index >= dict_views.len() {
-                                return Err(ErrorCode::Internal(format!(
-                                    "Dictionary index {} out of bounds (dictionary size: {})",
-                                    index,
-                                    dict_views.len()
-                                )));
-                            }
-
-                            // Direct memory write - no Vec::push overhead
-                            *views_ptr.add(i) = *dict_views.get_unchecked(index);
-                            *total_bytes_len += *dict_lens.get_unchecked(index);
-                        }
-
-                        // Update Vec length once at the end
-                        views.set_len(start_len + indices.len());
-                    }
-                }
-
-                // No buffers needed for all-small-string case
-                return Ok(());
-            }
-        }
-
-        // Fallback to general case for large strings or large dictionaries
-        let current_buffer_index = buffers.len() as u32;
-        let mut page_bytes = Vec::new();
-        let mut page_offset = 0usize;
-
-        if bit_width == 0 {
-            // All indices are 0, repeat dictionary[0] for all values
-            if let Some(ref dict) = self.dictionary {
-                if dict.is_empty() {
-                    return Err(ErrorCode::Internal(
-                        "Empty dictionary for RLE dictionary encoding".to_string(),
-                    ));
-                }
-
-                let dict_entry = &dict[0];
-                for _ in 0..remaining {
-                    let view = Self::create_view_from_string(
-                        dict_entry,
-                        &mut page_bytes,
-                        &mut page_offset,
-                        current_buffer_index,
-                    );
-                    views.push(view);
-                    // Accumulate total bytes length immediately
-                    *total_bytes_len += dict_entry.len();
-                }
-            } else {
-                return Err(ErrorCode::Internal(
-                    "Dictionary not found for RLE dictionary encoding".to_string(),
-                ));
-            }
-        } else {
-            // Decode RLE/Bit-packed indices using HybridRleDecoder
-            let mut decoder =
-                HybridRleDecoder::try_new(&values_buffer[1..], bit_width as u32, remaining)
-                    .map_err(|e| {
-                        ErrorCode::Internal(format!("Failed to create RLE decoder: {}", e))
+                    // Get raw indices first for efficient processing
+                    let mut indices = vec![0i32; remaining];
+                    let decoded_count = rle_decoder.get_batch(&mut indices).map_err(|e| {
+                        ErrorCode::Internal(format!("Failed to decode RLE indices: {}", e))
                     })?;
 
-            if let Some(ref dict) = self.dictionary {
-                // Pre-allocate exact capacity to eliminate all capacity checks
-                let start_len = views.len();
-                views.reserve_exact(remaining);
-
-                // Pre-compute dictionary entry lengths for faster access
-                let dict_lens: Vec<usize> = dict.iter().map(|s| s.len()).collect();
-
-                // Use unsafe direct memory operations to eliminate Vec::push overhead
-                unsafe {
-                    let views_ptr = views.as_mut_ptr().add(start_len);
-
-                    // Pre-decode all indices into a buffer to reduce decoder.next() overhead
-                    let mut indices = Vec::with_capacity(remaining);
-                    for _ in 0..remaining {
-                        match decoder.next() {
-                            Some(Ok(idx)) => indices.push(idx as usize),
-                            Some(Err(e)) => {
-                                return Err(ErrorCode::Internal(format!(
-                                    "Failed to decode RLE/Bit-packed indices: {}",
-                                    e
-                                )));
-                            }
-                            None => break,
-                        };
+                    if decoded_count != remaining {
+                        return Err(ErrorCode::Internal(format!(
+                            "RleDecoder returned wrong count: expected={}, got={}",
+                            remaining, decoded_count
+                        )));
                     }
 
-                    // Batch process all indices with direct memory writes
+                    // Process indices efficiently: O(n) instead of O(n*m)
                     for (i, &index) in indices.iter().enumerate() {
-                        if index >= dict.len() {
+                        let dict_idx = index as usize;
+                        if dict_idx >= dict.len() {
                             return Err(ErrorCode::Internal(format!(
                                 "Dictionary index {} out of bounds (dictionary size: {})",
-                                index,
+                                dict_idx,
                                 dict.len()
                             )));
                         }
 
-                        // Direct memory write - no capacity check, no add_ptr overhead
-                        *views_ptr.add(i) = Self::create_inline_view(&dict[index]);
-                        *total_bytes_len += dict_lens[index];
+                        // Safe to use create_inline_view here since we're in the small strings path
+                        views[start_len + i] = Self::create_inline_view(&dict[dict_idx]);
+                        *total_bytes_len += dict[dict_idx].len();
                     }
-
-                    // Update Vec length once at the end
-                    views.set_len(start_len + indices.len());
                 }
-            } else {
-                return Err(ErrorCode::Internal(
-                    "Dictionary not found for RLE dictionary encoding".to_string(),
-                ));
+                return Ok(());
             }
         }
 
-        if !page_bytes.is_empty() {
-            buffers.push(Buffer::from(page_bytes));
+        // Use official parquet RleDecoder for safe and efficient decoding
+        let mut rle_decoder = RleDecoder::new(bit_width);
+        rle_decoder.set_data(bytes::Bytes::copy_from_slice(&values_buffer[1..]));
+
+        if let Some(ref dict) = self.dictionary {
+            // Initialize buffer management variables for general case
+            let current_buffer_index = buffers.len() as u32;
+            let mut page_bytes = Vec::new();
+            let mut page_offset = 0usize;
+
+            // Ensure views has enough capacity
+            let current_len = views.len();
+            views.resize(current_len + remaining, View::default());
+
+            // Get raw indices first for efficient processing
+            let mut indices = vec![0i32; remaining];
+            let decoded_count = rle_decoder
+                .get_batch(&mut indices)
+                .map_err(|e| ErrorCode::Internal(format!("Failed to decode RLE indices: {}", e)))?;
+
+            if decoded_count != remaining {
+                return Err(ErrorCode::Internal(format!(
+                    "RleDecoder returned wrong count: expected={}, got={}",
+                    remaining, decoded_count
+                )));
+            }
+
+            for (i, &index) in indices.iter().enumerate() {
+                let dict_idx = index as usize;
+                if dict_idx >= dict.len() {
+                    return Err(ErrorCode::Internal(format!(
+                        "Dictionary index {} out of bounds (dictionary size: {})",
+                        dict_idx,
+                        dict.len()
+                    )));
+                }
+
+                // Use create_view_from_string to handle both small and large strings properly
+                let view = Self::create_view_from_string(
+                    &dict[dict_idx],
+                    &mut page_bytes,
+                    &mut page_offset,
+                    current_buffer_index,
+                );
+                views[current_len + i] = view;
+                *total_bytes_len += dict[dict_idx].len();
+            }
+
+            if !page_bytes.is_empty() {
+                buffers.push(Buffer::from(page_bytes));
+            }
+        } else {
+            return Err(ErrorCode::Internal(
+                "Dictionary not found for RLE dictionary encoding".to_string(),
+            ));
         }
 
         Ok(())
     }
 
-    // TODO rename this, it is not only called for processing small strings
     /// Create an inline View for small strings (≤12 bytes) with maximum performance
     #[inline]
     fn create_inline_view(string_data: &[u8]) -> View {
@@ -490,7 +419,7 @@ impl<'a> StringIter<'a> {
     }
 }
 
-impl Iterator for StringIter<'_> {
+impl<'a> Iterator for StringIter<'a> {
     type Item = Result<Column, ErrorCode>;
 
     fn next(&mut self) -> Option<Self::Item> {
