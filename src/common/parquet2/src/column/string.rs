@@ -265,6 +265,12 @@ impl<'a> StringIter<'a> {
                     // Ensure views has enough capacity
                     views.resize(start_len + remaining, View::default());
 
+                    // Pre-compute dictionary views for better performance
+                    // Safe since we're in the small strings path (all ≤12 bytes)
+                    let dict_views: Vec<View> = dict.iter()
+                        .map(|s| Self::create_inline_view(s))
+                        .collect();
+
                     // Get raw indices first for efficient processing
                     let mut indices = vec![0i32; remaining];
                     let decoded_count = rle_decoder.get_batch(&mut indices).map_err(|e| {
@@ -278,19 +284,19 @@ impl<'a> StringIter<'a> {
                         )));
                     }
 
-                    // Process indices efficiently: O(n) instead of O(n*m)
+                    // Process indices efficiently: O(n) with pre-computed views
                     for (i, &index) in indices.iter().enumerate() {
                         let dict_idx = index as usize;
-                        if dict_idx >= dict.len() {
+                        if dict_idx >= dict_views.len() {
                             return Err(ErrorCode::Internal(format!(
                                 "Dictionary index {} out of bounds (dictionary size: {})",
                                 dict_idx,
-                                dict.len()
+                                dict_views.len()
                             )));
                         }
 
-                        // Safe to use create_inline_view here since we're in the small strings path
-                        views[start_len + i] = Self::create_inline_view(&dict[dict_idx]);
+                        // Direct view copy - much faster than repeated create_inline_view calls
+                        views[start_len + i] = dict_views[dict_idx];
                         *total_bytes_len += dict[dict_idx].len();
                     }
                 }
