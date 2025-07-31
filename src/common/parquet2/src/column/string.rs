@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::time::Instant;
+
 use databend_common_column::binview::Utf8ViewColumn;
 use databend_common_column::binview::View;
 use databend_common_column::buffer::Buffer;
@@ -229,6 +231,7 @@ impl<'a> StringIter<'a> {
         buffers: &mut Vec<Buffer<u8>>,
         total_bytes_len: &mut usize,
     ) -> Result<(), ErrorCode> {
+        let begin = Instant::now();
         if values_buffer.is_empty() {
             return Err(ErrorCode::Internal("Empty RLE dictionary data".to_string()));
         }
@@ -272,11 +275,13 @@ impl<'a> StringIter<'a> {
                     // Safe since we're in the small strings path (all ≤12 bytes)
                     // Use caching to avoid repeated create_inline_view calls
                     if self.cached_dict_views.is_none() {
+                        let now = Instant::now();
                         self.cached_dict_views = Some(
                             dict.iter()
                                 .map(|s| Self::create_inline_view(s))
                                 .collect::<Vec<_>>(),
                         );
+                        eprintln!("build dict views: {:?}", now.elapsed());
                     }
                     let dict_views = self.cached_dict_views.as_ref().unwrap();
 
@@ -293,6 +298,7 @@ impl<'a> StringIter<'a> {
                         )));
                     }
 
+                    let now = Instant::now();
                     // Process indices efficiently: O(n) with pre-computed views
                     unsafe {
                         let views_ptr = views.as_mut_ptr().add(start_len);
@@ -314,6 +320,7 @@ impl<'a> StringIter<'a> {
                         // Update vector length once at the end
                         views.set_len(start_len + remaining);
                     }
+                    eprintln!("Processed {} indices in {:?} ms", remaining, now.elapsed());
                 }
                 return Ok(());
             }
@@ -383,6 +390,7 @@ impl<'a> StringIter<'a> {
             ));
         }
 
+        eprintln!("Processed {} indices in {:?}", remaining, begin.elapsed());
         Ok(())
     }
 
