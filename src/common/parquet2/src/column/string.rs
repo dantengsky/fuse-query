@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::time::Instant;
-
 use databend_common_column::binview::Utf8ViewColumn;
 use databend_common_column::binview::View;
 use databend_common_column::buffer::Buffer;
@@ -32,7 +30,6 @@ pub struct StringIter<'a> {
     num_rows: usize,
     dictionary: Option<Vec<Vec<u8>>>,
     cached_dict_views: Option<Vec<View>>,
-    cached_rle_decoder: Option<(u8, RleDecoder)>, // (bit_width, decoder)
 }
 
 impl<'a> StringIter<'a> {
@@ -47,7 +44,6 @@ impl<'a> StringIter<'a> {
             num_rows,
             dictionary: None,
             cached_dict_views: None,
-            cached_rle_decoder: None,
         }
     }
 
@@ -233,7 +229,6 @@ impl<'a> StringIter<'a> {
         buffers: &mut Vec<Buffer<u8>>,
         total_bytes_len: &mut usize,
     ) -> Result<(), ErrorCode> {
-        let begin = Instant::now();
         if values_buffer.is_empty() {
             return Err(ErrorCode::Internal("Empty RLE dictionary data".to_string()));
         }
@@ -246,13 +241,10 @@ impl<'a> StringIter<'a> {
             let all_small_strings = dict.iter().all(|s| s.len() <= 12);
 
             if all_small_strings && dict.len() <= 16 {
-                eprintln!("small strings fast path");
                 // Pre-allocate exact capacity to eliminate all Vec::push overhead
-                let start_len = views.len();
                 views.reserve_exact(remaining);
 
                 if bit_width == 0 {
-                    eprintln!("bit width 0");
                     // All indices are 0, repeat dictionary[0] for all values
                     if dict.is_empty() {
                         return Err(ErrorCode::Internal(
@@ -269,47 +261,22 @@ impl<'a> StringIter<'a> {
                         *total_bytes_len += dict_entry.len();
                     }
                 } else {
-                    // Use cached RleDecoder to avoid repeated new() calls
-                    let rle_decoder = if let Some((cached_bit_width, cached_decoder)) =
-                        &mut self.cached_rle_decoder
-                    {
-                        if *cached_bit_width == bit_width {
-                            // Reuse existing decoder with new data
-                            cached_decoder
-                                .set_data(bytes::Bytes::copy_from_slice(&values_buffer[1..]));
-                            cached_decoder
-                        } else {
-                            // bit_width changed, create new decoder and cache it
-                            let mut new_decoder = RleDecoder::new(bit_width);
-                            new_decoder
-                                .set_data(bytes::Bytes::copy_from_slice(&values_buffer[1..]));
-                            *cached_bit_width = bit_width;
-                            *cached_decoder = new_decoder;
-                            cached_decoder
-                        }
-                    } else {
-                        // First time, create and cache decoder
-                        let mut new_decoder = RleDecoder::new(bit_width);
-                        new_decoder.set_data(bytes::Bytes::copy_from_slice(&values_buffer[1..]));
-                        self.cached_rle_decoder = Some((bit_width, new_decoder));
-                        &mut self.cached_rle_decoder.as_mut().unwrap().1
-                    };
+                    // Create new RleDecoder for each call (no caching for debugging)
+                    let mut rle_decoder = RleDecoder::new(bit_width);
+                    rle_decoder.set_data(bytes::Bytes::copy_from_slice(&values_buffer[1..]));
 
                     // Pre-compute dictionary views for better performance
                     // Safe since we're in the small strings path (all ≤12 bytes)
                     // Use caching to avoid repeated create_inline_view calls
                     if self.cached_dict_views.is_none() {
-                        let now = Instant::now();
                         self.cached_dict_views = Some(
                             dict.iter()
                                 .map(|s| Self::create_inline_view(s))
                                 .collect::<Vec<_>>(),
                         );
-                        eprintln!("build dict views: {:?}", now.elapsed());
                     }
                     let dict_views = self.cached_dict_views.as_ref().unwrap();
 
-                    let now = Instant::now();
                     // Use get_batch_with_dict for direct dictionary decoding - most efficient
                     // Directly decode into the target views slice
                     let start_len = views.len();
@@ -343,39 +310,14 @@ impl<'a> StringIter<'a> {
                     for view in &views[start_len..start_len + remaining] {
                         *total_bytes_len += view.length as usize;
                     }
-                    eprintln!(
-                        "Processed {} views with get_batch_with_dict in {:?}",
-                        remaining,
-                        now.elapsed()
-                    );
                 }
-                eprintln!("returning time used {:?}", begin.elapsed());
                 return Ok(());
             }
         }
 
-        // Use cached RleDecoder for general path too
-        let rle_decoder =
-            if let Some((cached_bit_width, cached_decoder)) = &mut self.cached_rle_decoder {
-                if *cached_bit_width == bit_width {
-                    // Reuse existing decoder with new data
-                    cached_decoder.set_data(bytes::Bytes::copy_from_slice(&values_buffer[1..]));
-                    cached_decoder
-                } else {
-                    // bit_width changed, create new decoder and cache it
-                    let mut new_decoder = RleDecoder::new(bit_width);
-                    new_decoder.set_data(bytes::Bytes::copy_from_slice(&values_buffer[1..]));
-                    *cached_bit_width = bit_width;
-                    *cached_decoder = new_decoder;
-                    cached_decoder
-                }
-            } else {
-                // First time, create and cache decoder
-                let mut new_decoder = RleDecoder::new(bit_width);
-                new_decoder.set_data(bytes::Bytes::copy_from_slice(&values_buffer[1..]));
-                self.cached_rle_decoder = Some((bit_width, new_decoder));
-                &mut self.cached_rle_decoder.as_mut().unwrap().1
-            };
+        // Create new RleDecoder for general path (no caching for debugging)
+        let mut rle_decoder = RleDecoder::new(bit_width);
+        rle_decoder.set_data(bytes::Bytes::copy_from_slice(&values_buffer[1..]));
 
         if let Some(ref dict) = self.dictionary {
             // Initialize buffer management variables for general case
@@ -437,7 +379,6 @@ impl<'a> StringIter<'a> {
             ));
         }
 
-        eprintln!("Processed {} indices in {:?}", remaining, begin.elapsed());
         Ok(())
     }
 
