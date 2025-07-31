@@ -251,6 +251,7 @@ impl<'a> StringIter<'a> {
                     }
 
                     let dict_entry = &dict[0];
+                    // TODO use slice fill
                     for _ in 0..remaining {
                         // TODO bench this, seems to be a hotspot
                         // Safe to use create_inline_view since we're in the small strings path
@@ -263,13 +264,12 @@ impl<'a> StringIter<'a> {
                     rle_decoder.set_data(bytes::Bytes::copy_from_slice(&values_buffer[1..]));
 
                     // Ensure views has enough capacity
-                    views.resize(start_len + remaining, View::default());
+                    views.reserve_exact(remaining);
 
                     // Pre-compute dictionary views for better performance
                     // Safe since we're in the small strings path (all ≤12 bytes)
-                    let dict_views: Vec<View> = dict.iter()
-                        .map(|s| Self::create_inline_view(s))
-                        .collect();
+                    let dict_views: Vec<View> =
+                        dict.iter().map(|s| Self::create_inline_view(s)).collect();
 
                     // Get raw indices first for efficient processing
                     let mut indices = vec![0i32; remaining];
@@ -285,19 +285,25 @@ impl<'a> StringIter<'a> {
                     }
 
                     // Process indices efficiently: O(n) with pre-computed views
-                    for (i, &index) in indices.iter().enumerate() {
-                        let dict_idx = index as usize;
-                        if dict_idx >= dict_views.len() {
-                            return Err(ErrorCode::Internal(format!(
-                                "Dictionary index {} out of bounds (dictionary size: {})",
-                                dict_idx,
-                                dict_views.len()
-                            )));
+                    unsafe {
+                        let views_ptr = views.as_mut_ptr().add(start_len);
+                        for (i, &index) in indices.iter().enumerate() {
+                            let dict_idx = index as usize;
+                            if dict_idx >= dict_views.len() {
+                                return Err(ErrorCode::Internal(format!(
+                                    "Dictionary index {} out of bounds (dictionary size: {})",
+                                    dict_idx,
+                                    dict_views.len()
+                                )));
+                            }
+
+                            // Direct memory write - no bounds checking overhead
+                            *views_ptr.add(i) = dict_views[dict_idx];
+                            *total_bytes_len += dict[dict_idx].len();
                         }
 
-                        // Direct view copy - much faster than repeated create_inline_view calls
-                        views[start_len + i] = dict_views[dict_idx];
-                        *total_bytes_len += dict[dict_idx].len();
+                        // Update vector length once at the end
+                        views.set_len(start_len + remaining);
                     }
                 }
                 return Ok(());
@@ -314,9 +320,9 @@ impl<'a> StringIter<'a> {
             let mut page_bytes = Vec::new();
             let mut page_offset = 0usize;
 
-            // Ensure views has enough capacity
-            let current_len = views.len();
-            views.resize(current_len + remaining, View::default());
+            // Pre-allocate exact capacity without default initialization - much faster
+            views.reserve_exact(remaining);
+            let start_len = views.len();
 
             // Get raw indices first for efficient processing
             let mut indices = vec![0i32; remaining];
@@ -331,25 +337,32 @@ impl<'a> StringIter<'a> {
                 )));
             }
 
-            for (i, &index) in indices.iter().enumerate() {
-                let dict_idx = index as usize;
-                if dict_idx >= dict.len() {
-                    return Err(ErrorCode::Internal(format!(
-                        "Dictionary index {} out of bounds (dictionary size: {})",
-                        dict_idx,
-                        dict.len()
-                    )));
+            // Process indices efficiently: O(n) with proper buffer management
+            unsafe {
+                let views_ptr = views.as_mut_ptr().add(start_len);
+                for (i, &index) in indices.iter().enumerate() {
+                    let dict_idx = index as usize;
+                    if dict_idx >= dict.len() {
+                        return Err(ErrorCode::Internal(format!(
+                            "Dictionary index {} out of bounds (dictionary size: {})",
+                            dict_idx,
+                            dict.len()
+                        )));
+                    }
+
+                    // Use create_view_from_string for proper buffer management (handles both small and large strings)
+                    let view = Self::create_view_from_string(
+                        &dict[dict_idx],
+                        &mut page_bytes,
+                        &mut page_offset,
+                        current_buffer_index,
+                    );
+                    *views_ptr.add(i) = view;
+                    *total_bytes_len += dict[dict_idx].len();
                 }
 
-                // Use create_view_from_string to handle both small and large strings properly
-                let view = Self::create_view_from_string(
-                    &dict[dict_idx],
-                    &mut page_bytes,
-                    &mut page_offset,
-                    current_buffer_index,
-                );
-                views[current_len + i] = view;
-                *total_bytes_len += dict[dict_idx].len();
+                // Update vector length once at the end
+                views.set_len(start_len + remaining);
             }
 
             if !page_bytes.is_empty() {
