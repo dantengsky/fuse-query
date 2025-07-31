@@ -243,11 +243,13 @@ impl<'a> StringIter<'a> {
             let all_small_strings = dict.iter().all(|s| s.len() <= 12);
 
             if all_small_strings && dict.len() <= 16 {
+                eprintln!("small strings fast path");
                 // Pre-allocate exact capacity to eliminate all Vec::push overhead
                 let start_len = views.len();
                 views.reserve_exact(remaining);
 
                 if bit_width == 0 {
+                    eprintln!("bit width 0");
                     // All indices are 0, repeat dictionary[0] for all values
                     if dict.is_empty() {
                         return Err(ErrorCode::Internal(
@@ -320,7 +322,7 @@ impl<'a> StringIter<'a> {
                         // Update vector length once at the end
                         views.set_len(start_len + remaining);
                     }
-                    eprintln!("Processed {} indices in {:?} ms", remaining, now.elapsed());
+                    eprintln!("Processed {} indices in {:?}", remaining, now.elapsed());
                 }
                 return Ok(());
             }
