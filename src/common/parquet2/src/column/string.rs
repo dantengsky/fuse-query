@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::time::Instant;
-
 use databend_common_column::binview::Utf8ViewColumn;
 use databend_common_column::binview::View;
 use databend_common_column::buffer::Buffer;
@@ -27,14 +25,32 @@ use parquet2::schema::types::PhysicalType;
 use crate::wip::decompressor::Decompressor;
 
 pub struct StringIter<'a> {
+    /// Page decompressor for reading Parquet pages
     pages: Decompressor<'a>,
+    /// Optional chunk size for batched processing
     chunk_size: Option<usize>,
+    /// Total number of rows to process
     num_rows: usize,
+
+    // Dictionary encoding support
+    /// Dictionary entries for dictionary-encoded pages
+    /// Contains the actual string values referenced by indices in data pages
     dictionary: Option<Vec<Vec<u8>>>,
+
+    // Performance optimization: cached dictionary views
+    /// Cached inline views for small dictionary optimization
+    /// Only populated for dictionaries with ≤16 entries and all strings ≤12 bytes
+    /// Avoids repeated `create_inline_view` calls for the same dictionary
     cached_dict_views: Option<Vec<View>>,
 }
 
 impl<'a> StringIter<'a> {
+    /// Create a new StringIter for processing string column pages.
+    ///
+    /// # Arguments
+    /// * `pages` - Decompressor for reading Parquet pages
+    /// * `num_rows` - Total number of rows to process
+    /// * `chunk_size` - Optional chunk size for batched processing
     pub fn new(
         pages: Decompressor<'a>,
         num_rows: usize,
@@ -50,47 +66,51 @@ impl<'a> StringIter<'a> {
     }
 
     /// Process a dictionary page and store the dictionary entries
+    ///
+    /// Dictionary pages contain the actual string values that will be referenced
+    /// by indices in subsequent data pages.
     fn process_dictionary_page(
         &mut self,
         dict_page: &parquet2::page::DictPage,
     ) -> Result<(), ErrorCode> {
         assert!(self.dictionary.is_none());
-
-        let dict_buffer = &dict_page.buffer;
-        let mut dictionary = Vec::new();
+        let mut dict_values = Vec::new();
         let mut offset = 0;
+        let buffer = &dict_page.buffer;
 
-        // Parse dictionary entries (length-prefixed strings)
-        while offset + 4 <= dict_buffer.len() {
-            // Read 4-byte little-endian length
-            let len_bytes = &dict_buffer[offset..offset + 4];
-            let len = u32::from_le_bytes([len_bytes[0], len_bytes[1], len_bytes[2], len_bytes[3]])
-                as usize;
-            offset += 4;
-
-            if offset + len > dict_buffer.len() {
+        while offset < buffer.len() {
+            if offset + 4 > buffer.len() {
                 return Err(ErrorCode::Internal(
-                    "Dictionary entry length exceeds buffer size".to_string(),
+                    "Invalid dictionary page: incomplete length prefix".to_string(),
                 ));
             }
 
-            // Read string data
-            let string_data = dict_buffer[offset..offset + len].to_vec();
-            dictionary.push(string_data);
-            offset += len;
+            let length = u32::from_le_bytes([
+                buffer[offset],
+                buffer[offset + 1],
+                buffer[offset + 2],
+                buffer[offset + 3],
+            ]) as usize;
+            offset += 4;
+
+            if offset + length > buffer.len() {
+                return Err(ErrorCode::Internal(
+                    "Invalid dictionary page: string length exceeds buffer".to_string(),
+                ));
+            }
+
+            dict_values.push(buffer[offset..offset + length].to_vec());
+            offset += length;
         }
 
-        if dictionary.is_empty() {
-            return Err(ErrorCode::Internal("Empty dictionary page".to_string()));
-        }
-
-        self.dictionary = Some(dictionary);
+        self.dictionary = Some(dict_values);
+        // Clear cached views when dictionary changes
+        self.cached_dict_views = None;
         Ok(())
     }
 
     /// Create a View from a string slice, handling both inline and buffer storage
     /// Optimized version to reduce memory copies and improve performance
-    #[inline]
     fn create_view_from_string(
         string_data: &[u8],
         page_bytes: &mut Vec<u8>,
@@ -98,60 +118,54 @@ impl<'a> StringIter<'a> {
         buffer_index: u32,
     ) -> View {
         let len = string_data.len() as u32;
-
         if len <= 12 {
-            // Small string: store inline - use unsafe for better performance
+            // Inline small strings directly in the View
             unsafe {
                 let mut payload = [0u8; 16];
-                // Directly write length as little-endian bytes
                 payload
                     .as_mut_ptr()
                     .cast::<u32>()
                     .write_unaligned(len.to_le());
-
-                // Copy string data directly without bounds checking
                 std::ptr::copy_nonoverlapping(
                     string_data.as_ptr(),
                     payload.as_mut_ptr().add(4),
                     len as usize,
                 );
-
-                // Use transmute for maximum performance - no validation overhead
                 std::mem::transmute::<[u8; 16], View>(payload)
             }
         } else {
-            // Large string: store in buffer
+            // Store large strings in buffer and reference them
+            let current_offset = *page_offset;
+            page_bytes.extend_from_slice(string_data);
+            *page_offset += string_data.len();
+
             unsafe {
                 let mut payload = [0u8; 16];
-                let payload_ptr = payload.as_mut_ptr();
-
-                // Write all fields directly as u32 values
-                payload_ptr.cast::<u32>().write_unaligned(len.to_le());
-
-                // Copy prefix (first 4 bytes) directly
-                std::ptr::copy_nonoverlapping(string_data.as_ptr(), payload_ptr.add(4), 4);
-
-                // Write buffer index and offset
-                payload_ptr
+                // Length
+                payload
+                    .as_mut_ptr()
+                    .cast::<u32>()
+                    .write_unaligned(len.to_le());
+                // Prefix (first 4 bytes of string)
+                let prefix_len = std::cmp::min(4, string_data.len());
+                std::ptr::copy_nonoverlapping(
+                    string_data.as_ptr(),
+                    payload.as_mut_ptr().add(4),
+                    prefix_len,
+                );
+                // Buffer index
+                payload
+                    .as_mut_ptr()
                     .add(8)
                     .cast::<u32>()
                     .write_unaligned(buffer_index.to_le());
-                payload_ptr
+                // Offset in buffer
+                payload
+                    .as_mut_ptr()
                     .add(12)
                     .cast::<u32>()
-                    .write_unaligned((*page_offset as u32).to_le());
+                    .write_unaligned((current_offset as u32).to_le());
 
-                // Reserve space if needed to avoid reallocations
-                let new_size = page_bytes.len() + string_data.len();
-                if page_bytes.capacity() < new_size {
-                    page_bytes.reserve(string_data.len().max(4096)); // Reserve at least 4KB
-                }
-
-                // Append string bytes to the current page buffer
-                page_bytes.extend_from_slice(string_data);
-                *page_offset += string_data.len();
-
-                // Use transmute for maximum performance - no validation overhead
                 std::mem::transmute::<[u8; 16], View>(payload)
             }
         }
@@ -166,63 +180,64 @@ impl<'a> StringIter<'a> {
         buffers: &mut Vec<Buffer<u8>>,
         total_bytes_len: &mut usize,
     ) -> Result<(), ErrorCode> {
-        let mut bytes = Vec::new();
         let mut offset = 0;
-        let current_buffer_index = buffers.len() as u32;
+        let mut page_bytes = Vec::new();
+        let mut page_offset = 0;
+        let buffer_index = buffers.len() as u32;
 
         for _ in 0..remaining {
             if offset + 4 > values_buffer.len() {
-                break;
-            }
-
-            // Read 4-byte little-endian length
-            let len_bytes = &values_buffer[offset..offset + 4];
-            let len = u32::from_le_bytes([len_bytes[0], len_bytes[1], len_bytes[2], len_bytes[3]]);
-            offset += 4;
-
-            if offset + len as usize > values_buffer.len() {
                 return Err(ErrorCode::Internal(
-                    "String length exceeds buffer size".to_string(),
+                    "Invalid plain encoding: incomplete length prefix".to_string(),
                 ));
             }
 
-            let str_bytes = &values_buffer[offset..offset + len as usize];
-            offset += len as usize;
+            let length = u32::from_le_bytes([
+                values_buffer[offset],
+                values_buffer[offset + 1],
+                values_buffer[offset + 2],
+                values_buffer[offset + 3],
+            ]) as usize;
+            offset += 4;
 
-            let mut payload = [0u8; 16];
-            payload[0..4].copy_from_slice(&len.to_le_bytes());
-
-            if len <= 12 {
-                // Small string: store inline
-                payload[4..4 + len as usize].copy_from_slice(str_bytes);
-            } else {
-                // Large string: store in buffer
-                // Set prefix (first 4 bytes)
-                payload[4..8].copy_from_slice(&str_bytes[0..4]);
-
-                // Set buffer index
-                payload[8..12].copy_from_slice(&current_buffer_index.to_le_bytes());
-
-                // Set offset
-                payload[12..16].copy_from_slice(&(bytes.len() as u32).to_le_bytes());
-
-                // Append string bytes to the buffer
-                bytes.extend_from_slice(str_bytes);
+            if offset + length > values_buffer.len() {
+                return Err(ErrorCode::Internal(
+                    "Invalid plain encoding: string length exceeds buffer".to_string(),
+                ));
             }
 
-            views.push(unsafe { std::mem::transmute::<[u8; 16], View>(payload) });
-            // Accumulate total bytes length immediately
-            *total_bytes_len += len as usize;
+            let string_data = &values_buffer[offset..offset + length];
+            let view = Self::create_view_from_string(
+                string_data,
+                &mut page_bytes,
+                &mut page_offset,
+                buffer_index,
+            );
+            views.push(view);
+            *total_bytes_len += length;
+            offset += length;
         }
 
-        if !bytes.is_empty() {
-            buffers.push(Buffer::from(bytes));
+        if !page_bytes.is_empty() {
+            buffers.push(Buffer::from(page_bytes));
         }
 
         Ok(())
     }
 
-    /// Process RLE dictionary encoded data page
+    /// Process RLE dictionary encoded data page with optimized paths for different scenarios.
+    ///
+    /// This method handles RLE (Run Length Encoding) dictionary decoding with several optimizations:
+    /// - Fast path for small dictionaries (≤16 entries) with small strings (≤12 bytes)
+    /// - Dictionary views caching to avoid repeated inline view creation
+    /// - Single-pass processing for efficiency
+    ///
+    /// # Arguments
+    /// * `values_buffer` - Raw RLE encoded data (first byte is bit_width)
+    /// * `remaining` - Number of values to decode
+    /// * `views` - Output vector for decoded string views
+    /// * `buffers` - Buffer storage for large strings
+    /// * `total_bytes_len` - Accumulator for total string length
     fn process_rle_dictionary_encoding(
         &mut self,
         values_buffer: &[u8],
@@ -237,110 +252,191 @@ impl<'a> StringIter<'a> {
 
         let bit_width = values_buffer[0];
 
-        if let Some(ref dict) = self.dictionary {
-            // Fast path optimization for small dictionaries with all small strings
-            // TODO: calculate this while building dictionary
-            let all_small_strings = dict.iter().all(|s| s.len() <= 12);
-
-            if all_small_strings && dict.len() <= 16 {
-                // Pre-allocate exact capacity to eliminate all Vec::push overhead
-                views.reserve_exact(remaining);
-
-                if bit_width == 0 {
-                    // All indices are 0, repeat dictionary[0] for all values
-                    if dict.is_empty() {
-                        return Err(ErrorCode::Internal(
-                            "Empty dictionary for RLE dictionary encoding".to_string(),
-                        ));
-                    }
-
-                    let dict_entry = &dict[0];
-                    // TODO use slice fill
-                    for _ in 0..remaining {
-                        // TODO bench this, seems to be a hotspot
-                        // Safe to use create_inline_view since we're in the small strings path
-                        views.push(Self::create_inline_view(dict_entry));
-                        *total_bytes_len += dict_entry.len();
-                    }
-                } else {
-                    // Create new RleDecoder for each call (no caching for debugging)
-                    let mut rle_decoder = RleDecoder::new(bit_width);
-                    rle_decoder.set_data(bytes::Bytes::copy_from_slice(&values_buffer[1..]));
-
-                    // Pre-compute dictionary views and lengths for better performance
-                    // Safe since we're in the small strings path (all ≤12 bytes)
-                    // Use caching to avoid repeated create_inline_view calls
-                    if self.cached_dict_views.is_none() {
-                        self.cached_dict_views = Some(
-                            dict.iter()
-                                .map(|s| Self::create_inline_view(s))
-                                .collect::<Vec<_>>(),
-                        );
-                    }
-                    let dict_views = self.cached_dict_views.as_ref().unwrap();
-
-                    // Use get_batch to decode indices, then manually populate views and calculate total_bytes_len
-                    // This is more efficient than get_batch_with_dict + separate length calculation
-                    let start_len = views.len();
-                    views.reserve_exact(remaining);
-
-                    let mut indices = vec![0i32; remaining];
-                    let start = Instant::now();
-                    let decoded_count = rle_decoder.get_batch(&mut indices).map_err(|e| {
-                        ErrorCode::Internal(format!("Failed to decode RLE indices: {}", e))
-                    })?;
-                    println!(
-                        "RLE decode indices in {} ms, count: {}",
-                        start.elapsed().as_millis(),
-                        decoded_count
-                    );
-
-                    if decoded_count != remaining {
-                        return Err(ErrorCode::Internal(format!(
-                            "RleDecoder returned wrong count: expected={}, got={}",
-                            remaining, decoded_count
-                        )));
-                    }
-
-                    // Single pass: populate views and calculate total_bytes_len simultaneously
-                    unsafe {
-                        let views_ptr = views.as_mut_ptr().add(start_len);
-                        for (i, &index) in indices.iter().enumerate() {
-                            let dict_idx = index as usize;
-                            if dict_idx >= dict_views.len() {
-                                return Err(ErrorCode::Internal(format!(
-                                    "Dictionary index {} out of bounds (dictionary size: {})",
-                                    dict_idx,
-                                    dict_views.len()
-                                )));
-                            }
-
-                            // Copy view and accumulate length in one operation
-                            *views_ptr.add(i) = dict_views[dict_idx];
-                            *total_bytes_len += dict[dict_idx].len();
-                        }
-                        views.set_len(start_len + remaining);
-                    }
-                }
-                return Ok(());
+        // Clone dictionary to avoid borrowing issues
+        if let Some(dict) = self.dictionary.clone() {
+            // Check if we can use the optimized small string fast path
+            if self.can_use_small_string_fast_path(&dict) {
+                return self.process_small_string_fast_path(
+                    &dict,
+                    values_buffer,
+                    bit_width,
+                    remaining,
+                    views,
+                    total_bytes_len,
+                );
             }
         }
 
-        // Create new RleDecoder for general path (no caching for debugging)
+        // General path for large dictionaries or mixed string sizes
+        self.process_general_rle_path(
+            values_buffer,
+            bit_width,
+            remaining,
+            views,
+            buffers,
+            total_bytes_len,
+        )
+    }
+
+    /// Check if dictionary qualifies for small string fast path optimization.
+    ///
+    /// Fast path is used when:
+    /// - Dictionary has ≤16 entries
+    /// - All strings are ≤12 bytes (can be stored inline)
+    fn can_use_small_string_fast_path(&self, dict: &[Vec<u8>]) -> bool {
+        dict.len() <= 16 && dict.iter().all(|s| s.len() <= 12)
+    }
+
+    /// Process RLE dictionary encoding using the optimized small string fast path.
+    ///
+    /// This path is highly optimized for small dictionaries with short strings:
+    /// - Uses cached inline views to avoid repeated `create_inline_view` calls
+    /// - Single-pass processing for view population and length calculation
+    /// - Special handling for bit_width=0 (all values are dictionary[0])
+    fn process_small_string_fast_path(
+        &mut self,
+        dict: &[Vec<u8>],
+        values_buffer: &[u8],
+        bit_width: u8,
+        remaining: usize,
+        views: &mut Vec<View>,
+        total_bytes_len: &mut usize,
+    ) -> Result<(), ErrorCode> {
+        views.reserve_exact(remaining);
+
+        if bit_width == 0 {
+            // Special case: all indices are 0, repeat dictionary[0]
+            return self.process_bit_width_zero(dict, remaining, views, total_bytes_len);
+        }
+
+        // General small string case with RLE decoding
+        self.process_small_string_rle(
+            dict,
+            values_buffer,
+            bit_width,
+            remaining,
+            views,
+            total_bytes_len,
+        )
+    }
+
+    /// Handle the special case where bit_width=0 (all values are dictionary[0]).
+    fn process_bit_width_zero(
+        &self,
+        dict: &[Vec<u8>],
+        remaining: usize,
+        views: &mut Vec<View>,
+        total_bytes_len: &mut usize,
+    ) -> Result<(), ErrorCode> {
+        if dict.is_empty() {
+            return Err(ErrorCode::Internal(
+                "Empty dictionary for RLE dictionary encoding".to_string(),
+            ));
+        }
+
+        let dict_entry = &dict[0];
+        let inline_view = Self::create_inline_view(dict_entry);
+
+        // TODO: Use slice::fill when available for better performance
+        for _ in 0..remaining {
+            views.push(inline_view);
+            *total_bytes_len += dict_entry.len();
+        }
+
+        Ok(())
+    }
+
+    /// Process small string RLE decoding with cached dictionary views.
+    fn process_small_string_rle(
+        &mut self,
+        dict: &[Vec<u8>],
+        values_buffer: &[u8],
+        bit_width: u8,
+        remaining: usize,
+        views: &mut Vec<View>,
+        total_bytes_len: &mut usize,
+    ) -> Result<(), ErrorCode> {
+        // Create RLE decoder
+        let mut rle_decoder = RleDecoder::new(bit_width);
+        rle_decoder.set_data(bytes::Bytes::copy_from_slice(&values_buffer[1..]));
+
+        // Ensure dictionary views are cached
+        self.ensure_dict_views_cached(dict);
+        let dict_views = self.cached_dict_views.as_ref().unwrap();
+
+        // Decode indices and populate views in single pass
+        let start_len = views.len();
+        let mut indices = vec![0i32; remaining];
+
+        let decoded_count = rle_decoder
+            .get_batch(&mut indices)
+            .map_err(|e| ErrorCode::Internal(format!("Failed to decode RLE indices: {}", e)))?;
+        if decoded_count != remaining {
+            return Err(ErrorCode::Internal(format!(
+                "RleDecoder returned wrong count: expected={}, got={}",
+                remaining, decoded_count
+            )));
+        }
+
+        // Single pass: populate views and calculate total_bytes_len simultaneously
+        unsafe {
+            let views_ptr = views.as_mut_ptr().add(start_len);
+            for (i, &index) in indices.iter().enumerate() {
+                let dict_idx = index as usize;
+                if dict_idx >= dict_views.len() {
+                    return Err(ErrorCode::Internal(format!(
+                        "Dictionary index {} out of bounds (dictionary size: {})",
+                        dict_idx,
+                        dict_views.len()
+                    )));
+                }
+
+                // Copy view and accumulate length in one operation
+                *views_ptr.add(i) = dict_views[dict_idx];
+                *total_bytes_len += dict[dict_idx].len();
+            }
+            // TODO Make sure this is panic safe
+            views.set_len(start_len + remaining);
+        }
+
+        Ok(())
+    }
+
+    /// Ensure dictionary views are cached for the current dictionary.
+    ///
+    /// This method populates `cached_dict_views` if not already done,
+    /// avoiding repeated `create_inline_view` calls for the same dictionary.
+    fn ensure_dict_views_cached(&mut self, dict: &[Vec<u8>]) {
+        if self.cached_dict_views.is_none() {
+            self.cached_dict_views = Some(
+                dict.iter()
+                    .map(|s| Self::create_inline_view(s))
+                    .collect::<Vec<_>>(),
+            );
+        }
+    }
+
+    /// Process RLE dictionary encoding using the general path for large dictionaries.
+    fn process_general_rle_path(
+        &mut self,
+        values_buffer: &[u8],
+        bit_width: u8,
+        remaining: usize,
+        views: &mut Vec<View>,
+        buffers: &mut Vec<Buffer<u8>>,
+        total_bytes_len: &mut usize,
+    ) -> Result<(), ErrorCode> {
+        // Create new RleDecoder for general path
         let mut rle_decoder = RleDecoder::new(bit_width);
         rle_decoder.set_data(bytes::Bytes::copy_from_slice(&values_buffer[1..]));
 
         if let Some(ref dict) = self.dictionary {
             // Initialize buffer management variables for general case
-            let current_buffer_index = buffers.len() as u32;
             let mut page_bytes = Vec::new();
-            let mut page_offset = 0usize;
+            let mut page_offset = 0;
+            let buffer_index = buffers.len() as u32;
 
-            // Pre-allocate exact capacity without default initialization - much faster
-            views.reserve_exact(remaining);
-            let start_len = views.len();
-
-            // Get raw indices first for efficient processing
+            // Decode indices and process each one
             let mut indices = vec![0i32; remaining];
             let decoded_count = rle_decoder
                 .get_batch(&mut indices)
@@ -353,72 +449,96 @@ impl<'a> StringIter<'a> {
                 )));
             }
 
-            // Process indices efficiently: O(n) with proper buffer management
-            unsafe {
-                let views_ptr = views.as_mut_ptr().add(start_len);
-                for (i, &index) in indices.iter().enumerate() {
-                    let dict_idx = index as usize;
-                    if dict_idx >= dict.len() {
-                        return Err(ErrorCode::Internal(format!(
-                            "Dictionary index {} out of bounds (dictionary size: {})",
-                            dict_idx,
-                            dict.len()
-                        )));
-                    }
-
-                    // Use create_view_from_string for proper buffer management (handles both small and large strings)
-                    let view = Self::create_view_from_string(
-                        &dict[dict_idx],
-                        &mut page_bytes,
-                        &mut page_offset,
-                        current_buffer_index,
-                    );
-                    *views_ptr.add(i) = view;
-                    *total_bytes_len += dict[dict_idx].len();
+            // Process each index and create views
+            for &index in &indices {
+                let dict_idx = index as usize;
+                if dict_idx >= dict.len() {
+                    return Err(ErrorCode::Internal(format!(
+                        "Dictionary index {} out of bounds (dictionary size: {})",
+                        dict_idx,
+                        dict.len()
+                    )));
                 }
 
-                // Update vector length once at the end
-                views.set_len(start_len + remaining);
+                let string_data = &dict[dict_idx];
+                let view = Self::create_view_from_string(
+                    string_data,
+                    &mut page_bytes,
+                    &mut page_offset,
+                    buffer_index,
+                );
+                views.push(view);
+                *total_bytes_len += string_data.len();
             }
 
+            // Add buffer if any data was written
             if !page_bytes.is_empty() {
                 buffers.push(Buffer::from(page_bytes));
             }
         } else {
             return Err(ErrorCode::Internal(
-                "Dictionary not found for RLE dictionary encoding".to_string(),
+                "No dictionary found for RLE dictionary encoding".to_string(),
             ));
         }
 
         Ok(())
     }
 
-    /// Create an inline View for small strings (≤12 bytes) with maximum performance
-    #[inline]
+    /// Create an inline View for small strings (≤12 bytes) with maximum performance.
+    ///
+    /// This function is highly optimized for small strings that can be stored
+    /// directly in the View structure without requiring a separate buffer.
+    ///
+    /// # Safety
+    /// This function uses unsafe code for performance:
+    /// - Unaligned writes for the length prefix
+    /// - Direct memory copy without bounds checking
+    /// - Transmute for zero-cost conversion
+    ///
+    /// # Arguments
+    /// * `string_data` - String bytes to store inline (must be ≤12 bytes)
+    ///
+    /// # Returns
+    /// A View with the string data stored inline
     fn create_inline_view(string_data: &[u8]) -> View {
+        debug_assert!(
+            string_data.len() <= 12,
+            "create_inline_view called with string longer than 12 bytes"
+        );
+
         unsafe {
             let mut payload = [0u8; 16];
             let len = string_data.len() as u32;
 
-            // Write length directly
+            // Write length prefix (little-endian)
             payload
                 .as_mut_ptr()
                 .cast::<u32>()
                 .write_unaligned(len.to_le());
 
-            // Copy string data directly without bounds checking
+            // Copy string data directly
             std::ptr::copy_nonoverlapping(
                 string_data.as_ptr(),
                 payload.as_mut_ptr().add(4),
                 len as usize,
             );
 
-            // Use transmute for maximum performance
+            // Convert to View with zero cost
             std::mem::transmute::<[u8; 16], View>(payload)
         }
     }
 
-    /// Process a data page based on its encoding type
+    /// Process a data page based on its encoding type.
+    ///
+    /// This method dispatches to the appropriate encoding-specific processor:
+    /// - Plain encoding: Direct string data without compression
+    /// - RLE/Plain Dictionary: Dictionary-encoded strings with RLE compression
+    ///
+    /// # Arguments
+    /// * `data_page` - The data page to process
+    /// * `views` - Output vector for decoded string views
+    /// * `buffers` - Buffer storage for large strings
+    /// * `total_bytes_len` - Accumulator for total string length
     fn process_data_page(
         &mut self,
         data_page: &parquet2::page::DataPage,
@@ -458,37 +578,37 @@ impl<'a> Iterator for StringIter<'a> {
     type Item = Result<Column, ErrorCode>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let limit = self.chunk_size.unwrap_or(self.num_rows);
-        let mut views = Vec::with_capacity(limit);
+        if self.num_rows == 0 {
+            return None;
+        }
+
+        let chunk_size = self.chunk_size.unwrap_or(self.num_rows);
+        let current_chunk_size = std::cmp::min(chunk_size, self.num_rows);
+
+        let mut views = Vec::new();
         let mut buffers = Vec::new();
         let mut total_bytes_len = 0;
+        let mut processed_rows = 0;
 
-        while views.len() < limit {
+        while processed_rows < current_chunk_size {
             let page = match self.pages.next_owned() {
-                Err(e) => {
-                    return Some(Err(ErrorCode::StorageOther(format!(
-                        "Failed to get next page: {}",
-                        e
-                    ))))
-                }
-                Ok(None) => break,
                 Ok(Some(page)) => page,
+                Ok(None) => break,
+                Err(e) => return Some(Err(ErrorCode::StorageOther(e.to_string()))),
             };
 
             match page {
                 Page::Data(data_page) => {
-                    let physical_type = &data_page.descriptor.primitive_type.physical_type;
-                    let is_optional = data_page.descriptor.primitive_type.field_info.repetition
-                        == parquet2::schema::Repetition::Optional;
-
-                    if physical_type != &PhysicalType::ByteArray || is_optional {
-                        return Some(Err(ErrorCode::StorageOther(
-                            "Only BYTE_ARRAY required fields are supported in this implementation"
-                                .to_string(),
+                    if data_page.descriptor.primitive_type.physical_type != PhysicalType::ByteArray
+                    {
+                        return Some(Err(ErrorCode::Internal(
+                            "Expected ByteArray type for string column".to_string(),
                         )));
                     }
 
-                    // Process data page and handle potential errors
+                    let remaining_in_chunk = current_chunk_size - processed_rows;
+                    let page_rows = std::cmp::min(data_page.num_values(), remaining_in_chunk);
+
                     if let Err(e) = self.process_data_page(
                         &data_page,
                         &mut views,
@@ -497,31 +617,28 @@ impl<'a> Iterator for StringIter<'a> {
                     ) {
                         return Some(Err(e));
                     }
-                    continue;
+
+                    processed_rows += page_rows;
                 }
                 Page::Dict(dict_page) => {
-                    // Process dictionary page and handle potential errors
                     if let Err(e) = self.process_dictionary_page(&dict_page) {
                         return Some(Err(e));
                     }
-                    continue;
                 }
             }
         }
 
-        if views.is_empty() {
+        if processed_rows == 0 {
             return None;
         }
+
+        self.num_rows -= processed_rows;
 
         // Calculate total buffer length for new_unchecked
         let total_buffer_len = buffers.iter().map(|b| b.len()).sum();
 
-        // Convert views Vec to Buffer
-        let views_buffer = Buffer::from(views);
-
-        // Use new_unchecked for better performance (no validation overhead)
         let column = Utf8ViewColumn::new_unchecked(
-            views_buffer,
+            views.into(),
             buffers.into(),
             total_bytes_len,
             total_buffer_len,
