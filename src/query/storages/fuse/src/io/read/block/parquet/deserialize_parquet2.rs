@@ -23,6 +23,7 @@ use databend_common_expression::ColumnId;
 use databend_common_expression::DataBlock;
 use databend_common_expression::DataSchema;
 use databend_common_expression::Scalar;
+use databend_common_expression::TableDataType;
 use databend_common_p2_reader::chunk_to_col_iter;
 use databend_common_p2_reader::from_table_filed_type;
 use databend_common_storage::ColumnNode;
@@ -50,7 +51,7 @@ enum DeserializedColumn<'a> {
 }
 
 impl BlockReader {
-    pub(crate) fn deserialize_using_parquet2(
+    pub(crate) fn deserialize_block_parquet2(
         &self,
         block_path: &str,
         num_rows: usize,
@@ -74,7 +75,7 @@ impl BlockReader {
 
         for column_node in &self.project_column_nodes {
             let deserialized_column = self
-                .deserialize_field_using_parquet2(&field_deserialization_ctx, column_node)
+                .deserialize_field_parquet2(&field_deserialization_ctx, column_node)
                 .map_err(|e| {
                     e.add_message(format!(
                         "failed to deserialize column: {:?}, location {} ",
@@ -101,7 +102,8 @@ impl BlockReader {
 
         let mut block_entries = Vec::with_capacity(deserialized_column_arrays.len());
         for (col, table_data_type) in deserialized_column_arrays {
-            // TODO we should cache Column when new deserializer is reader
+            // TODO we should cache deserialized data as Column (instead of arrow Array)
+            // Converting arrow array to column may be expensive
             let entry = match col {
                 DeserializedColumn::FromCache(arrow_array) => {
                     BlockEntry::Column(Column::from_arrow_rs(
@@ -147,7 +149,7 @@ impl BlockReader {
         Ok(data_block)
     }
 
-    fn deserialize_field_using_parquet2<'a>(
+    fn deserialize_field_parquet2<'a>(
         &self,
         deserialization_context: &'a FieldDeserializationContext,
         column_node: &ColumnNode,
@@ -162,79 +164,116 @@ impl BlockReader {
         let column_chunks = deserialization_context.column_chunks;
         let compression = deserialization_context.compression;
 
+        let (max_def_level, max_rep_level) =
+            calculate_parquet_levels(&column_node.table_field.data_type);
+
         let parquet_primitive_type = from_table_filed_type(
             column_node.table_field.name.clone(),
             &column_node.table_field.data_type,
         );
 
-        // TODO calculate max_def_level and max_rep_level from Field type
         let column_descriptor = Descriptor {
             primitive_type: parquet_primitive_type,
-            max_def_level: 0,
-            max_rep_level: 0,
+            max_def_level,
+            max_rep_level,
         };
 
         // Since we only support leaf column now
         let leaf_column_id = 0;
-
         let column_id = column_node.leaf_column_ids[leaf_column_id];
-        if let Some(column_meta) = deserialization_context.column_metas.get(&column_id) {
-            if let Some(chunk) = column_chunks.get(&column_id) {
-                match chunk {
-                    DataItem::RawData(data) => {
-                        let field_uncompressed_size = data.len();
-                        let num_rows = deserialization_context.num_rows;
-                        let field_name = column_node.field.name().to_owned();
 
-                        let mut column_iter = chunk_to_col_iter(
-                            column_meta,
-                            data,
-                            num_rows,
-                            &column_descriptor,
-                            column_node.table_field.clone(),
-                            compression,
-                        )?;
+        let Some(column_meta) = deserialization_context.column_metas.get(&column_id) else {
+            return Ok(None);
+        };
+        let Some(chunk) = column_chunks.get(&column_id) else {
+            return Ok(None);
+        };
 
-                        // TODO reuse decompression buffer
-                        let column = column_iter
-                                .next()
-                                .transpose()
-                                .map_err(|e| {
-                                    ErrorCode::StorageOther(format!(
-                                        "unexpected deserialization error, while processing field {field_name}: {e} "
-                                    ))
-                                })?
-                                .ok_or_else(|| {
-                                    ErrorCode::StorageOther(format!(
-                                        "unexpected deserialization error, no array found for field {field_name} "
-                                    ))
-                                })?;
-                        assert!(column_iter.next().is_none());
-                        // the array is deserialized from raw bytes, and intended to be cached
-                        Ok(Some(DeserializedColumn::Column((
-                            column_id,
-                            column,
-                            field_uncompressed_size,
-                        ))))
-                    }
-                    DataItem::ColumnArray(column_array) => {
-                        if is_nested {
-                            // TODO more context info for error message
-                            return Err(ErrorCode::StorageOther(
-                                "unexpected nested field: nested leaf field hits cached",
-                            ));
-                        }
-                        // since it is not nested, one column is enough
-                        Ok(Some(DeserializedColumn::FromCache(column_array)))
-                    }
-                }
-            } else {
-                // If the column is the source of virtual columns, it may be ignored.
-                Ok(None)
+        match chunk {
+            DataItem::RawData(data) => {
+                let field_uncompressed_size = data.len();
+                let num_rows = deserialization_context.num_rows;
+                let field_name = column_node.field.name().to_owned();
+
+                let mut column_iter = chunk_to_col_iter(
+                    column_meta,
+                    data,
+                    num_rows,
+                    &column_descriptor,
+                    column_node.table_field.clone(),
+                    compression,
+                )?;
+
+                // TODO reuse decompression buffer?
+                let column = column_iter.next().transpose()?.ok_or_else(|| {
+                    ErrorCode::StorageOther(format!("no array found for field {field_name}"))
+                })?;
+                // Since we deserialize all the rows of this column, the iterator should be drained
+                assert!(column_iter.next().is_none());
+                // the array is deserialized from raw bytes, and intended to be cached
+                Ok(Some(DeserializedColumn::Column((
+                    column_id,
+                    column,
+                    field_uncompressed_size,
+                ))))
             }
-        } else {
-            Ok(None)
+            DataItem::ColumnArray(column_array) => {
+                if is_nested {
+                    return Err(ErrorCode::StorageOther(
+                        "unexpected nested field: nested leaf field hits cached",
+                    ));
+                }
+                // since it is not nested, one column is enough
+                Ok(Some(DeserializedColumn::FromCache(column_array)))
+            }
         }
+    }
+}
+
+fn calculate_parquet_levels(data_type: &TableDataType) -> (i16, i16) {
+    match data_type {
+        // Null type has no definition or repetition levels
+        TableDataType::Null => (0, 0),
+
+        // Simple primitive types - definition level 1 if nullable, 0 if required
+        TableDataType::Boolean => (1, 0),
+        TableDataType::Binary => (1, 0),
+        TableDataType::String => (1, 0),
+        TableDataType::Number(_) => (1, 0),
+        TableDataType::Decimal(_) => (1, 0),
+        TableDataType::Timestamp => (1, 0),
+        TableDataType::Date => (1, 0),
+        TableDataType::Interval => (1, 0),
+        TableDataType::Bitmap => (1, 0),
+        TableDataType::Variant => (1, 0),
+        TableDataType::Geometry => (1, 0),
+        TableDataType::Geography => (1, 0),
+        TableDataType::Vector(_) => (1, 0),
+
+        // Empty types
+        TableDataType::EmptyArray => (1, 0),
+        TableDataType::EmptyMap => (1, 0),
+
+        // Nullable wrapper - adds one definition level
+        TableDataType::Nullable(inner) => {
+            let (inner_def, inner_rep) = calculate_parquet_levels(inner);
+            (inner_def + 1, inner_rep)
+        }
+
+        // Array type - adds one repetition level
+        TableDataType::Array(inner) => {
+            let (inner_def, inner_rep) = calculate_parquet_levels(inner);
+            (inner_def + 1, inner_rep + 1)
+        }
+
+        // Map type - adds one repetition level (maps are arrays of key-value pairs)
+        TableDataType::Map(inner) => {
+            let (inner_def, inner_rep) = calculate_parquet_levels(inner);
+            (inner_def + 1, inner_rep + 1)
+        }
+
+        // Tuple type - for leaf columns, treat as optional
+        TableDataType::Tuple { .. } => (1, 0),
     }
 }
 
