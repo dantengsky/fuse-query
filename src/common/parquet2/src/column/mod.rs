@@ -12,21 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Direct deserialization from parquet2 to DataBlock without Arrow intermediate representation
+//! Column readers for Parquet data
 //!
 //! This crate provides functionality to directly deserialize Parquet data into DataBlock
 //! structures, bypassing the Arrow memory model for improved performance.
 
+pub mod common;
 mod date;
 mod decimal;
 mod number;
 mod string;
-mod nullable_simple;
 
 pub use date::*;
 pub use decimal::*;
 pub use number::*;
 pub use string::*;
-pub use nullable_simple::{
-    NullableDateIter, NullableDecimalIter, NullableInt32Iter, NullableInt64Iter, NullableStringIter,
-};
+
+// Export IntegerMetadata for external use
+pub use number::IntegerMetadata;

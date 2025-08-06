@@ -13,12 +13,11 @@ use parquet2::read::PageMetaData;
 use parquet2::schema::types::PhysicalType;
 use parquet2::schema::types::PrimitiveType;
 
+use crate::column::new_decimal64_iter;
+use crate::column::new_int32_iter;
+use crate::column::new_int64_iter;
 use crate::column::DateIter;
-use crate::column::DecimalIter;
-use crate::column::Int32Iter;
-use crate::column::Int64Iter;
-use crate::column::NullableDecimalIter;
-use crate::column::NullableStringIter;
+use crate::column::IntegerMetadata;
 use crate::column::StringIter;
 use crate::wip::decompressor::Decompressor;
 use crate::PageReader;
@@ -72,41 +71,33 @@ fn pages_to_column_iter<'a>(
 
     match (parquet_physical_type, inner_data_type) {
         (PhysicalType::Int32, TableDataType::Number(NumberDataType::Int32)) => {
-            Ok(Box::new(Int32Iter::new(pages, num_rows, is_nullable, chunk_size)))
+            Ok(Box::new(new_int32_iter(pages, num_rows, is_nullable, chunk_size)))
         }
         (PhysicalType::Int64, TableDataType::Number(NumberDataType::Int64)) => {
-            Ok(Box::new(Int64Iter::new(pages, num_rows, is_nullable, chunk_size)))
+            Ok(Box::new(new_int64_iter(pages, num_rows, is_nullable, chunk_size)))
         }
         (PhysicalType::ByteArray, TableDataType::String) => {
-            if is_nullable {
-                Ok(Box::new(NullableStringIter::new(pages, num_rows, chunk_size)))
-            } else {
-                Ok(Box::new(StringIter::new(pages, num_rows, chunk_size)))
-            }
+            // TODO: StringIter needs to be refactored to support nullable like number/decimal
+            Ok(Box::new(StringIter::new(pages, num_rows, chunk_size)))
         }
         (PhysicalType::Int64, TableDataType::Decimal(DecimalDataType::Decimal64(decimal_size))) => {
-            // Handle DECIMAL(15, 2) stored as Int64
-            if is_nullable {
-                Ok(Box::new(NullableDecimalIter::new(
-                    pages,
-                    num_rows,
-                    chunk_size,
-                    decimal_size.precision(),
-                    decimal_size.scale(),
-                )))
-            } else {
-                Ok(Box::new(DecimalIter::<i64>::new(
-                    pages,
-                    num_rows,
-                    decimal_size.precision(),
-                    decimal_size.scale(),
-                    is_nullable,
-                    chunk_size,
-                )))
-            }
+            Ok(Box::new(new_decimal64_iter(
+                pages,
+                num_rows,
+                decimal_size.precision(),
+                decimal_size.scale(),
+                is_nullable,
+                chunk_size,
+            )))
         }
         (PhysicalType::Int32, TableDataType::Date) => {
-                Ok(Box::new(DateIter::new(pages, num_rows, is_nullable, chunk_size)))
+            Ok(Box::new(DateIter::new(
+                pages,
+                num_rows,
+                is_nullable,
+                IntegerMetadata,
+                chunk_size,
+            )))
         }
         (physical_type, table_data_type) => Err(ErrorCode::StorageOther(format!(
             "Unsupported combination: parquet_physical_type={:?}, field_data_type={:?}, nullable={}",

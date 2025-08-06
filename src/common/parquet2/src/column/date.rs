@@ -12,31 +12,44 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use databend_common_column::buffer::Buffer;
 use databend_common_expression::Column;
+use parquet2::schema::types::PhysicalType;
 
-use crate::column::number::IntegerIter;
-use crate::column::number::ParquetInteger;
+use crate::column::common::{ParquetColumnIterator, ParquetColumnType};
+use crate::column::number::{IntegerMetadata, ParquetInteger};
 
 #[derive(Copy, Clone)]
 #[repr(transparent)]
 pub struct Date(i32);
-pub type DateIter<'a> = IntegerIter<'a, Date>;
 
 impl ParquetInteger for Date {
-    const PHYSICAL_TYPE: parquet2::schema::types::PhysicalType =
-        parquet2::schema::types::PhysicalType::Int32;
+    const PHYSICAL_TYPE: PhysicalType = PhysicalType::Int32;
 
     #[cfg(target_endian = "big")]
-    #[inline]
     fn convert_from_le_bytes(bytes: &[u8]) -> Self {
-        let mut byte_array = [0u8; 4];
-        byte_array.copy_from_slice(bytes);
-        Date(i32::from_le_bytes(byte_array))
+        let mut array = [0u8; 4];
+        array.copy_from_slice(bytes);
+        Date(i32::from_le_bytes(array))
     }
 
     fn create_column(data: Vec<Self>) -> Column {
-        let data: Vec<i32> = unsafe { std::mem::transmute(data) };
-        Column::Date(Buffer::from(data))
+        // Zero-cost transmute: Vec<Date> -> Vec<i32>
+        // Safe because Date is #[repr(transparent)] over i32
+        let raw_data: Vec<i32> = unsafe { std::mem::transmute(data) };
+        Column::Date(raw_data.into())
     }
 }
+
+impl ParquetColumnType for Date {
+    type Metadata = IntegerMetadata;
+    const PHYSICAL_TYPE: PhysicalType = PhysicalType::Int32;
+    
+    fn create_column(data: Vec<Self>, _metadata: &Self::Metadata) -> Column {
+        // Zero-cost transmute: Vec<Date> -> Vec<i32>
+        // Safe because Date is #[repr(transparent)] over i32
+        let raw_data: Vec<i32> = unsafe { std::mem::transmute(data) };
+        Column::Date(raw_data.into())
+    }
+}
+
+pub type DateIter<'a> = ParquetColumnIterator<'a, Date>;

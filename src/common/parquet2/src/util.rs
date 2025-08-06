@@ -37,7 +37,7 @@ pub fn from_table_field_type(field_name: String, field_type: &TableDataType) -> 
                 PrimitiveType::from_physical(field_name, PhysicalType::Int64)
             } else {
                 let len = decimal_length_from_precision(precision as usize);
-                // For decimal256
+                // For decimal128 and decimal256
                 PrimitiveType::from_physical(field_name, PhysicalType::FixedLenByteArray(len))
             }
         }
