@@ -361,7 +361,7 @@ impl<'a, T: ParquetInteger> IntegerIter<'a, T> {
             ErrorCode::Internal(format!("Failed to decode definition levels: {}", e))
         })?;
 
-        // This is not correct
+        // TODO: This is not correct
         if decoded_count != expected_levels {
             return Err(ErrorCode::Internal(format!(
                 "Definition level decoder returned wrong count: expected={}, got={}",
@@ -402,64 +402,61 @@ impl<'a, T: ParquetInteger> IntegerIter<'a, T> {
         non_null_count: usize,
         validity_bitmap: Option<&Bitmap>,
     ) -> Result<()> {
-        // Allocate space for all positions (including NULLs)
+        let type_size = std::mem::size_of::<T>();
         let old_len = column_data.len();
 
-        // Performance optimization: avoid initializing NULL positions
-        // According to Arrow standard, NULL position values are arbitrary
+        // Reserve space for new values
         column_data.reserve(page_rows);
-        unsafe {
-            // Extend length without initialization - NULL positions can contain arbitrary data
-            column_data.set_len(old_len + page_rows);
-        }
 
-        if non_null_count > 0 {
-            // Fill only non-NULL positions with actual values
+        if let Some(bitmap) = validity_bitmap {
+            // Nullable column: process values based on validity bitmap
+            // Extend vector to final size, leaving NULL positions uninitialized
+            unsafe {
+                column_data.set_len(old_len + page_rows);
+            }
+
             let mut values_read = 0;
-
-            if let Some(bitmap) = validity_bitmap {
-                // Copy values based on validity bitmap
-                for (i, is_valid) in bitmap.iter().enumerate() {
-                    if is_valid && values_read < non_null_count {
-                        let src_offset = values_read * std::mem::size_of::<T>();
-                        let dst_offset = old_len + i;
-
-                        if src_offset + std::mem::size_of::<T>() <= values_buffer.len() {
-                            // Safe byte-level copying to handle unaligned memory
-                            let src_bytes =
-                                &values_buffer[src_offset..src_offset + std::mem::size_of::<T>()];
-                            let dst_bytes = unsafe {
-                                std::slice::from_raw_parts_mut(
-                                    column_data[dst_offset..dst_offset + 1].as_mut_ptr() as *mut u8,
-                                    std::mem::size_of::<T>(),
-                                )
-                            };
-                            dst_bytes.copy_from_slice(src_bytes);
-                            values_read += 1;
-                        }
-                    }
-                    // Note: NULL positions (is_valid == false) are left uninitialized
-                    // This is safe because the validity bitmap controls access
-                }
-            } else {
-                // No validity bitmap, copy all values sequentially
-                for i in 0..non_null_count.min(page_rows) {
-                    let src_offset = i * std::mem::size_of::<T>();
+            for (i, is_valid) in bitmap.iter().enumerate() {
+                if is_valid && values_read < non_null_count {
+                    let src_offset = values_read * type_size;
                     let dst_offset = old_len + i;
 
-                    if src_offset + std::mem::size_of::<T>() <= values_buffer.len() {
-                        // Safe byte-level copying to handle unaligned memory
-                        let src_bytes =
-                            &values_buffer[src_offset..src_offset + std::mem::size_of::<T>()];
-                        let dst_bytes = unsafe {
-                            std::slice::from_raw_parts_mut(
-                                column_data[dst_offset..dst_offset + 1].as_mut_ptr() as *mut u8,
-                                std::mem::size_of::<T>(),
-                            )
-                        };
-                        dst_bytes.copy_from_slice(src_bytes);
+                    if src_offset + type_size <= values_buffer.len() {
+                        // High-performance byte-level copying using copy_nonoverlapping
+                        // This avoids alignment issues by treating data as u8 arrays
+                        unsafe {
+                            let src_ptr = values_buffer.as_ptr().add(src_offset);
+                            let dst_ptr = column_data[dst_offset..dst_offset + 1].as_mut_ptr() as *mut u8;
+                            std::ptr::copy_nonoverlapping(src_ptr, dst_ptr, type_size);
+                        }
+                        values_read += 1;
+                    } else {
+                        return Err(ErrorCode::Internal(
+                            "Values buffer underflow".to_string(),
+                        ));
                     }
                 }
+                // Note: NULL positions (is_valid == false) are left uninitialized
+                // This is safe because the validity bitmap controls access
+            }
+        } else {
+            // Non-nullable column: batch copy all values for maximum performance
+            let values_to_copy = non_null_count.min(page_rows);
+            let total_bytes = values_to_copy * type_size;
+
+            if total_bytes <= values_buffer.len() {
+                unsafe {
+                    // Batch copy entire buffer using byte-level copy_nonoverlapping
+                    // This is the fastest possible approach, avoiding all alignment issues
+                    let src_ptr = values_buffer.as_ptr();
+                    let dst_ptr = column_data.as_mut_ptr().add(old_len) as *mut u8;
+                    std::ptr::copy_nonoverlapping(src_ptr, dst_ptr, total_bytes);
+                    column_data.set_len(old_len + values_to_copy);
+                }
+            } else {
+                return Err(ErrorCode::Internal(
+                    "Values buffer underflow".to_string(),
+                ));
             }
         }
 

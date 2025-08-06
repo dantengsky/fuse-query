@@ -145,7 +145,7 @@ impl<'a> Iterator for NullableStringIter<'a> {
 
 /// Nullable Decimal iterator that wraps DecimalIter
 pub struct NullableDecimalIter<'a> {
-    inner: DecimalIter<'a>,
+    inner: DecimalIter<'a, i64>,
 }
 
 impl<'a> NullableDecimalIter<'a> {
@@ -157,7 +157,7 @@ impl<'a> NullableDecimalIter<'a> {
         scale: u8,
     ) -> Self {
         Self {
-            inner: DecimalIter::new(pages, num_rows, chunk_size, precision, scale),
+            inner: DecimalIter::new(pages, num_rows, precision, scale, true, chunk_size),
         }
     }
 }

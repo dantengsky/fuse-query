@@ -95,12 +95,13 @@ fn pages_to_column_iter<'a>(
                     decimal_size.scale(),
                 )))
             } else {
-                Ok(Box::new(DecimalIter::new(
+                Ok(Box::new(DecimalIter::<i64>::new(
                     pages,
                     num_rows,
-                    chunk_size,
                     decimal_size.precision(),
                     decimal_size.scale(),
+                    is_nullable,
+                    chunk_size,
                 )))
             }
         }
