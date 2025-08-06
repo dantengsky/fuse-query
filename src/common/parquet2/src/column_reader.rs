@@ -17,7 +17,6 @@ use crate::column::DateIter;
 use crate::column::DecimalIter;
 use crate::column::Int32Iter;
 use crate::column::Int64Iter;
-use crate::column::NullableDateIter;
 use crate::column::NullableDecimalIter;
 use crate::column::NullableStringIter;
 use crate::column::StringIter;

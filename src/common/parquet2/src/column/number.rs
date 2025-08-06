@@ -260,7 +260,17 @@ impl<'a, T: ParquetInteger> IntegerIter<'a, T> {
 
         // Get page metadata
         let num_values = data_page.num_values();
-        let num_values_in_buffer = values_buffer.len() / std::mem::size_of::<T>();
+
+        // Validate values_buffer length is aligned to type size
+        let type_size = std::mem::size_of::<T>();
+        if values_buffer.len() % type_size != 0 {
+            return Err(ErrorCode::Internal(format!(
+                "Values buffer length ({}) is not aligned to type size ({}). Buffer may be corrupted.",
+                values_buffer.len(), type_size
+            )));
+        }
+
+        let num_values_in_buffer = values_buffer.len() / type_size;
 
         // Calculate how many rows this page will actually contribute
         let page_rows = if is_nullable {
@@ -392,13 +402,16 @@ impl<'a, T: ParquetInteger> IntegerIter<'a, T> {
         non_null_count: usize,
         validity_bitmap: Option<&Bitmap>,
     ) -> Result<()> {
-        let num_values_in_buffer = values_buffer.len() / std::mem::size_of::<T>();
-
         // Allocate space for all positions (including NULLs)
         let old_len = column_data.len();
-        // Fill NULL positions with zero values as default
-        let default_value = unsafe { std::mem::zeroed::<T>() };
-        column_data.resize(old_len + page_rows, default_value);
+
+        // Performance optimization: avoid initializing NULL positions
+        // According to Arrow standard, NULL position values are arbitrary
+        column_data.reserve(page_rows);
+        unsafe {
+            // Extend length without initialization - NULL positions can contain arbitrary data
+            column_data.set_len(old_len + page_rows);
+        }
 
         if non_null_count > 0 {
             // Fill only non-NULL positions with actual values
@@ -425,6 +438,8 @@ impl<'a, T: ParquetInteger> IntegerIter<'a, T> {
                             values_read += 1;
                         }
                     }
+                    // Note: NULL positions (is_valid == false) are left uninitialized
+                    // This is safe because the validity bitmap controls access
                 }
             } else {
                 // No validity bitmap, copy all values sequentially
