@@ -37,7 +37,7 @@ pub fn blocks_to_parquet(
         // use `usize::MAX` to effectively limit the number of row groups to 1
         .set_max_row_group_size(usize::MAX)
         .set_encoding(Encoding::PLAIN)
-        .set_dictionary_enabled(true)
+        .set_dictionary_enabled(false)
         .set_statistics_enabled(EnabledStatistics::None)
         .set_bloom_filter_enabled(false)
         .build();

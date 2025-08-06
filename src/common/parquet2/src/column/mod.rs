@@ -21,8 +21,15 @@ mod date;
 mod decimal;
 mod number;
 mod string;
+mod nullable_simple;
+
+#[cfg(test)]
+mod nullable_tests;
 
 pub use date::*;
 pub use decimal::*;
 pub use number::*;
 pub use string::*;
+pub use nullable_simple::{
+    NullableDateIter, NullableDecimalIter, NullableInt32Iter, NullableInt64Iter, NullableStringIter,
+};

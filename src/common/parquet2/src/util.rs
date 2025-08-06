@@ -5,7 +5,12 @@ use parquet2::schema::types::PrimitiveType;
 use parquet2::schema::Repetition;
 
 pub fn from_table_filed_type(field_name: String, field_type: &TableDataType) -> PrimitiveType {
-    let mut parquet_primitive_type = match field_type {
+    let (inner_type, is_nullable) = match field_type {
+        TableDataType::Nullable(inner) => (inner.as_ref(), true),
+        other => (other, false),
+    };
+
+    let mut parquet_primitive_type = match inner_type {
         TableDataType::String => PrimitiveType::from_physical(field_name, PhysicalType::ByteArray),
         TableDataType::Number(number_type) => match number_type {
             NumberDataType::Int8 => PrimitiveType::from_physical(field_name, PhysicalType::Int32),
@@ -37,10 +42,19 @@ pub fn from_table_filed_type(field_name: String, field_type: &TableDataType) -> 
             }
         }
         TableDataType::Date => PrimitiveType::from_physical(field_name, PhysicalType::Int32),
+        TableDataType::Nullable(_) => {
+            // This should not happen due to our unwrapping logic above, but handle it safely
+            return from_table_filed_type(field_name, inner_type);
+        }
         t => unimplemented!("Unsupported type: {:?} ", t),
     };
 
-    parquet_primitive_type.field_info.repetition = Repetition::Required;
+    // Set repetition based on nullability
+    parquet_primitive_type.field_info.repetition = if is_nullable {
+        Repetition::Optional
+    } else {
+        Repetition::Required
+    };
 
     parquet_primitive_type
 }
@@ -52,8 +66,12 @@ fn decimal_length_from_precision(precision: usize) -> usize {
     // 10^ceil(digits) + 1 = 2^(8*n - 1)
     // log2(10^ceil(digits) + 1) = (8*n - 1)
     // log2(10^ceil(digits) + 1) + 1 = 8*n
-    // (log2(10^ceil(a) + 1) + 1) / 8 = n
+    // (log2(10^ceil(digits) + 1) + 1) / 8 = n
     (((10.0_f64.powi(precision as i32) + 1.0).log2() + 1.0) / 8.0).ceil() as usize
+}
+
+pub fn get_bit_width(max_level: i16) -> u32 {
+    16 - max_level.leading_zeros()
 }
 
 // mod page_util {

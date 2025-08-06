@@ -235,45 +235,45 @@ fn calculate_parquet_levels(data_type: &TableDataType) -> (i16, i16) {
         // Null type has no definition or repetition levels
         TableDataType::Null => (0, 0),
 
-        // Simple primitive types - definition level 1 if nullable, 0 if required
-        TableDataType::Boolean => (1, 0),
-        TableDataType::Binary => (1, 0),
-        TableDataType::String => (1, 0),
-        TableDataType::Number(_) => (1, 0),
-        TableDataType::Decimal(_) => (1, 0),
-        TableDataType::Timestamp => (1, 0),
-        TableDataType::Date => (1, 0),
-        TableDataType::Interval => (1, 0),
-        TableDataType::Bitmap => (1, 0),
-        TableDataType::Variant => (1, 0),
-        TableDataType::Geometry => (1, 0),
-        TableDataType::Geography => (1, 0),
-        TableDataType::Vector(_) => (1, 0),
+        // Simple primitive types - these are REQUIRED by default (definition level 0)
+        TableDataType::Boolean => (0, 0),
+        TableDataType::Binary => (0, 0),
+        TableDataType::String => (0, 0),
+        TableDataType::Number(_) => (0, 0),
+        TableDataType::Decimal(_) => (0, 0),
+        TableDataType::Timestamp => (0, 0),
+        TableDataType::Date => (0, 0),
+        TableDataType::Interval => (0, 0),
+        TableDataType::Bitmap => (0, 0),
+        TableDataType::Variant => (0, 0),
+        TableDataType::Geometry => (0, 0),
+        TableDataType::Geography => (0, 0),
+        TableDataType::Vector(_) => (0, 0),
 
-        // Empty types
-        TableDataType::EmptyArray => (1, 0),
-        TableDataType::EmptyMap => (1, 0),
+        // Empty types - treat as required
+        TableDataType::EmptyArray => (0, 0),
+        TableDataType::EmptyMap => (0, 0),
 
-        // Nullable wrapper - adds one definition level
+        // Nullable wrapper - adds one definition level (makes field OPTIONAL)
         TableDataType::Nullable(inner) => {
             let (inner_def, inner_rep) = calculate_parquet_levels(inner);
             (inner_def + 1, inner_rep)
         }
 
-        // Array type - adds one repetition level
+        // Array type - adds one definition level and one repetition level
         TableDataType::Array(inner) => {
             let (inner_def, inner_rep) = calculate_parquet_levels(inner);
             (inner_def + 1, inner_rep + 1)
         }
 
-        // Map type - adds one repetition level (maps are arrays of key-value pairs)
+        // Map type - adds one definition level and one repetition level
         TableDataType::Map(inner) => {
             let (inner_def, inner_rep) = calculate_parquet_levels(inner);
             (inner_def + 1, inner_rep + 1)
         }
 
-        // Tuple type - for leaf columns, treat as optional
-        TableDataType::Tuple { .. } => (1, 0),
+        // Tuple type - treat as required
+        TableDataType::Tuple { .. } => (0, 0),
     }
 }
 

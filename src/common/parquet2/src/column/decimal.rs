@@ -108,6 +108,7 @@ impl Iterator for DecimalIter<'_> {
 
                             // Direct copy from the buffer to our column data
                             unsafe {
+                                // TODO src_ptr may not be aligned (copy_nonoverlapping requires it)
                                 // Get source pointer to the raw buffer
                                 let src_ptr = values_buffer.as_ptr() as *const i64;
                                 // Get destination pointer to our column data
