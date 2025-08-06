@@ -49,7 +49,7 @@ pub fn decode_definition_levels(
     def_levels: &[u8],
     data_page: &parquet2::page::DataPage,
     num_values: usize,
-    page_rows: usize,
+    _page_rows: usize,
 ) -> Result<(Option<Bitmap>, usize)> {
     let bit_width = {
         let max_def_level = data_page.descriptor.max_def_level;
@@ -64,16 +64,18 @@ pub fn decode_definition_levels(
     rle_decoder.set_data(bytes::Bytes::copy_from_slice(def_levels));
 
     // Definition levels count should equal the number of values in the page
-    let expected_levels = num_values.min(page_rows);
+    // The number of definition levels is determined by the page content, not by how many rows we want to process
+    let expected_levels = num_values;  
     let mut levels = vec![0i32; expected_levels];
     let decoded_count = rle_decoder
         .get_batch(&mut levels)
         .map_err(|e| ErrorCode::Internal(format!("Failed to decode definition levels: {}", e)))?;
 
-    // TODO is this correct?
+    // Verify we got the expected number of levels
+    // This should now be correct: RleDecoder::get_batch() should decode all available definition levels
     if decoded_count != expected_levels {
         return Err(ErrorCode::Internal(format!(
-            "Definition level decoder returned wrong count: expected={}, got={}",
+            "Definition level decoder returned wrong count: expected={}, got={}. This indicates corrupted Parquet data or decoder issues.",
             expected_levels, decoded_count
         )));
     }
