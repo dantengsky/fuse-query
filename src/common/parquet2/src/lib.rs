@@ -24,5 +24,5 @@ pub mod util;
 pub mod wip;
 
 pub use column_reader::*;
-pub use util::from_table_filed_type;
+pub use util::from_table_field_type;
 pub use wip::page_reader::PageReader;

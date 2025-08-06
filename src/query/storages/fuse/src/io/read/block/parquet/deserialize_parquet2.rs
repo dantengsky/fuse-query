@@ -25,7 +25,7 @@ use databend_common_expression::DataSchema;
 use databend_common_expression::Scalar;
 use databend_common_expression::TableDataType;
 use databend_common_p2_reader::chunk_to_col_iter;
-use databend_common_p2_reader::from_table_filed_type;
+use databend_common_p2_reader::from_table_field_type;
 use databend_common_storage::ColumnNode;
 use databend_storages_common_cache::CacheAccessor;
 use databend_storages_common_cache::CacheManager;
@@ -167,7 +167,7 @@ impl BlockReader {
         let (max_def_level, max_rep_level) =
             calculate_parquet_levels(&column_node.table_field.data_type);
 
-        let parquet_primitive_type = from_table_filed_type(
+        let parquet_primitive_type = from_table_field_type(
             column_node.table_field.name.clone(),
             &column_node.table_field.data_type,
         );
