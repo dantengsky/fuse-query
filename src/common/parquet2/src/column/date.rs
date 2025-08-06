@@ -15,8 +15,10 @@
 use databend_common_expression::Column;
 use parquet2::schema::types::PhysicalType;
 
-use crate::column::common::{ParquetColumnIterator, ParquetColumnType};
-use crate::column::number::{IntegerMetadata, ParquetInteger};
+use crate::column::common::ParquetColumnIterator;
+use crate::column::common::ParquetColumnType;
+use crate::column::number::IntegerMetadata;
+use crate::column::number::ParquetInteger;
 
 #[derive(Copy, Clone)]
 #[repr(transparent)]
@@ -43,7 +45,7 @@ impl ParquetInteger for Date {
 impl ParquetColumnType for Date {
     type Metadata = IntegerMetadata;
     const PHYSICAL_TYPE: PhysicalType = PhysicalType::Int32;
-    
+
     fn create_column(data: Vec<Self>, _metadata: &Self::Metadata) -> Column {
         // Zero-cost transmute: Vec<Date> -> Vec<i32>
         // Safe because Date is #[repr(transparent)] over i32

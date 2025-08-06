@@ -182,10 +182,31 @@ impl ParquetColumnType for Decimal256 {
 pub type DecimalIter<'a, T> = ParquetColumnIterator<'a, T>;
 
 // =============================================================================
-// Convenience Constructor Functions
+// Constructor Functions
 // =============================================================================
 
+/// Create a new decimal iterator for any decimal type
+///
+/// This generic function replaces the individual type-specific constructors,
+/// eliminating code duplication while maintaining type safety.
+pub fn new_decimal_iter<T>(
+    pages: Decompressor,
+    num_rows: usize,
+    precision: u8,
+    scale: u8,
+    is_nullable: bool,
+    chunk_size: Option<usize>,
+) -> DecimalIter<T>
+where
+    T: ParquetColumnType<Metadata = DecimalMetadata>,
+{
+    let metadata = DecimalMetadata { precision, scale };
+    ParquetColumnIterator::new(pages, num_rows, is_nullable, metadata, chunk_size)
+}
+
 /// Create a new decimal iterator for i64 (Decimal64)
+///
+/// Convenience wrapper around the generic function for backward compatibility.
 pub fn new_decimal64_iter(
     pages: Decompressor,
     num_rows: usize,
@@ -194,11 +215,12 @@ pub fn new_decimal64_iter(
     is_nullable: bool,
     chunk_size: Option<usize>,
 ) -> DecimalIter<Decimal64> {
-    let metadata = DecimalMetadata { precision, scale };
-    ParquetColumnIterator::new(pages, num_rows, is_nullable, metadata, chunk_size)
+    new_decimal_iter(pages, num_rows, precision, scale, is_nullable, chunk_size)
 }
 
 /// Create a new decimal iterator for i128 (Decimal128)
+///
+/// Convenience wrapper around the generic function for backward compatibility.
 pub fn new_decimal128_iter(
     pages: Decompressor,
     num_rows: usize,
@@ -207,11 +229,12 @@ pub fn new_decimal128_iter(
     is_nullable: bool,
     chunk_size: Option<usize>,
 ) -> DecimalIter<Decimal128> {
-    let metadata = DecimalMetadata { precision, scale };
-    ParquetColumnIterator::new(pages, num_rows, is_nullable, metadata, chunk_size)
+    new_decimal_iter(pages, num_rows, precision, scale, is_nullable, chunk_size)
 }
 
 /// Create a new decimal iterator for i256 (Decimal256)
+///
+/// Convenience wrapper around the generic function for backward compatibility.
 pub fn new_decimal256_iter(
     pages: Decompressor,
     num_rows: usize,
@@ -220,6 +243,5 @@ pub fn new_decimal256_iter(
     is_nullable: bool,
     chunk_size: Option<usize>,
 ) -> DecimalIter<Decimal256> {
-    let metadata = DecimalMetadata { precision, scale };
-    ParquetColumnIterator::new(pages, num_rows, is_nullable, metadata, chunk_size)
+    new_decimal_iter(pages, num_rows, precision, scale, is_nullable, chunk_size)
 }

@@ -25,8 +25,7 @@ mod string;
 
 pub use date::*;
 pub use decimal::*;
-pub use number::*;
-pub use string::*;
-
 // Export IntegerMetadata for external use
 pub use number::IntegerMetadata;
+pub use number::*;
+pub use string::*;

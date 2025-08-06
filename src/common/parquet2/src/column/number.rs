@@ -23,7 +23,8 @@ use databend_common_expression::types::Number;
 use databend_common_expression::Column;
 use parquet2::schema::types::PhysicalType;
 
-use crate::column::common::{ParquetColumnIterator, ParquetColumnType};
+use crate::column::common::ParquetColumnIterator;
+use crate::column::common::ParquetColumnType;
 use crate::wip::decompressor::Decompressor;
 
 // =============================================================================
@@ -90,7 +91,7 @@ pub struct IntegerMetadata;
 impl ParquetColumnType for i32 {
     type Metadata = IntegerMetadata;
     const PHYSICAL_TYPE: PhysicalType = PhysicalType::Int32;
-    
+
     fn create_column(data: Vec<Self>, _metadata: &Self::Metadata) -> Column {
         Column::Number(i32::upcast_column(Buffer::from(data)))
     }
@@ -99,7 +100,7 @@ impl ParquetColumnType for i32 {
 impl ParquetColumnType for i64 {
     type Metadata = IntegerMetadata;
     const PHYSICAL_TYPE: PhysicalType = PhysicalType::Int64;
-    
+
     fn create_column(data: Vec<Self>, _metadata: &Self::Metadata) -> Column {
         Column::Number(i64::upcast_column(Buffer::from(data)))
     }
