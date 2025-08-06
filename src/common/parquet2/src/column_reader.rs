@@ -73,16 +73,10 @@ fn pages_to_column_iter<'a>(
 
     match (parquet_physical_type, inner_data_type) {
         (PhysicalType::Int32, TableDataType::Number(NumberDataType::Int32)) => {
-            if is_nullable {
-                eprintln!("decoding using nullable int32 iter");
-            }
-            Ok(Box::new(Int32Iter::new(pages, num_rows, chunk_size)))
+            Ok(Box::new(Int32Iter::new(pages, num_rows, is_nullable, chunk_size)))
         }
         (PhysicalType::Int64, TableDataType::Number(NumberDataType::Int64)) => {
-            if is_nullable {
-                eprintln!("decoding using nullable int64 iter");
-            }
-            Ok(Box::new(Int64Iter::new(pages, num_rows, chunk_size)))
+            Ok(Box::new(Int64Iter::new(pages, num_rows, is_nullable, chunk_size)))
         }
         (PhysicalType::ByteArray, TableDataType::String) => {
             if is_nullable {
@@ -112,7 +106,7 @@ fn pages_to_column_iter<'a>(
             }
         }
         (PhysicalType::Int32, TableDataType::Date) => {
-                Ok(Box::new(DateIter::new(pages, num_rows, chunk_size)))
+                Ok(Box::new(DateIter::new(pages, num_rows, is_nullable, chunk_size)))
         }
         (physical_type, table_data_type) => Err(ErrorCode::StorageOther(format!(
             "Unsupported combination: parquet_physical_type={:?}, field_data_type={:?}, nullable={}",

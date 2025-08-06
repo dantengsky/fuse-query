@@ -84,6 +84,7 @@ pub struct IntegerIter<'a, T: ParquetInteger> {
     pages: Decompressor<'a>,
     chunk_size: Option<usize>,
     num_rows: usize,
+    is_nullable: bool,
     _phantom: std::marker::PhantomData<T>,
 }
 
@@ -92,12 +93,14 @@ impl<'a, T: ParquetInteger> IntegerIter<'a, T> {
     pub fn new(
         pages: Decompressor<'a>,
         num_rows: usize,
+        is_nullable: bool,
         chunk_size: Option<usize>,
     ) -> Self {
         Self {
             pages,
             chunk_size,
             num_rows,
+            is_nullable,
             _phantom: std::marker::PhantomData,
         }
     }
@@ -109,24 +112,61 @@ impl<T: ParquetInteger> Iterator for IntegerIter<'_, T> {
     fn next(&mut self) -> Option<Self::Item> {
         let target_rows = self.chunk_size.unwrap_or(self.num_rows);
         let mut column_data: Vec<T> = Vec::with_capacity(target_rows);
+        let mut validity_bitmaps = Vec::new();
 
         while column_data.len() < target_rows {
             // Get the next page
             let page = match self.pages.next() {
                 Ok(Some(page)) => page,
                 Ok(None) => break,
-                Err(e) => return Some(Err(ErrorCode::Internal(format!("Failed to get next page: {}", e)))),
+                Err(e) => {
+                    return Some(Err(ErrorCode::Internal(format!(
+                        "Failed to get next page: {}",
+                        e
+                    ))))
+                }
             };
 
-            // Process the page immediately to avoid borrowing issues
             match page {
                 Page::Data(data_page) => {
-                    if let Err(e) = Self::process_data_page(data_page, &mut column_data, target_rows) {
-                        return Some(Err(e));
+                    let data_len_before = column_data.len();
+                    match Self::process_data_page(
+                        data_page,
+                        &mut column_data,
+                        target_rows,
+                        self.is_nullable,
+                    ) {
+                        Ok(validity_bitmap) => {
+                            let data_added = column_data.len() - data_len_before;
+
+                            if self.is_nullable {
+                                // For nullable columns, we must have a validity bitmap for each page
+                                if let Some(bitmap) = validity_bitmap {
+                                    // Verify bitmap length matches data added
+                                    if bitmap.len() != data_added {
+                                        return Some(Err(ErrorCode::Internal(format!(
+                                            "Bitmap length mismatch: bitmap={}, data_added={}",
+                                            bitmap.len(),
+                                            data_added
+                                        ))));
+                                    }
+                                    validity_bitmaps.push(bitmap);
+                                } else {
+                                    // This should not happen for nullable columns
+                                    return Some(Err(ErrorCode::Internal(
+                                        "Nullable column page must produce validity bitmap"
+                                            .to_string(),
+                                    )));
+                                }
+                            }
+                        }
+                        Err(e) => return Some(Err(e)),
                     }
                 }
-                _ => {
-                    return Some(Err(ErrorCode::Internal("Unsupported page type".to_string())));
+                Page::Dict(_) => {
+                    return Some(Err(ErrorCode::Internal(
+                        "Dictionary page not supported yet".to_string(),
+                    )));
                 }
             }
         }
@@ -135,7 +175,45 @@ impl<T: ParquetInteger> Iterator for IntegerIter<'_, T> {
             return None;
         }
 
-        Some(Ok(T::create_column(column_data)))
+        // Return the appropriate Column variant based on nullability
+        if self.is_nullable {
+            // For nullable columns, create NullableColumn
+            let column_len = column_data.len();
+            let base_column = T::create_column(column_data);
+
+            // Combine validity bitmaps if we have multiple pages
+            let combined_bitmap = if validity_bitmaps.is_empty() {
+                // This should not happen for nullable columns, but handle gracefully
+                Bitmap::new_constant(true, column_len)
+            } else if validity_bitmaps.len() == 1 {
+                validity_bitmaps.into_iter().next().unwrap()
+            } else {
+                // Concatenate multiple bitmaps efficiently
+                let total_len: usize = validity_bitmaps.iter().map(|b| b.len()).sum();
+
+                // Verify total bitmap length matches column length
+                if total_len != column_len {
+                    return Some(Err(ErrorCode::Internal(format!(
+                        "Total bitmap length mismatch: bitmap_total={}, column_len={}",
+                        total_len, column_len
+                    ))));
+                }
+
+                let mut combined_bits = Vec::with_capacity(total_len);
+                for bitmap in validity_bitmaps {
+                    // Use extend instead of individual push operations for better performance
+                    combined_bits.extend(bitmap.iter());
+                }
+                Bitmap::from_iter(combined_bits)
+            };
+
+            use databend_common_expression::types::nullable::NullableColumn;
+            let nullable_column = NullableColumn::new(base_column, combined_bitmap);
+            Some(Ok(Column::Nullable(Box::new(nullable_column))))
+        } else {
+            // For non-nullable columns, return regular column
+            Some(Ok(T::create_column(column_data)))
+        }
     }
 }
 
@@ -149,7 +227,8 @@ impl<'a, T: ParquetInteger> IntegerIter<'a, T> {
         data_page: &parquet2::page::DataPage,
         column_data: &mut Vec<T>,
         target_rows: usize,
-    ) -> Result<()> {
+        is_nullable: bool,
+    ) -> Result<Option<Bitmap>> {
         // Validate physical type
         if data_page.descriptor.primitive_type.physical_type != T::PHYSICAL_TYPE {
             return Err(ErrorCode::Internal(format!(
@@ -162,19 +241,52 @@ impl<'a, T: ParquetInteger> IntegerIter<'a, T> {
         let (def_levels, _, values_buffer) = Self::extract_page_data(data_page)?;
         let remaining = target_rows - column_data.len();
 
+        // Defensive checks for nullable vs non-nullable columns
+        if is_nullable {
+            // Nullable columns must have definition levels
+            if def_levels.is_empty() {
+                return Err(ErrorCode::Internal(
+                    "Nullable column must have definition levels".to_string(),
+                ));
+            }
+        } else {
+            // Non-nullable columns should not have definition levels
+            if !def_levels.is_empty() {
+                return Err(ErrorCode::Internal(
+                    "Non-nullable column should not have definition levels".to_string(),
+                ));
+            }
+        }
+
         // Get page metadata
         let num_values = data_page.num_values();
         let num_values_in_buffer = values_buffer.len() / std::mem::size_of::<T>();
 
-        // Performance optimization: check if we need to decode definition levels
-        let has_nulls_in_page = def_levels.len() > 0 && (num_values > num_values_in_buffer);
+        // Calculate how many rows this page will actually contribute
+        let page_rows = if is_nullable {
+            // For nullable columns, page contributes num_values rows (including NULLs)
+            num_values.min(remaining)
+        } else {
+            // For non-nullable columns, page contributes num_values_in_buffer rows
+            num_values_in_buffer.min(remaining)
+        };
 
         // Process definition levels to create validity bitmap
-        let (validity_bitmap, non_null_count) = if has_nulls_in_page {
-            Self::decode_definition_levels(&def_levels, data_page, num_values, remaining)?
+        let (validity_bitmap, non_null_count) = if is_nullable {
+            // Performance optimization: check if we need to decode definition levels
+            let has_nulls_in_page = num_values > num_values_in_buffer;
+
+            if has_nulls_in_page {
+                Self::decode_definition_levels(&def_levels, data_page, num_values, page_rows)?
+            } else {
+                // Optimization: no NULL values, skip definition level decoding
+                // But still need to create an all-true validity bitmap for nullable columns
+                let all_valid_bitmap = Bitmap::new_constant(true, page_rows);
+                (Some(all_valid_bitmap), page_rows)
+            }
         } else {
-            // Optimization: no NULL values, skip definition level decoding
-            (None, num_values_in_buffer.min(remaining))
+            // Non-nullable column: no validity bitmap needed
+            (None, page_rows)
         };
 
         // Process values based on encoding
@@ -183,9 +295,9 @@ impl<'a, T: ParquetInteger> IntegerIter<'a, T> {
                 Self::process_plain_encoding(
                     values_buffer,
                     column_data,
-                    remaining,
+                    page_rows, // Use page_rows instead of remaining
                     non_null_count,
-                    validity_bitmap,
+                    validity_bitmap.as_ref(),
                 )?;
             }
             encoding => {
@@ -196,17 +308,20 @@ impl<'a, T: ParquetInteger> IntegerIter<'a, T> {
             }
         }
 
-        Ok(())
+        Ok(validity_bitmap)
     }
 
     /// Extract definition levels, repetition levels, and values from a data page
-    fn extract_page_data(
-        data_page: &parquet2::page::DataPage,
-    ) -> Result<(&[u8], &[u8], &[u8])> {
+    fn extract_page_data(data_page: &parquet2::page::DataPage) -> Result<(&[u8], &[u8], &[u8])> {
         // Use parquet2's split_buffer function to extract page components
         match parquet2::page::split_buffer(data_page) {
-            Ok((rep_levels, def_levels, values_buffer)) => Ok((def_levels, rep_levels, values_buffer)),
-            Err(e) => Err(ErrorCode::Internal(format!("Failed to split buffer: {}", e))),
+            Ok((rep_levels, def_levels, values_buffer)) => {
+                Ok((def_levels, rep_levels, values_buffer))
+            }
+            Err(e) => Err(ErrorCode::Internal(format!(
+                "Failed to split buffer: {}",
+                e
+            ))),
         }
     }
 
@@ -215,8 +330,8 @@ impl<'a, T: ParquetInteger> IntegerIter<'a, T> {
         def_levels: &[u8],
         data_page: &parquet2::page::DataPage,
         num_values: usize,
-        remaining: usize,
-    ) -> Result<(Option<(Bitmap, bool)>, usize)> {
+        page_rows: usize,
+    ) -> Result<(Option<Bitmap>, usize)> {
         let bit_width = {
             let max_def_level = data_page.descriptor.max_def_level;
             if max_def_level == 1 {
@@ -230,14 +345,13 @@ impl<'a, T: ParquetInteger> IntegerIter<'a, T> {
         rle_decoder.set_data(bytes::Bytes::copy_from_slice(def_levels));
 
         // Definition levels count should equal the number of values in the page
-        let expected_levels = num_values.min(remaining);
+        let expected_levels = num_values.min(page_rows);
         let mut levels = vec![0i32; expected_levels];
-        let decoded_count = rle_decoder
-            .get_batch(&mut levels)
-            .map_err(|e| {
-                ErrorCode::Internal(format!("Failed to decode definition levels: {}", e))
-            })?;
+        let decoded_count = rle_decoder.get_batch(&mut levels).map_err(|e| {
+            ErrorCode::Internal(format!("Failed to decode definition levels: {}", e))
+        })?;
 
+        // This is not correct
         if decoded_count != expected_levels {
             return Err(ErrorCode::Internal(format!(
                 "Definition level decoder returned wrong count: expected={}, got={}",
@@ -261,42 +375,46 @@ impl<'a, T: ParquetInteger> IntegerIter<'a, T> {
             }
         }
 
-        let bitmap = Bitmap::from_iter(validity_bits);
-        Ok((Some((bitmap, has_nulls)), non_null_count))
+        let bitmap = if has_nulls {
+            Some(Bitmap::from_iter(validity_bits))
+        } else {
+            // Optimization: no NULL values, but still need to create an all-true validity bitmap for nullable columns
+            Some(Bitmap::new_constant(true, expected_levels))
+        };
+        Ok((bitmap, non_null_count))
     }
 
     /// Process plain encoding values
     fn process_plain_encoding(
         values_buffer: &[u8],
         column_data: &mut Vec<T>,
-        remaining: usize,
+        page_rows: usize,
         non_null_count: usize,
-        validity_bitmap: Option<(Bitmap, bool)>,
+        validity_bitmap: Option<&Bitmap>,
     ) -> Result<()> {
         let num_values_in_buffer = values_buffer.len() / std::mem::size_of::<T>();
-        let values_to_read = non_null_count.min(num_values_in_buffer);
 
         // Allocate space for all positions (including NULLs)
         let old_len = column_data.len();
         // Fill NULL positions with zero values as default
         let default_value = unsafe { std::mem::zeroed::<T>() };
-        column_data.resize(old_len + remaining, default_value);
+        column_data.resize(old_len + page_rows, default_value);
 
-        if values_to_read > 0 {
+        if non_null_count > 0 {
             // Fill only non-NULL positions with actual values
             let mut values_read = 0;
 
-            if let Some((bitmap, _)) = &validity_bitmap {
+            if let Some(bitmap) = validity_bitmap {
                 // Copy values based on validity bitmap
                 for (i, is_valid) in bitmap.iter().enumerate() {
-                    if is_valid && values_read < values_to_read {
+                    if is_valid && values_read < non_null_count {
                         let src_offset = values_read * std::mem::size_of::<T>();
                         let dst_offset = old_len + i;
 
                         if src_offset + std::mem::size_of::<T>() <= values_buffer.len() {
                             // Safe byte-level copying to handle unaligned memory
-                            let src_bytes = &values_buffer
-                                [src_offset..src_offset + std::mem::size_of::<T>()];
+                            let src_bytes =
+                                &values_buffer[src_offset..src_offset + std::mem::size_of::<T>()];
                             let dst_bytes = unsafe {
                                 std::slice::from_raw_parts_mut(
                                     column_data[dst_offset..dst_offset + 1].as_mut_ptr() as *mut u8,
@@ -310,7 +428,7 @@ impl<'a, T: ParquetInteger> IntegerIter<'a, T> {
                 }
             } else {
                 // No validity bitmap, copy all values sequentially
-                for i in 0..values_to_read.min(remaining) {
+                for i in 0..non_null_count.min(page_rows) {
                     let src_offset = i * std::mem::size_of::<T>();
                     let dst_offset = old_len + i;
 
@@ -350,52 +468,5 @@ pub type Int32Iter<'a> = IntegerIter<'a, i32>;
 
 #[cfg(test)]
 mod tests {
-    use databend_common_column::bitmap::Bitmap;
-
-    #[test]
-    fn test_definition_level_optimization() {
-        // Test optimization: skip definition level decoding when num_values == values_buffer_count
-        let num_values = 4; // Total rows in page (including NULLs)
-        // Simulate actual byte buffer: 4 i32 values = 16 bytes
-        let values_buffer = vec![0u8; 16]; // 16 bytes = 4 i32 values
-        let def_levels = vec![1u8, 1u8, 1u8, 1u8]; // Has definition levels, but all non-NULL
-        let remaining = 4;
-
-        // Calculate whether we need to decode definition levels
-        let num_values_in_buffer = values_buffer.len() / std::mem::size_of::<i32>();
-        let has_nulls_in_page = def_levels.len() > 0 && (num_values > num_values_in_buffer);
-
-        // Verify optimization logic: num_values (4) == num_values_in_buffer (4), so num_values > num_values_in_buffer = false
-        // Therefore has_nulls_in_page = true && false = false
-        assert!(!has_nulls_in_page, "Should skip definition level decoding when num_values == num_values_in_buffer");
-
-        // Verify optimization branch result
-        let (validity_bitmap, non_null_count): (Option<(Bitmap, bool)>, usize) = if has_nulls_in_page {
-            // Should not reach this branch
-            panic!("Should not decode definition levels when optimization applies");
-        } else {
-            // Optimization: no NULL values, skip definition level decoding
-            (None, num_values_in_buffer.min(remaining))
-        };
-
-        assert_eq!(validity_bitmap, None, "Should not create validity bitmap when no nulls");
-        assert_eq!(non_null_count, 4, "Should return correct non-null count");
-    }
-
-    #[test]
-    fn test_definition_level_optimization_with_nulls() {
-        // Test case with NULL values: num_values > values_buffer_count
-        let num_values = 4; // Total rows in page (including NULLs)
-        // Simulate actual byte buffer: only 2 i32 values = 8 bytes (because of 2 NULLs)
-        let values_buffer = vec![0u8; 8]; // 8 bytes = 2 i32 values
-        let def_levels = vec![1u8, 0u8, 1u8, 0u8]; // Has definition levels, including NULLs
-        let _remaining = 4;
-
-        // Calculate whether we need to decode definition levels
-        let num_values_in_buffer = values_buffer.len() / std::mem::size_of::<i32>();
-        let has_nulls_in_page = def_levels.len() > 0 && (num_values > num_values_in_buffer);
-
-        // Verify logic: num_values (4) > num_values_in_buffer (2), so has_nulls_in_page = true && true = true
-        assert!(has_nulls_in_page, "Should decode definition levels when nulls are present");
-    }
+    // TODO: Add meaningful integration tests with real Parquet data
 }

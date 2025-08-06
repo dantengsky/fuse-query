@@ -34,3 +34,17 @@ select * from t2 order by a;
 5
 NULL
 
+
+statement ok
+create table t3 (a int);
+
+statement ok
+create table r like t3 engine = random;
+
+statement ok
+insert into t3 select * from r limit 100000;
+
+statement ok
+select sum(a) from t3 ignore_result;
+
+
