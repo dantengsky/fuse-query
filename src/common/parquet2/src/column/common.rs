@@ -103,12 +103,14 @@ pub fn decode_definition_levels(
     Ok((bitmap, non_null_count))
 }
 
-/// Process plain encoding values with high-performance byte-level copying
+/// Process plain encoded data with proper endianness handling
+///
+/// Parquet format stores all numeric data in little-endian format.
+/// On big-endian systems, we need to convert byte order.
 pub fn process_plain_encoding<T: Copy>(
     values_buffer: &[u8],
-    column_data: &mut Vec<T>,
     page_rows: usize,
-    non_null_count: usize,
+    column_data: &mut Vec<T>,
     validity_bitmap: Option<&Bitmap>,
 ) -> Result<()> {
     let type_size = std::mem::size_of::<T>();
@@ -116,6 +118,13 @@ pub fn process_plain_encoding<T: Copy>(
 
     // Reserve space for new values
     column_data.reserve(page_rows);
+
+    // Calculate how many non-null values we expect to read
+    let non_null_count = if let Some(bitmap) = validity_bitmap {
+        bitmap.iter().filter(|&b| b).count()
+    } else {
+        page_rows
+    };
 
     if let Some(bitmap) = validity_bitmap {
         // Nullable column: process values based on validity bitmap
@@ -131,13 +140,24 @@ pub fn process_plain_encoding<T: Copy>(
                 let dst_offset = old_len + i;
 
                 if src_offset + type_size <= values_buffer.len() {
-                    // High-performance byte-level copying using copy_nonoverlapping
-                    // This avoids alignment issues by treating data as u8 arrays
-                    unsafe {
-                        let src_ptr = values_buffer.as_ptr().add(src_offset);
-                        let dst_ptr =
-                            column_data[dst_offset..dst_offset + 1].as_mut_ptr() as *mut u8;
-                        std::ptr::copy_nonoverlapping(src_ptr, dst_ptr, type_size);
+                    // Handle endianness conversion for numeric types
+                    #[cfg(target_endian = "big")]
+                    {
+                        // On big-endian systems, convert from Parquet's little-endian format
+                        convert_endianness_and_copy::<T>(
+                            &values_buffer[src_offset..src_offset + type_size],
+                            &mut column_data[dst_offset..dst_offset + 1],
+                        );
+                    }
+                    #[cfg(target_endian = "little")]
+                    {
+                        // On little-endian systems, direct copy is sufficient
+                        unsafe {
+                            let src_ptr = values_buffer.as_ptr().add(src_offset);
+                            let dst_ptr =
+                                column_data[dst_offset..dst_offset + 1].as_mut_ptr() as *mut u8;
+                            std::ptr::copy_nonoverlapping(src_ptr, dst_ptr, type_size);
+                        }
                     }
                     values_read += 1;
                 } else {
@@ -153,13 +173,30 @@ pub fn process_plain_encoding<T: Copy>(
         let total_bytes = values_to_copy * type_size;
 
         if total_bytes <= values_buffer.len() {
-            unsafe {
-                // Batch copy entire buffer using byte-level copy_nonoverlapping
-                // This is the fastest possible approach, avoiding all alignment issues
-                let src_ptr = values_buffer.as_ptr();
-                let dst_ptr = column_data.as_mut_ptr().add(old_len) as *mut u8;
-                std::ptr::copy_nonoverlapping(src_ptr, dst_ptr, total_bytes);
-                column_data.set_len(old_len + values_to_copy);
+            #[cfg(target_endian = "big")]
+            {
+                // On big-endian systems, convert each value individually
+                unsafe {
+                    column_data.set_len(old_len + values_to_copy);
+                }
+                for i in 0..values_to_copy {
+                    let src_offset = i * type_size;
+                    let dst_offset = old_len + i;
+                    convert_endianness_and_copy::<T>(
+                        &values_buffer[src_offset..src_offset + type_size],
+                        &mut column_data[dst_offset..dst_offset + 1],
+                    );
+                }
+            }
+            #[cfg(target_endian = "little")]
+            {
+                // On little-endian systems, batch copy for maximum performance
+                unsafe {
+                    let src_ptr = values_buffer.as_ptr();
+                    let dst_ptr = column_data.as_mut_ptr().add(old_len) as *mut u8;
+                    std::ptr::copy_nonoverlapping(src_ptr, dst_ptr, total_bytes);
+                    column_data.set_len(old_len + values_to_copy);
+                }
             }
         } else {
             return Err(ErrorCode::Internal("Values buffer underflow".to_string()));
@@ -167,6 +204,83 @@ pub fn process_plain_encoding<T: Copy>(
     }
 
     Ok(())
+}
+
+/// Convert endianness and copy data for big-endian systems
+///
+/// This function handles the conversion from Parquet's little-endian format
+/// to the native big-endian format on big-endian systems.
+#[cfg(target_endian = "big")]
+fn convert_endianness_and_copy<T: Copy>(src_bytes: &[u8], dst_slice: &mut [T]) {
+    let type_size = std::mem::size_of::<T>();
+
+    match type_size {
+        1 => {
+            // Single byte: no endianness conversion needed
+            unsafe {
+                let dst_ptr = dst_slice.as_mut_ptr() as *mut u8;
+                std::ptr::copy_nonoverlapping(src_bytes.as_ptr(), dst_ptr, 1);
+            }
+        }
+        2 => {
+            // 2-byte integer (i16): convert from little-endian
+            let mut bytes = [0u8; 2];
+            bytes.copy_from_slice(src_bytes);
+            let value = i16::from_le_bytes(bytes);
+            unsafe {
+                let dst_ptr = dst_slice.as_mut_ptr() as *mut i16;
+                *dst_ptr = value;
+            }
+        }
+        4 => {
+            // 4-byte integer (i32): convert from little-endian
+            let mut bytes = [0u8; 4];
+            bytes.copy_from_slice(src_bytes);
+            let value = i32::from_le_bytes(bytes);
+            unsafe {
+                let dst_ptr = dst_slice.as_mut_ptr() as *mut i32;
+                *dst_ptr = value;
+            }
+        }
+        8 => {
+            // 8-byte integer (i64): convert from little-endian
+            let mut bytes = [0u8; 8];
+            bytes.copy_from_slice(src_bytes);
+            let value = i64::from_le_bytes(bytes);
+            unsafe {
+                let dst_ptr = dst_slice.as_mut_ptr() as *mut i64;
+                *dst_ptr = value;
+            }
+        }
+        16 => {
+            // 16-byte integer (i128): convert from little-endian
+            let mut bytes = [0u8; 16];
+            bytes.copy_from_slice(src_bytes);
+            let value = i128::from_le_bytes(bytes);
+            unsafe {
+                let dst_ptr = dst_slice.as_mut_ptr() as *mut i128;
+                *dst_ptr = value;
+            }
+        }
+        32 => {
+            // 32-byte integer (i256): convert from little-endian
+            // Note: i256 doesn't have from_le_bytes, so we reverse the bytes manually
+            let mut bytes = [0u8; 32];
+            bytes.copy_from_slice(src_bytes);
+            bytes.reverse(); // Convert from little-endian to big-endian
+            unsafe {
+                let dst_ptr = dst_slice.as_mut_ptr() as *mut u8;
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), dst_ptr, 32);
+            }
+        }
+        _ => {
+            // For other sizes, fall back to direct copy (may not be correct for all types)
+            unsafe {
+                let dst_ptr = dst_slice.as_mut_ptr() as *mut u8;
+                std::ptr::copy_nonoverlapping(src_bytes.as_ptr(), dst_ptr, type_size);
+            }
+        }
+    }
 }
 
 /// Perform defensive checks for nullable vs non-nullable columns
@@ -278,7 +392,7 @@ pub fn process_data_page<T: Copy>(
     };
 
     // Process definition levels to create validity bitmap
-    let (validity_bitmap, non_null_count) = if is_nullable {
+    let (validity_bitmap, _non_null_count) = if is_nullable {
         // Performance optimization: check if we need to decode definition levels
         let has_nulls_in_page = num_values > num_values_in_buffer;
 
@@ -300,9 +414,8 @@ pub fn process_data_page<T: Copy>(
         parquet2::encoding::Encoding::Plain => {
             process_plain_encoding(
                 values_buffer,
-                column_data,
                 page_rows,
-                non_null_count,
+                column_data,
                 validity_bitmap.as_ref(),
             )?;
         }

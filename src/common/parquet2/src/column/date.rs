@@ -18,29 +18,10 @@ use parquet2::schema::types::PhysicalType;
 use crate::column::common::ParquetColumnIterator;
 use crate::column::common::ParquetColumnType;
 use crate::column::number::IntegerMetadata;
-use crate::column::number::ParquetInteger;
 
 #[derive(Copy, Clone)]
 #[repr(transparent)]
 pub struct Date(i32);
-
-impl ParquetInteger for Date {
-    const PHYSICAL_TYPE: PhysicalType = PhysicalType::Int32;
-
-    #[cfg(target_endian = "big")]
-    fn convert_from_le_bytes(bytes: &[u8]) -> Self {
-        let mut array = [0u8; 4];
-        array.copy_from_slice(bytes);
-        Date(i32::from_le_bytes(array))
-    }
-
-    fn create_column(data: Vec<Self>) -> Column {
-        // Zero-cost transmute: Vec<Date> -> Vec<i32>
-        // Safe because Date is #[repr(transparent)] over i32
-        let raw_data: Vec<i32> = unsafe { std::mem::transmute(data) };
-        Column::Date(raw_data.into())
-    }
-}
 
 impl ParquetColumnType for Date {
     type Metadata = IntegerMetadata;
@@ -54,4 +35,5 @@ impl ParquetColumnType for Date {
     }
 }
 
+/// Type alias for Date iterator using the generic ParquetColumnIterator
 pub type DateIter<'a> = ParquetColumnIterator<'a, Date>;

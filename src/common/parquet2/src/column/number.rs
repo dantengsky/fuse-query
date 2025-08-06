@@ -31,62 +31,13 @@ use crate::wip::decompressor::Decompressor;
 // Trait Definitions
 // =============================================================================
 
-/// Trait for types that can be deserialized from Parquet integer data
-pub trait ParquetInteger: Copy + Send + Sync + 'static {
-    /// The Parquet physical type for this integer type
-    const PHYSICAL_TYPE: PhysicalType;
-
-    /// Convert little-endian bytes to this integer type (for big-endian systems)
-    #[cfg(target_endian = "big")]
-    fn convert_from_le_bytes(bytes: &[u8]) -> Self;
-
-    /// Create a column from the deserialized data
-    fn create_column(data: Vec<Self>) -> Column;
-}
+/// Metadata for integer columns (currently empty, but allows for future extensions)
+#[derive(Clone, Copy)]
+pub struct IntegerMetadata;
 
 // =============================================================================
 // Trait Implementations
 // =============================================================================
-
-impl ParquetInteger for i32 {
-    const PHYSICAL_TYPE: PhysicalType = PhysicalType::Int32;
-
-    #[cfg(target_endian = "big")]
-    #[inline]
-    fn convert_from_le_bytes(bytes: &[u8]) -> Self {
-        let mut array = [0u8; 4];
-        array.copy_from_slice(bytes);
-        i32::from_le_bytes(array)
-    }
-
-    fn create_column(data: Vec<Self>) -> Column {
-        Column::Number(i32::upcast_column(Buffer::from(data)))
-    }
-}
-
-impl ParquetInteger for i64 {
-    const PHYSICAL_TYPE: PhysicalType = PhysicalType::Int64;
-
-    #[cfg(target_endian = "big")]
-    #[inline]
-    fn convert_from_le_bytes(bytes: &[u8]) -> Self {
-        let mut array = [0u8; 8];
-        array.copy_from_slice(bytes);
-        i64::from_le_bytes(array)
-    }
-
-    fn create_column(data: Vec<Self>) -> Column {
-        Column::Number(i64::upcast_column(Buffer::from(data)))
-    }
-}
-
-// =============================================================================
-// ParquetColumnType Implementation for Integer Types
-// =============================================================================
-
-/// Empty metadata for integer types (no additional parameters needed)
-#[derive(Clone)]
-pub struct IntegerMetadata;
 
 impl ParquetColumnType for i32 {
     type Metadata = IntegerMetadata;
