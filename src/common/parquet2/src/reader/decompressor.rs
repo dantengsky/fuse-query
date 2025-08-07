@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Simple decompressor that works with the new PageReader API
-//! This is an experimental version that integrates with the zero-copy PageReader
+//! Decompressor that integrates with zero-copy PageReader
 
 use parquet2::compression::Compression;
 use parquet2::error::Error;
@@ -42,13 +41,10 @@ impl<'a> Decompressor<'a> {
         }
     }
 
-    /// Decompress borrowed page data directly into the uncompressed buffer
-    /// This avoids the Vec<u8> copy by working directly with the borrowed slice
     fn decompress_borrowed_page(
         compressed_page: BorrowedCompressedPage<'_>,
         uncompressed_buffer: &mut Vec<u8>,
     ) -> parquet2::error::Result<Page> {
-        // TODO Here we are assuming V1 pages, this is not correct for v2 pages
         let uncompressed_size = compressed_page.uncompressed_size();
         uncompressed_buffer.reserve(uncompressed_size);
         unsafe {
@@ -56,11 +52,8 @@ impl<'a> Decompressor<'a> {
         }
 
         if !compressed_page.is_compressed() {
-            // No decompression needed - copy directly from the borrowed slice
             uncompressed_buffer.extend_from_slice(compressed_page.data());
         } else {
-            // Decompress directly into the buffer
-            // TODO verifiy decompressed size?
             match compressed_page.compression() {
                 Compression::Lz4 => {
                     let _decompressed_len =
@@ -85,8 +78,6 @@ impl<'a> Decompressor<'a> {
             }
         };
 
-        // Create a DataPage from the decompressed data
-        // Note: We take ownership of the buffer data here
         let page = match compressed_page {
             BorrowedCompressedPage::Data(compressed_data_page) => Page::Data(DataPage::new(
                 compressed_data_page.header,
@@ -104,20 +95,12 @@ impl<'a> Decompressor<'a> {
         Ok(page)
     }
 
-    // pub fn into_buffer(self) -> Vec<u8> {
-    //    self.decompression_buffer
-    //}
-
-    // TODO Implement IntoIterator and drop FallibleStreamingIterator
     pub fn next_owned(&mut self) -> Result<Option<Page>, Error> {
-        // Get the next page from our zero-copy PageReader
         let page_tuple = self.page_reader.next_page()?;
 
         if let Some(page) = page_tuple {
-            // Set decompression flag
             self.was_decompressed = page.compression() != Compression::Uncompressed;
 
-            // Decompress the page directly into the buffer
             let decompress_page =
                 Self::decompress_borrowed_page(page, &mut self.decompression_buffer)?;
 
@@ -134,14 +117,11 @@ impl<'a> FallibleStreamingIterator for Decompressor<'a> {
 
     fn advance(&mut self) -> Result<(), Self::Error> {
         self.current_page = None;
-        // Get the next page from our zero-copy PageReader
         let page_tuple = self.page_reader.next_page()?;
 
         if let Some(page) = page_tuple {
-            // Set decompression flag
             self.was_decompressed = page.compression() != Compression::Uncompressed;
 
-            // Decompress the page directly into the buffer
             let decompress_page =
                 Self::decompress_borrowed_page(page, &mut self.decompression_buffer)?;
 

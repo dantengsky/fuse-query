@@ -13,10 +13,6 @@
 // limitations under the License.
 
 //! Number column deserialization for Parquet data
-//!
-//! This module provides efficient deserialization of integer columns (Int32, Int64)
-//! from Parquet format, with support for nullable columns, definition level processing,
-//! and performance optimizations.
 
 use databend_common_column::buffer::Buffer;
 use databend_common_expression::types::Number;
@@ -27,17 +23,8 @@ use crate::column::common::ParquetColumnIterator;
 use crate::column::common::ParquetColumnType;
 use crate::reader::decompressor::Decompressor;
 
-// =============================================================================
-// Trait Definitions
-// =============================================================================
-
-/// Metadata for integer columns (currently empty, but allows for future extensions)
 #[derive(Clone, Copy)]
 pub struct IntegerMetadata;
-
-// =============================================================================
-// Trait Implementations
-// =============================================================================
 
 impl ParquetColumnType for i32 {
     type Metadata = IntegerMetadata;
@@ -57,10 +44,6 @@ impl ParquetColumnType for i64 {
     }
 }
 
-// =============================================================================
-// Iterator Type Aliases
-// =============================================================================
-
 /// Iterator for reading i32 values from Parquet pages
 pub type Int32Iter<'a> = ParquetColumnIterator<'a, i32>;
 
@@ -68,10 +51,9 @@ pub type Int32Iter<'a> = ParquetColumnIterator<'a, i32>;
 pub type Int64Iter<'a> = ParquetColumnIterator<'a, i64>;
 
 // =============================================================================
-// Convenience Constructor Functions
+// Constructor Functions
 // =============================================================================
 
-/// Create a new i32 iterator
 pub fn new_int32_iter(
     pages: Decompressor,
     num_rows: usize,
@@ -81,7 +63,6 @@ pub fn new_int32_iter(
     ParquetColumnIterator::new(pages, num_rows, is_nullable, IntegerMetadata, chunk_size)
 }
 
-/// Create a new i64 iterator
 pub fn new_int64_iter(
     pages: Decompressor,
     num_rows: usize,

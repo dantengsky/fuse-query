@@ -12,11 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Direct deserialization from parquet2 to DataBlock without Arrow intermediate representation
-//!
-//! This crate provides functionality to directly deserialize Parquet data into DataBlock
-//! structures, bypassing the Arrow memory model for improved performance.
-
 pub mod column_reader;
 pub mod decompressor;
 pub mod page_reader;

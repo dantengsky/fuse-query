@@ -13,6 +13,7 @@
 // limitations under the License.
 
 //! Decimal column deserialization for Parquet data
+
 use databend_common_column::buffer::Buffer;
 use databend_common_expression::types::i256;
 use databend_common_expression::types::DecimalColumn;
@@ -28,35 +29,25 @@ use crate::reader::decompressor::Decompressor;
 // Wrapper Types for Decimal Usage
 // =============================================================================
 
-/// Wrapper type for i64 when used as Decimal64
-///
-/// Using #[repr(transparent)] ensures this has the same memory layout as i64,
-/// allowing for zero-cost transmute operations.
+/// Wrapper for i64 as Decimal64 - enables zero-cost transmute via #[repr(transparent)]
 #[derive(Clone, Copy)]
 #[repr(transparent)]
 pub struct Decimal64(pub i64);
 
-/// Wrapper type for i128 when used as Decimal128  
-///
-/// Using #[repr(transparent)] ensures this has the same memory layout as i128,
-/// allowing for zero-cost transmute operations.
+/// Wrapper for i128 as Decimal128 - enables zero-cost transmute via #[repr(transparent)]
 #[derive(Clone, Copy)]
 #[repr(transparent)]
 pub struct Decimal128(pub i128);
 
-/// Wrapper type for i256 when used as Decimal256
-///
-/// Using #[repr(transparent)] ensures this has the same memory layout as i256,
-/// allowing for zero-cost transmute operations.
+/// Wrapper for i256 as Decimal256 - enables zero-cost transmute via #[repr(transparent)]
 #[derive(Clone, Copy)]
 #[repr(transparent)]
 pub struct Decimal256(pub i256);
 
 // =============================================================================
-// ParquetColumnType Implementation for Decimal Types
+// ParquetColumnType Implementation
 // =============================================================================
 
-/// Metadata for decimal types (precision and scale)
 #[derive(Clone)]
 pub struct DecimalMetadata {
     pub precision: u8,
@@ -69,8 +60,6 @@ impl ParquetColumnType for Decimal64 {
 
     fn create_column(data: Vec<Self>, metadata: &Self::Metadata) -> Column {
         let decimal_size = DecimalSize::new_unchecked(metadata.precision, metadata.scale);
-        // Zero-cost transmute: Vec<Decimal64> -> Vec<i64>
-        // Safe because Decimal64 is #[repr(transparent)] over i64
         let raw_data: Vec<i64> = unsafe { std::mem::transmute(data) };
         Column::Decimal(DecimalColumn::Decimal64(
             Buffer::from(raw_data),
@@ -85,8 +74,6 @@ impl ParquetColumnType for Decimal128 {
 
     fn create_column(data: Vec<Self>, metadata: &Self::Metadata) -> Column {
         let decimal_size = DecimalSize::new_unchecked(metadata.precision, metadata.scale);
-        // Zero-cost transmute: Vec<Decimal128> -> Vec<i128>
-        // Safe because Decimal128 is #[repr(transparent)] over i128
         let raw_data: Vec<i128> = unsafe { std::mem::transmute(data) };
         Column::Decimal(DecimalColumn::Decimal128(
             Buffer::from(raw_data),
@@ -101,8 +88,6 @@ impl ParquetColumnType for Decimal256 {
 
     fn create_column(data: Vec<Self>, metadata: &Self::Metadata) -> Column {
         let decimal_size = DecimalSize::new_unchecked(metadata.precision, metadata.scale);
-        // Zero-cost transmute: Vec<Decimal256> -> Vec<i256>
-        // Safe because Decimal256 is #[repr(transparent)] over i256
         let raw_data: Vec<i256> = unsafe { std::mem::transmute(data) };
         Column::Decimal(DecimalColumn::Decimal256(
             Buffer::from(raw_data),
@@ -115,17 +100,13 @@ impl ParquetColumnType for Decimal256 {
 // Iterator Type Aliases
 // =============================================================================
 
-/// Generic iterator for reading decimal values from Parquet pages
 pub type DecimalIter<'a, T> = ParquetColumnIterator<'a, T>;
 
 // =============================================================================
 // Constructor Functions
 // =============================================================================
 
-/// Create a new decimal iterator for any decimal type
-///
-/// This generic function replaces the individual type-specific constructors,
-/// eliminating code duplication while maintaining type safety.
+/// Generic decimal iterator constructor
 pub fn new_decimal_iter<T>(
     pages: Decompressor,
     num_rows: usize,
@@ -141,9 +122,6 @@ where
     ParquetColumnIterator::new(pages, num_rows, is_nullable, metadata, chunk_size)
 }
 
-/// Create a new decimal iterator for i64 (Decimal64)
-///
-/// Convenience wrapper around the generic function for backward compatibility.
 pub fn new_decimal64_iter(
     pages: Decompressor,
     num_rows: usize,
@@ -155,9 +133,6 @@ pub fn new_decimal64_iter(
     new_decimal_iter(pages, num_rows, precision, scale, is_nullable, chunk_size)
 }
 
-/// Create a new decimal iterator for i128 (Decimal128)
-///
-/// Convenience wrapper around the generic function for backward compatibility.
 pub fn new_decimal128_iter(
     pages: Decompressor,
     num_rows: usize,
@@ -169,9 +144,6 @@ pub fn new_decimal128_iter(
     new_decimal_iter(pages, num_rows, precision, scale, is_nullable, chunk_size)
 }
 
-/// Create a new decimal iterator for i256 (Decimal256)
-///
-/// Convenience wrapper around the generic function for backward compatibility.
 pub fn new_decimal256_iter(
     pages: Decompressor,
     num_rows: usize,

@@ -12,12 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Column readers for Parquet data
-//!
-//! This crate provides functionality to directly deserialize Parquet data into DataBlock
-//! structures, bypassing the Arrow memory model for improved performance.
-
-pub mod common;
+mod common;
 mod date;
 mod decimal;
 mod number;
@@ -25,7 +20,6 @@ mod string;
 
 pub use date::*;
 pub use decimal::*;
-// Export IntegerMetadata for external use
 pub use number::IntegerMetadata;
 pub use number::*;
 pub use string::*;

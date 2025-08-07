@@ -28,12 +28,9 @@ impl ParquetColumnType for Date {
     const PHYSICAL_TYPE: PhysicalType = PhysicalType::Int32;
 
     fn create_column(data: Vec<Self>, _metadata: &Self::Metadata) -> Column {
-        // Zero-cost transmute: Vec<Date> -> Vec<i32>
-        // Safe because Date is #[repr(transparent)] over i32
         let raw_data: Vec<i32> = unsafe { std::mem::transmute(data) };
         Column::Date(raw_data.into())
     }
 }
 
-/// Type alias for Date iterator using the generic ParquetColumnIterator
 pub type DateIter<'a> = ParquetColumnIterator<'a, Date>;

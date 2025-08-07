@@ -21,12 +21,8 @@ pub fn from_table_field_type(field_name: String, field_type: &TableDataType) -> 
             NumberDataType::UInt16 => PrimitiveType::from_physical(field_name, PhysicalType::Int32),
             NumberDataType::UInt32 => PrimitiveType::from_physical(field_name, PhysicalType::Int64),
             NumberDataType::UInt64 => PrimitiveType::from_physical(field_name, PhysicalType::Int64),
-            NumberDataType::Float32 => {
-                PrimitiveType::from_physical(field_name, PhysicalType::Float)
-            }
-            NumberDataType::Float64 => {
-                PrimitiveType::from_physical(field_name, PhysicalType::Double)
-            }
+            NumberDataType::Float32 => PrimitiveType::from_physical(field_name, PhysicalType::Float),
+            NumberDataType::Float64 => PrimitiveType::from_physical(field_name, PhysicalType::Double),
         },
         TableDataType::Decimal(decimal_type) => {
             let precision = decimal_type.precision();
@@ -41,36 +37,23 @@ pub fn from_table_field_type(field_name: String, field_type: &TableDataType) -> 
             }
         }
         TableDataType::Date => PrimitiveType::from_physical(field_name, PhysicalType::Int32),
-        TableDataType::Nullable(_) => {
-            unreachable!("Nullable should have been unwrapped")
-        }
+        TableDataType::Nullable(_) => unreachable!("Nullable should have been unwrapped"),
         t => unimplemented!("Unsupported type: {:?} ", t),
     };
 
-    // Set repetition based on nullability
-    parquet_primitive_type.field_info.repetition = if is_nullable {
-        Repetition::Optional
-    } else {
-        Repetition::Required
-    };
+    if is_nullable {
+        parquet_primitive_type.field_info.repetition = Repetition::Optional;
+    }
 
     parquet_primitive_type
 }
 
 fn decimal_length_from_precision(precision: usize) -> usize {
-    // digits = floor(log_10(2^(8*n - 1) - 1))
-    // ceil(digits) = log10(2^(8*n - 1) - 1)
-    // 10^ceil(digits) = 2^(8*n - 1) - 1
-    // 10^ceil(digits) + 1 = 2^(8*n - 1)
-    // log2(10^ceil(digits) + 1) = (8*n - 1)
-    // log2(10^ceil(digits) + 1) + 1 = 8*n
-    // (log2(10^ceil(digits) + 1) + 1) / 8 = n
     (((10.0_f64.powi(precision as i32) + 1.0).log2() + 1.0) / 8.0).ceil() as usize
 }
 
 pub fn calculate_parquet_max_levels(data_type: &TableDataType) -> (i16, i16) {
     match data_type {
-        // Simple primitive types - these are REQUIRED by default (definition level 0)
         TableDataType::Boolean => (0, 0),
         TableDataType::Binary => (0, 0),
         TableDataType::String => (0, 0),
@@ -90,14 +73,11 @@ pub fn calculate_parquet_max_levels(data_type: &TableDataType) -> (i16, i16) {
             (inner_def + 1, inner_rep)
         }
 
-        // TODO: Fix the following types
         TableDataType::Null
         | TableDataType::EmptyArray
         | TableDataType::EmptyMap
         | TableDataType::Array(_)
         | TableDataType::Map(_)
-        | TableDataType::Tuple { .. } => {
-            unimplemented!()
-        }
+        | TableDataType::Tuple { .. } => unimplemented!(),
     }
 }

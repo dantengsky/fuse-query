@@ -31,31 +31,15 @@ pub struct StringIter<'a> {
     chunk_size: Option<usize>,
     /// Total number of rows to process
     num_rows: usize,
-
-    // Dictionary encoding support
-    /// Dictionary entries for dictionary-encoded pages
-    /// Contains the actual string values referenced by indices in data pages
+    /// Dictionary entries
     dictionary: Option<Vec<Vec<u8>>>,
-
-    // Performance optimization: cached dictionary views
-    /// Cached inline views for small dictionary optimization
-    /// Only populated for dictionaries with ≤16 entries and all strings ≤12 bytes
-    /// Avoids repeated `create_inline_view` calls for the same dictionary
+    // Cached dictionary views
     cached_dict_views: Option<Vec<View>>,
 }
 
 impl<'a> StringIter<'a> {
     /// Create a new StringIter for processing string column pages.
-    ///
-    /// # Arguments
-    /// * `pages` - Decompressor for reading Parquet pages
-    /// * `num_rows` - Total number of rows to process
-    /// * `chunk_size` - Optional chunk size for batched processing
-    pub fn new(
-        pages: Decompressor<'a>,
-        num_rows: usize,
-        chunk_size: Option<usize>,
-    ) -> StringIter<'a> {
+    pub fn new(pages: Decompressor<'a>, num_rows: usize, chunk_size: Option<usize>) -> Self {
         Self {
             pages,
             chunk_size,
@@ -66,9 +50,6 @@ impl<'a> StringIter<'a> {
     }
 
     /// Process a dictionary page and store the dictionary entries
-    ///
-    /// Dictionary pages contain the actual string values that will be referenced
-    /// by indices in subsequent data pages.
     fn process_dictionary_page(
         &mut self,
         dict_page: &parquet2::page::DictPage,
@@ -110,7 +91,6 @@ impl<'a> StringIter<'a> {
     }
 
     /// Create a View from a string slice, handling both inline and buffer storage
-    /// Optimized version to reduce memory copies and improve performance
     fn create_view_from_string(
         string_data: &[u8],
         page_bytes: &mut Vec<u8>,
@@ -226,18 +206,6 @@ impl<'a> StringIter<'a> {
     }
 
     /// Process RLE dictionary encoded data page with optimized paths for different scenarios.
-    ///
-    /// This method handles RLE (Run Length Encoding) dictionary decoding with several optimizations:
-    /// - Fast path for small dictionaries (≤16 entries) with small strings (≤12 bytes)
-    /// - Dictionary views caching to avoid repeated inline view creation
-    /// - Single-pass processing for efficiency
-    ///
-    /// # Arguments
-    /// * `values_buffer` - Raw RLE encoded data (first byte is bit_width)
-    /// * `remaining` - Number of values to decode
-    /// * `views` - Output vector for decoded string views
-    /// * `buffers` - Buffer storage for large strings
-    /// * `total_bytes_len` - Accumulator for total string length
     fn process_rle_dictionary_encoding(
         &mut self,
         values_buffer: &[u8],
@@ -279,20 +247,11 @@ impl<'a> StringIter<'a> {
     }
 
     /// Check if dictionary qualifies for small string fast path optimization.
-    ///
-    /// Fast path is used when:
-    /// - Dictionary has ≤16 entries
-    /// - All strings are ≤12 bytes (can be stored inline)
     fn can_use_small_string_fast_path(&self, dict: &[Vec<u8>]) -> bool {
         dict.len() <= 16 && dict.iter().all(|s| s.len() <= 12)
     }
 
     /// Process RLE dictionary encoding using the optimized small string fast path.
-    ///
-    /// This path is highly optimized for small dictionaries with short strings:
-    /// - Uses cached inline views to avoid repeated `create_inline_view` calls
-    /// - Single-pass processing for view population and length calculation
-    /// - Special handling for bit_width=0 (all values are dictionary[0])
     fn process_small_string_fast_path(
         &mut self,
         dict: &[Vec<u8>],
@@ -403,9 +362,6 @@ impl<'a> StringIter<'a> {
     }
 
     /// Ensure dictionary views are cached for the current dictionary.
-    ///
-    /// This method populates `cached_dict_views` if not already done,
-    /// avoiding repeated `create_inline_view` calls for the same dictionary.
     fn ensure_dict_views_cached(&mut self, dict: &[Vec<u8>]) {
         if self.cached_dict_views.is_none() {
             self.cached_dict_views = Some(
@@ -485,21 +441,6 @@ impl<'a> StringIter<'a> {
     }
 
     /// Create an inline View for small strings (≤12 bytes) with maximum performance.
-    ///
-    /// This function is highly optimized for small strings that can be stored
-    /// directly in the View structure without requiring a separate buffer.
-    ///
-    /// # Safety
-    /// This function uses unsafe code for performance:
-    /// - Unaligned writes for the length prefix
-    /// - Direct memory copy without bounds checking
-    /// - Transmute for zero-cost conversion
-    ///
-    /// # Arguments
-    /// * `string_data` - String bytes to store inline (must be ≤12 bytes)
-    ///
-    /// # Returns
-    /// A View with the string data stored inline
     fn create_inline_view(string_data: &[u8]) -> View {
         debug_assert!(
             string_data.len() <= 12,
@@ -529,16 +470,6 @@ impl<'a> StringIter<'a> {
     }
 
     /// Process a data page based on its encoding type.
-    ///
-    /// This method dispatches to the appropriate encoding-specific processor:
-    /// - Plain encoding: Direct string data without compression
-    /// - RLE/Plain Dictionary: Dictionary-encoded strings with RLE compression
-    ///
-    /// # Arguments
-    /// * `data_page` - The data page to process
-    /// * `views` - Output vector for decoded string views
-    /// * `buffers` - Buffer storage for large strings
-    /// * `total_bytes_len` - Accumulator for total string length
     fn process_data_page(
         &mut self,
         data_page: &parquet2::page::DataPage,

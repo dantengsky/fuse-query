@@ -26,22 +26,13 @@ use crate::reader::pages::BorrowedCompressedDataPage;
 use crate::reader::pages::BorrowedCompressedDictPage;
 use crate::reader::pages::BorrowedCompressedPage;
 
-/// A reader for parquet pages, which reads data from a slice
+/// Zero-copy Parquet page reader
 pub struct PageReader<'a> {
-    // The source data slice
     raw_data_slice: &'a [u8],
-
     compression: Compression,
-
-    // The number of values we have seen so far.
     seen_num_values: i64,
-
-    // The number of total values in this column chunk.
     total_num_values: i64,
-
     descriptor: Descriptor,
-
-    // Maximum page size (compressed or uncompressed) to limit allocations
     max_page_size: usize,
 }
 
@@ -85,12 +76,9 @@ impl<'a> PageReader<'a> {
             ));
         }
 
-        // Zero-copy: borrow the data directly from the slice
         let data_slice = &self.raw_data_slice[..read_size];
-        // Advance the reader position
         self.raw_data_slice = &self.raw_data_slice[read_size..];
 
-        // Extract page information and return as tuple for zero-copy access
         match page_header.type_.try_into()? {
             PageType::DataPage => {
                 let header = page_header.data_page_header.ok_or_else(|| {
@@ -170,7 +158,6 @@ pub(crate) fn get_page_header(
                 )
             })?;
 
-            // Validate encodings
             let _: Encoding = header.encoding.try_into()?;
             let _: Encoding = header.repetition_level_encoding.try_into()?;
             let _: Encoding = header.definition_level_encoding.try_into()?;
@@ -183,7 +170,6 @@ pub(crate) fn get_page_header(
                     "The page header type is a v1 data page but the v1 header is empty".to_string(),
                 )
             })?;
-            // Validate encoding
             let _: Encoding = header.encoding.try_into()?;
             Some(DataPageHeader::V2(header))
         }

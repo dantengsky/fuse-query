@@ -1,3 +1,17 @@
+// Copyright 2021 Datafuse Labs
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use databend_common_exception::ErrorCode;
 use databend_common_exception::Result;
 use databend_common_expression::types::DecimalDataType;
@@ -61,12 +75,8 @@ fn pages_to_column_iter<'a>(
     let pages = column;
     let parquet_physical_type = &types.physical_type;
 
-    // Check if the field is nullable and extract inner type
     let (inner_data_type, is_nullable) = match &field.data_type {
-        TableDataType::Nullable(inner) => {
-            assert!(!inner.is_nullable());
-            (inner.as_ref(), true)
-        }
+        TableDataType::Nullable(inner) => (inner.as_ref(), true),
         other => (other, false),
     };
 
@@ -78,7 +88,6 @@ fn pages_to_column_iter<'a>(
             Ok(Box::new(new_int64_iter(pages, num_rows, is_nullable, chunk_size)))
         }
         (PhysicalType::ByteArray, TableDataType::String) => {
-            // TODO: StringIter needs to be refactored to support nullable like number/decimal
             Ok(Box::new(StringIter::new(pages, num_rows, chunk_size)))
         }
         (PhysicalType::Int32, TableDataType::Decimal(DecimalDataType::Decimal64(_))) => {
@@ -95,14 +104,14 @@ fn pages_to_column_iter<'a>(
             )))
         }
         (PhysicalType::FixedLenByteArray(_), TableDataType::Decimal(DecimalDataType::Decimal128(decimal_size))) => {
-                    Ok(Box::new(new_decimal128_iter(
-                        pages,
-                        num_rows,
-                        decimal_size.precision(),
-                        decimal_size.scale(),
-                        is_nullable,
-                        chunk_size,
-                    )))
+            Ok(Box::new(new_decimal128_iter(
+                pages,
+                num_rows,
+                decimal_size.precision(),
+                decimal_size.scale(),
+                is_nullable,
+                chunk_size,
+            )))
         }
         (PhysicalType::FixedLenByteArray(_), TableDataType::Decimal(DecimalDataType::Decimal256(decimal_size))) => {
             Ok(Box::new(new_decimal256_iter(
@@ -132,25 +141,9 @@ fn pages_to_column_iter<'a>(
 
 fn to_parquet_compression(meta_compression: &Compression) -> Result<ParquetCompression> {
     match meta_compression {
-        Compression::Lz4 => {
-            let err_msg = r#"Deprecated compression algorithm [Lz4] detected.
-
-                                        The Legacy compression algorithm [Lz4] is no longer supported.
-                                        To migrate data from old format, please consider re-create the table,
-                                        by using an old compatible version [v0.8.25-nightly … v0.7.12-nightly].
-
-                                        - Bring up the compatible version of databend-query
-                                        - re-create the table
-                                           Suppose the name of table is T
-                                            ~~~
-                                            create table tmp_t as select * from T;
-                                            drop table T all;
-                                            alter table tmp_t rename to T;
-                                            ~~~
-                                        Please note that the history of table T WILL BE LOST.
-                                       "#;
-            Err(ErrorCode::StorageOther(err_msg))
-        }
+        Compression::Lz4 => Err(ErrorCode::StorageOther(
+            "Legacy compression algorithm [Lz4] is no longer supported.",
+        )),
         Compression::Lz4Raw => Ok(ParquetCompression::Lz4Raw),
         Compression::Snappy => Ok(ParquetCompression::Snappy),
         Compression::Zstd => Ok(ParquetCompression::Zstd),

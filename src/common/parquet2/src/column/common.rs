@@ -1,21 +1,4 @@
-// Copyright 2021 Datafuse Labs
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 //! Common utilities for Parquet column deserialization
-//!
-//! This module provides shared functionality for different column types,
-//! reducing code duplication and providing a consistent interface.
 
 use databend_common_column::bitmap::Bitmap;
 use databend_common_exception::ErrorCode;
@@ -35,7 +18,6 @@ use crate::reader::decompressor;
 
 /// Extract definition levels, repetition levels, and values from a data page
 pub fn extract_page_data(data_page: &parquet2::page::DataPage) -> Result<(&[u8], &[u8], &[u8])> {
-    // Use parquet2's split_buffer function to extract page components
     match parquet2::page::split_buffer(data_page) {
         Ok((rep_levels, def_levels, values_buffer)) => Ok((def_levels, rep_levels, values_buffer)),
         Err(e) => Err(ErrorCode::Internal(format!(
@@ -48,39 +30,26 @@ pub fn extract_page_data(data_page: &parquet2::page::DataPage) -> Result<(&[u8],
 /// Decode definition levels and create validity bitmap
 pub fn decode_definition_levels(
     def_levels: &[u8],
-    data_page: &parquet2::page::DataPage,
+    bit_width: u32,
     num_values: usize,
-    _page_rows: usize,
+    data_page: &parquet2::page::DataPage,
 ) -> Result<(Option<Bitmap>, usize)> {
-    let bit_width = {
-        let max_def_level = data_page.descriptor.max_def_level;
-        if max_def_level == 1 {
-            1
-        } else {
-            get_bit_width(max_def_level)
-        }
-    };
-
     let mut rle_decoder = RleDecoder::new(bit_width as u8);
     rle_decoder.set_data(bytes::Bytes::copy_from_slice(def_levels));
 
-    // Definition levels count should equal the number of values in the page
-    // The number of definition levels is determined by the page content, not by how many rows we want to process
     let expected_levels = num_values;
     let mut levels = vec![0i32; expected_levels];
     let decoded_count = rle_decoder
         .get_batch(&mut levels)
         .map_err(|e| ErrorCode::Internal(format!("Failed to decode definition levels: {}", e)))?;
 
-    // Verify we got the expected number of levels
     if decoded_count != expected_levels {
         return Err(ErrorCode::Internal(format!(
-            "Definition level decoder returned wrong count: expected={}, got={}. This indicates corrupted Parquet data or decoder issues.",
+            "Definition level decoder returned wrong count: expected={}, got={}",
             expected_levels, decoded_count
         )));
     }
 
-    // Create validity bitmap from definition levels
     let max_def_level = data_page.descriptor.max_def_level as i32;
     let mut validity_bits = Vec::with_capacity(expected_levels);
     let mut non_null_count = 0;
@@ -99,7 +68,6 @@ pub fn decode_definition_levels(
     let bitmap = if has_nulls {
         Some(Bitmap::from_iter(validity_bits))
     } else {
-        // Optimization: no NULL values, but still need to create an all-true validity bitmap for nullable columns
         Some(Bitmap::new_constant(true, expected_levels))
     };
     Ok((bitmap, non_null_count))
@@ -394,22 +362,21 @@ pub fn process_data_page<T: Copy>(
     };
 
     // Process definition levels to create validity bitmap
-    let (validity_bitmap, _non_null_count) = if is_nullable {
-        // Performance optimization: check if we need to decode definition levels
-        let has_nulls_in_page = num_values > num_values_in_buffer;
-
-        if has_nulls_in_page {
-            decode_definition_levels(def_levels, data_page, num_values, page_rows)?
+    let bit_width = {
+        let max_def_level = data_page.descriptor.max_def_level;
+        if max_def_level == 1 {
+            1
         } else {
-            // Optimization: no NULL values, skip definition level decoding
-            // But still need to create an all-true validity bitmap for nullable columns
-            let all_valid_bitmap = Bitmap::new_constant(true, page_rows);
-            (Some(all_valid_bitmap), page_rows)
+            get_bit_width(max_def_level)
         }
-    } else {
-        // Non-nullable column: no validity bitmap needed
-        (None, page_rows)
     };
+
+    let (validity_bitmap, _non_null_count) = decode_definition_levels(
+        def_levels,
+        bit_width,
+        num_values,
+        data_page,
+    )?;
 
     // Process values based on encoding
     match data_page.encoding() {
