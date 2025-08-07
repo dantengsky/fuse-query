@@ -34,8 +34,6 @@ use databend_storages_common_table_meta::meta::Compression;
 mod adapter;
 mod deserialize;
 
-// mod decompressor;
-// mod parquet2;
 mod deserialize_v2;
 
 pub use adapter::RowGroupImplBuilder;

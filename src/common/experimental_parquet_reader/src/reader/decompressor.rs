@@ -46,83 +46,60 @@ impl<'a> Decompressor<'a> {
         uncompressed_buffer: &mut Vec<u8>,
     ) -> parquet2::error::Result<Page> {
         let uncompressed_size = compressed_page.uncompressed_size();
-
-        // Ensure capacity without clearing (old data will be overwritten)
         uncompressed_buffer.reserve(uncompressed_size);
 
-        // Get raw pointer to avoid initialization
-        let buffer_ptr = uncompressed_buffer.as_mut_ptr();
-
-        let actual_len = if !compressed_page.is_compressed() {
-            // Direct copy for uncompressed data
-            Self::copy_uncompressed_data(compressed_page.data(), buffer_ptr)?
-        } else {
-            // Decompress based on compression type
-            Self::decompress_data(
-                compressed_page.compression(),
-                compressed_page.data(),
-                buffer_ptr,
-                uncompressed_size,
-            )?
-        };
-
-        // Set the actual length
+        #[allow(clippy::uninit_vec)]
         unsafe {
-            uncompressed_buffer.set_len(actual_len);
+            uncompressed_buffer.set_len(uncompressed_size);
         }
 
-        // Create the appropriate page type
+        if !compressed_page.is_compressed() {
+            // No decompression needed - copy directly from the borrowed slice
+            uncompressed_buffer.extend_from_slice(compressed_page.data());
+        } else {
+            // Decompress directly into the buffer
+            match compressed_page.compression() {
+                Compression::Lz4 => {
+                    let _decompressed_len =
+                        lz4_flex::decompress_into(compressed_page.data(), uncompressed_buffer)
+                            .map_err(|e| {
+                                Error::OutOfSpec(format!("LZ4 decompression failed: {}", e))
+                            })?;
+                }
+                Compression::Zstd => {
+                    zstd::bulk::decompress_to_buffer(compressed_page.data(), uncompressed_buffer)
+                        .map(|_| ())
+                        .map_err(|e| {
+                            Error::OutOfSpec(format!("Zstd decompression failed: {}", e))
+                        })?;
+                }
+                _ => {
+                    return Err(Error::FeatureNotSupported(format!(
+                        "Compression {:?} not supported",
+                        compressed_page.compression()
+                    )));
+                }
+            }
+        };
+
+        // Create a DataPage from the decompressed data
+        // Note: We need to take ownership of the buffer data here
         let page = match compressed_page {
             BorrowedCompressedPage::Data(compressed_data_page) => Page::Data(DataPage::new(
                 compressed_data_page.header,
-                uncompressed_buffer.clone(),
+                std::mem::take(uncompressed_buffer),
                 compressed_data_page.descriptor,
                 None,
             )),
             BorrowedCompressedPage::Dict(compressed_dict_page) => Page::Dict(DictPage::new(
-                uncompressed_buffer.clone(),
+                std::mem::take(uncompressed_buffer),
                 compressed_dict_page.num_values,
                 compressed_dict_page.is_sorted,
             )),
         };
+
         Ok(page)
     }
-
-    /// Copy uncompressed data directly
-    fn copy_uncompressed_data(
-        src_data: &[u8],
-        buffer_ptr: *mut u8,
-    ) -> parquet2::error::Result<usize> {
-        unsafe {
-            std::ptr::copy_nonoverlapping(src_data.as_ptr(), buffer_ptr, src_data.len());
-        }
-        Ok(src_data.len())
-    }
-
-    /// Decompress data based on compression type
-    fn decompress_data(
-        compression: Compression,
-        src_data: &[u8],
-        buffer_ptr: *mut u8,
-        uncompressed_size: usize,
-    ) -> parquet2::error::Result<usize> {
-        let buffer_slice = unsafe { std::slice::from_raw_parts_mut(buffer_ptr, uncompressed_size) };
-
-        match compression {
-            Compression::Lz4 => {
-                lz4_flex::decompress_into(src_data, buffer_slice)
-                    .map_err(|e| Error::OutOfSpec(format!("LZ4 decompression failed: {}", e)))?;
-                Ok(uncompressed_size)
-            }
-            Compression::Zstd => zstd::bulk::decompress_to_buffer(src_data, buffer_slice)
-                .map_err(|e| Error::OutOfSpec(format!("Zstd decompression failed: {}", e))),
-            _ => Err(Error::FeatureNotSupported(format!(
-                "Compression {:?} not supported",
-                compression
-            ))),
-        }
-    }
-
     pub fn next_owned(&mut self) -> Result<Option<Page>, Error> {
         let page_tuple = self.page_reader.next_page()?;
 

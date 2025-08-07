@@ -17,7 +17,7 @@ use crate::reader::decompressor;
 // =============================================================================
 
 /// Extract definition levels, repetition levels, and values from a data page
-pub fn extract_page_data(data_page: &parquet2::page::DataPage) -> Result<(&[u8], &[u8], &[u8])> {
+fn extract_page_data(data_page: &parquet2::page::DataPage) -> Result<(&[u8], &[u8], &[u8])> {
     match parquet2::page::split_buffer(data_page) {
         Ok((rep_levels, def_levels, values_buffer)) => Ok((def_levels, rep_levels, values_buffer)),
         Err(e) => Err(ErrorCode::Internal(format!(
@@ -73,11 +73,13 @@ pub fn decode_definition_levels(
     Ok((bitmap, non_null_count))
 }
 
-/// Process plain encoded data with proper endianness handling
-///
-/// Parquet format stores all numeric data in little-endian format.
-/// On big-endian systems, we need to convert byte order.
-pub fn process_plain_encoding<T: Copy>(
+/// Process plain encoded data
+/// # Arguments
+/// * `values_buffer` - The buffer containing the encoded values (maybe plain encoded）
+/// * `page_rows` - The number of rows in the page
+/// * `column_data` - The vector to which the decoded values will be appended， capacity should be reserved properly
+/// * `validity_bitmap` - The validity bitmap for the column if any
+fn process_plain_encoding<T: Copy>(
     values_buffer: &[u8],
     page_rows: usize,
     column_data: &mut Vec<T>,
@@ -85,9 +87,6 @@ pub fn process_plain_encoding<T: Copy>(
 ) -> Result<()> {
     let type_size = std::mem::size_of::<T>();
     let old_len = column_data.len();
-
-    // Reserve space for new values
-    column_data.reserve(page_rows);
 
     // Calculate how many non-null values we expect to read
     let non_null_count = if let Some(bitmap) = validity_bitmap {
@@ -138,7 +137,6 @@ pub fn process_plain_encoding<T: Copy>(
             // This is safe because the validity bitmap controls access
         }
     } else {
-        // Non-nullable column: batch copy all values for maximum performance
         let values_to_copy = non_null_count.min(page_rows);
         let total_bytes = values_to_copy * type_size;
 
@@ -160,7 +158,7 @@ pub fn process_plain_encoding<T: Copy>(
             }
             #[cfg(target_endian = "little")]
             {
-                // On little-endian systems, batch copy for maximum performance
+                // On little-endian systems, batch copy for performance
                 unsafe {
                     let src_ptr = values_buffer.as_ptr();
                     let dst_ptr = column_data.as_mut_ptr().add(old_len) as *mut u8;
@@ -323,8 +321,9 @@ pub fn combine_validity_bitmaps(
     }
 }
 
+// TODO: this is not suitable for all types, should be adjusted later
 /// Process a complete data page for any type T
-pub fn process_data_page<T: Copy>(
+fn process_data_page<T: Copy>(
     data_page: &parquet2::page::DataPage,
     column_data: &mut Vec<T>,
     target_rows: usize,
@@ -341,37 +340,30 @@ pub fn process_data_page<T: Copy>(
     let remaining = target_rows - column_data.len();
 
     // Defensive checks for nullable vs non-nullable columns
+    #[cfg(debug_assertions)]
     validate_column_nullability(def_levels, is_nullable)?;
 
-    // Get page metadata
+    // Number of values(not rows), including NULLs
     let num_values = data_page.num_values();
 
     // Validate values_buffer alignment
+    #[cfg(debug_assertions)]
     validate_buffer_alignment::<T>(values_buffer)?;
-
-    let type_size = std::mem::size_of::<T>();
-    let num_values_in_buffer = values_buffer.len() / type_size;
 
     // Calculate how many rows this page will actually contribute
     let page_rows = if is_nullable {
         // For nullable columns, page contributes num_values rows (including NULLs)
         num_values.min(remaining)
     } else {
+        let type_size = std::mem::size_of::<T>();
+        let num_values_in_buffer = values_buffer.len() / type_size;
         // For non-nullable columns, page contributes num_values_in_buffer rows
         num_values_in_buffer.min(remaining)
     };
 
     // Process definition levels to create validity bitmap (only for nullable columns)
     let validity_bitmap = if is_nullable {
-        let bit_width = {
-            let max_def_level = data_page.descriptor.max_def_level;
-            if max_def_level == 1 {
-                1
-            } else {
-                get_bit_width(max_def_level)
-            }
-        };
-
+        let bit_width = get_bit_width(data_page.descriptor.max_def_level);
         let (bitmap, _non_null_count) =
             decode_definition_levels(def_levels, bit_width, num_values, data_page)?;
         bitmap
@@ -442,6 +434,7 @@ impl<'a, T: ParquetColumnType> ParquetColumnIterator<'a, T> {
     }
 }
 
+// WIP: State of iterator should be adjusted, if we allow chunk_size be chosen freely
 impl<'a, T: ParquetColumnType> Iterator for ParquetColumnIterator<'a, T> {
     type Item = Result<Column>;
 
@@ -465,7 +458,6 @@ impl<'a, T: ParquetColumnType> Iterator for ParquetColumnIterator<'a, T> {
 
             match page {
                 parquet2::page::Page::Data(data_page) => {
-                    let data_len_before = column_data.len();
                     match process_data_page(
                         data_page,
                         &mut column_data,
@@ -474,11 +466,12 @@ impl<'a, T: ParquetColumnType> Iterator for ParquetColumnIterator<'a, T> {
                         &T::PHYSICAL_TYPE,
                     ) {
                         Ok(validity_bitmap) => {
-                            let data_added = column_data.len() - data_len_before;
-
                             if self.is_nullable {
                                 // For nullable columns, we must have a validity bitmap for each page
                                 if let Some(bitmap) = validity_bitmap {
+                                    let data_len_before = column_data.len();
+                                    let data_added = column_data.len() - data_len_before;
+
                                     // Verify bitmap length matches data added
                                     if bitmap.len() != data_added {
                                         return Some(Err(ErrorCode::Internal(format!(
@@ -534,5 +527,9 @@ impl<'a, T: ParquetColumnType> Iterator for ParquetColumnIterator<'a, T> {
 }
 
 fn get_bit_width(max_level: i16) -> u32 {
-    16 - max_level.leading_zeros()
+    if max_level == 1 {
+        1
+    } else {
+        16 - max_level.leading_zeros()
+    }
 }
