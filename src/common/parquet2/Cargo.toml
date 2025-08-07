@@ -1,5 +1,5 @@
 [package]
-name = "databend-common-p2-reader"
+name = "databend-common-parquet-reader-experimental"
 version = { workspace = true }
 authors = { workspace = true }
 license = { workspace = true }

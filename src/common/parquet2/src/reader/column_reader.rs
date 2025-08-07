@@ -62,7 +62,7 @@ pub fn data_chunk_to_col_iter<'a>(
 
     let typ = &column_descriptor.primitive_type;
 
-    pages_to_column_iter(pages, &typ, field, rows, None)
+    pages_to_column_iter(pages, typ, field, rows, None)
 }
 
 fn pages_to_column_iter<'a>(

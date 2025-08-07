@@ -20,8 +20,7 @@ databend-common-meta-app = { workspace = true }
 databend-common-meta-types = { workspace = true }
 databend-common-metrics = { workspace = true }
 databend-common-native = { workspace = true }
-#databend-common-parquet2-reader = { workspace = true }
-databend-common-p2-reader = { workspace = true }
+databend-common-parquet-reader-experimental = { workspace = true }
 databend-common-pipeline-core = { workspace = true }
 
 databend-common-pipeline-sinks = { workspace = true }

@@ -4027,7 +4027,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "databend-common-p2-reader"
+name = "databend-common-parquet-reader-experimental"
 version = "0.1.0"
 dependencies = [
  "bytes",
@@ -4362,7 +4362,7 @@ dependencies = [
  "databend-common-meta-types",
  "databend-common-metrics",
  "databend-common-native",
- "databend-common-p2-reader",
+ "databend-common-parquet-reader-experimental",
  "databend-common-pipeline-core",
  "databend-common-pipeline-sinks",
  "databend-common-pipeline-sources",

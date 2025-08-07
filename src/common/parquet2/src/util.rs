@@ -21,8 +21,12 @@ pub fn from_table_field_type(field_name: String, field_type: &TableDataType) -> 
             NumberDataType::UInt16 => PrimitiveType::from_physical(field_name, PhysicalType::Int32),
             NumberDataType::UInt32 => PrimitiveType::from_physical(field_name, PhysicalType::Int64),
             NumberDataType::UInt64 => PrimitiveType::from_physical(field_name, PhysicalType::Int64),
-            NumberDataType::Float32 => PrimitiveType::from_physical(field_name, PhysicalType::Float),
-            NumberDataType::Float64 => PrimitiveType::from_physical(field_name, PhysicalType::Double),
+            NumberDataType::Float32 => {
+                PrimitiveType::from_physical(field_name, PhysicalType::Float)
+            }
+            NumberDataType::Float64 => {
+                PrimitiveType::from_physical(field_name, PhysicalType::Double)
+            }
         },
         TableDataType::Decimal(decimal_type) => {
             let precision = decimal_type.precision();

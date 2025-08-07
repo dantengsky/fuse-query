@@ -371,12 +371,8 @@ pub fn process_data_page<T: Copy>(
         }
     };
 
-    let (validity_bitmap, _non_null_count) = decode_definition_levels(
-        def_levels,
-        bit_width,
-        num_values,
-        data_page,
-    )?;
+    let (validity_bitmap, _non_null_count) =
+        decode_definition_levels(def_levels, bit_width, num_values, data_page)?;
 
     // Process values based on encoding
     match data_page.encoding() {
@@ -465,7 +461,7 @@ impl<'a, T: ParquetColumnType> Iterator for ParquetColumnIterator<'a, T> {
                 parquet2::page::Page::Data(data_page) => {
                     let data_len_before = column_data.len();
                     match process_data_page(
-                        &data_page,
+                        data_page,
                         &mut column_data,
                         target_rows,
                         self.is_nullable,
