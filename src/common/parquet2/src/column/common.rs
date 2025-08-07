@@ -361,18 +361,24 @@ pub fn process_data_page<T: Copy>(
         num_values_in_buffer.min(remaining)
     };
 
-    // Process definition levels to create validity bitmap
-    let bit_width = {
-        let max_def_level = data_page.descriptor.max_def_level;
-        if max_def_level == 1 {
-            1
-        } else {
-            get_bit_width(max_def_level)
-        }
-    };
+    // Process definition levels to create validity bitmap (only for nullable columns)
+    let validity_bitmap = if is_nullable {
+        let bit_width = {
+            let max_def_level = data_page.descriptor.max_def_level;
+            if max_def_level == 1 {
+                1
+            } else {
+                get_bit_width(max_def_level)
+            }
+        };
 
-    let (validity_bitmap, _non_null_count) =
-        decode_definition_levels(def_levels, bit_width, num_values, data_page)?;
+        let (bitmap, _non_null_count) =
+            decode_definition_levels(def_levels, bit_width, num_values, data_page)?;
+        bitmap
+    } else {
+        // For non-nullable columns, no validity bitmap needed
+        None
+    };
 
     // Process values based on encoding
     match data_page.encoding() {
