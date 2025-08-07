@@ -25,7 +25,7 @@ use parquet2::schema::types::PhysicalType;
 
 use crate::column::common::ParquetColumnIterator;
 use crate::column::common::ParquetColumnType;
-use crate::wip::decompressor::Decompressor;
+use crate::reader::decompressor::Decompressor;
 
 // =============================================================================
 // Trait Definitions
@@ -72,21 +72,21 @@ pub type Int64Iter<'a> = ParquetColumnIterator<'a, i64>;
 // =============================================================================
 
 /// Create a new i32 iterator
-pub fn new_int32_iter<'a>(
-    pages: Decompressor<'a>,
+pub fn new_int32_iter(
+    pages: Decompressor,
     num_rows: usize,
     is_nullable: bool,
     chunk_size: Option<usize>,
-) -> Int32Iter<'a> {
+) -> Int32Iter {
     ParquetColumnIterator::new(pages, num_rows, is_nullable, IntegerMetadata, chunk_size)
 }
 
 /// Create a new i64 iterator
-pub fn new_int64_iter<'a>(
-    pages: Decompressor<'a>,
+pub fn new_int64_iter(
+    pages: Decompressor,
     num_rows: usize,
     is_nullable: bool,
     chunk_size: Option<usize>,
-) -> Int64Iter<'a> {
+) -> Int64Iter {
     ParquetColumnIterator::new(pages, num_rows, is_nullable, IntegerMetadata, chunk_size)
 }

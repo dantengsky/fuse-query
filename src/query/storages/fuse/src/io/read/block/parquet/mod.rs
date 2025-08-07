@@ -36,7 +36,7 @@ mod deserialize;
 
 // mod decompressor;
 // mod parquet2;
-mod deserialize_parquet2;
+mod deserialize_v2;
 
 pub use adapter::RowGroupImplBuilder;
 pub use deserialize::column_chunks_to_record_batch;
@@ -54,7 +54,7 @@ impl BlockReader {
         block_path: &str,
     ) -> databend_common_exception::Result<DataBlock> {
         if self.use_parquet2_to_read_parquet {
-            self.deserialize_block_parquet2(
+            self.deserialize_v2(
                 block_path,
                 num_rows,
                 compression,

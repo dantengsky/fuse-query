@@ -12,15 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Direct deserialization from parquet2 to DataBlock without Arrow intermediate representation
-//!
-//! This crate provides functionality to directly deserialize Parquet data into DataBlock
-//! structures, bypassing the Arrow memory model for improved performance.
-
 use parquet2::compression::Compression;
 use parquet2::encoding::Encoding;
 use parquet2::error::Error;
-use parquet2::metadata::ColumnChunkMetaData;
 use parquet2::metadata::Descriptor;
 use parquet2::page::DataPageHeader;
 use parquet2::page::PageType;
@@ -28,9 +22,9 @@ use parquet2::page::ParquetPageHeader;
 use parquet2::read::PageMetaData;
 use parquet_format_safe::thrift::protocol::TCompactInputProtocol;
 
-use crate::wip::pages::BorrowedCompressedDataPage;
-use crate::wip::pages::BorrowedCompressedDictPage;
-use crate::wip::pages::BorrowedCompressedPage;
+use crate::reader::pages::BorrowedCompressedDataPage;
+use crate::reader::pages::BorrowedCompressedDictPage;
+use crate::reader::pages::BorrowedCompressedPage;
 
 /// A reader for parquet pages, which reads data from a slice
 pub struct PageReader<'a> {
@@ -52,10 +46,6 @@ pub struct PageReader<'a> {
 }
 
 impl<'a> PageReader<'a> {
-    pub fn new(raw_data: &'a [u8], column: &ColumnChunkMetaData, max_page_size: usize) -> Self {
-        Self::new_with_page_meta(raw_data, column.into(), max_page_size)
-    }
-
     pub fn new_with_page_meta(
         raw_data: &'a [u8],
         reader_meta: PageMetaData,

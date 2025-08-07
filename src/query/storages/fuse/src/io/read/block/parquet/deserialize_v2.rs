@@ -23,8 +23,8 @@ use databend_common_expression::ColumnId;
 use databend_common_expression::DataBlock;
 use databend_common_expression::DataSchema;
 use databend_common_expression::Scalar;
-use databend_common_expression::TableDataType;
-use databend_common_p2_reader::chunk_to_col_iter;
+use databend_common_p2_reader::calculate_parquet_max_levels;
+use databend_common_p2_reader::data_chunk_to_col_iter;
 use databend_common_p2_reader::from_table_field_type;
 use databend_common_storage::ColumnNode;
 use databend_storages_common_cache::CacheAccessor;
@@ -51,7 +51,7 @@ enum DeserializedColumn<'a> {
 }
 
 impl BlockReader {
-    pub(crate) fn deserialize_block_parquet2(
+    pub(crate) fn deserialize_v2(
         &self,
         block_path: &str,
         num_rows: usize,
@@ -75,7 +75,7 @@ impl BlockReader {
 
         for column_node in &self.project_column_nodes {
             let deserialized_column = self
-                .deserialize_field_parquet2(&field_deserialization_ctx, column_node)
+                .deserialize_field_v2(&field_deserialization_ctx, column_node)
                 .map_err(|e| {
                     e.add_message(format!(
                         "failed to deserialize column: {:?}, location {} ",
@@ -149,23 +149,22 @@ impl BlockReader {
         Ok(data_block)
     }
 
-    fn deserialize_field_parquet2<'a>(
+    fn deserialize_field_v2<'a>(
         &self,
         deserialization_context: &'a FieldDeserializationContext,
         column_node: &ColumnNode,
     ) -> Result<Option<DeserializedColumn<'a>>> {
         let is_nested = column_node.is_nested;
 
-        // TODO field with nested type will be handled later
         if is_nested {
-            unimplemented!()
+            unimplemented!("Nested type is not supported now");
         }
 
         let column_chunks = deserialization_context.column_chunks;
         let compression = deserialization_context.compression;
 
         let (max_def_level, max_rep_level) =
-            calculate_parquet_levels(&column_node.table_field.data_type);
+            calculate_parquet_max_levels(&column_node.table_field.data_type);
 
         let parquet_primitive_type = from_table_field_type(
             column_node.table_field.name.clone(),
@@ -195,7 +194,7 @@ impl BlockReader {
                 let num_rows = deserialization_context.num_rows;
                 let field_name = column_node.field.name().to_owned();
 
-                let mut column_iter = chunk_to_col_iter(
+                let mut column_iter = data_chunk_to_col_iter(
                     column_meta,
                     data,
                     num_rows,
@@ -204,13 +203,13 @@ impl BlockReader {
                     compression,
                 )?;
 
-                // TODO reuse decompression buffer?
                 let column = column_iter.next().transpose()?.ok_or_else(|| {
                     ErrorCode::StorageOther(format!("no array found for field {field_name}"))
                 })?;
+
                 // Since we deserialize all the rows of this column, the iterator should be drained
                 assert!(column_iter.next().is_none());
-                // the array is deserialized from raw bytes, and intended to be cached
+                // Deserialized from raw bytes, and intended to be cached
                 Ok(Some(DeserializedColumn::Column((
                     column_id,
                     column,
@@ -223,57 +222,10 @@ impl BlockReader {
                         "unexpected nested field: nested leaf field hits cached",
                     ));
                 }
-                // since it is not nested, one column is enough
+                // since it is not nested, this field contains only one column
                 Ok(Some(DeserializedColumn::FromCache(column_array)))
             }
         }
-    }
-}
-
-fn calculate_parquet_levels(data_type: &TableDataType) -> (i16, i16) {
-    match data_type {
-        // Null type has no definition or repetition levels
-        TableDataType::Null => (0, 0),
-
-        // Simple primitive types - these are REQUIRED by default (definition level 0)
-        TableDataType::Boolean => (0, 0),
-        TableDataType::Binary => (0, 0),
-        TableDataType::String => (0, 0),
-        TableDataType::Number(_) => (0, 0),
-        TableDataType::Decimal(_) => (0, 0),
-        TableDataType::Timestamp => (0, 0),
-        TableDataType::Date => (0, 0),
-        TableDataType::Interval => (0, 0),
-        TableDataType::Bitmap => (0, 0),
-        TableDataType::Variant => (0, 0),
-        TableDataType::Geometry => (0, 0),
-        TableDataType::Geography => (0, 0),
-        TableDataType::Vector(_) => (0, 0),
-
-        // Empty types - treat as required
-        TableDataType::EmptyArray => (0, 0),
-        TableDataType::EmptyMap => (0, 0),
-
-        // Nullable wrapper - adds one definition level (makes field OPTIONAL)
-        TableDataType::Nullable(inner) => {
-            let (inner_def, inner_rep) = calculate_parquet_levels(inner);
-            (inner_def + 1, inner_rep)
-        }
-
-        // Array type - adds one definition level and one repetition level
-        TableDataType::Array(inner) => {
-            let (inner_def, inner_rep) = calculate_parquet_levels(inner);
-            (inner_def + 1, inner_rep + 1)
-        }
-
-        // Map type - adds one definition level and one repetition level
-        TableDataType::Map(inner) => {
-            let (inner_def, inner_rep) = calculate_parquet_levels(inner);
-            (inner_def + 1, inner_rep + 1)
-        }
-
-        // Tuple type - treat as required
-        TableDataType::Tuple { .. } => (0, 0),
     }
 }
 

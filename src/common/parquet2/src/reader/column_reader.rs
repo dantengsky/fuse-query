@@ -13,18 +13,20 @@ use parquet2::read::PageMetaData;
 use parquet2::schema::types::PhysicalType;
 use parquet2::schema::types::PrimitiveType;
 
+use crate::column::new_decimal128_iter;
+use crate::column::new_decimal256_iter;
 use crate::column::new_decimal64_iter;
 use crate::column::new_int32_iter;
 use crate::column::new_int64_iter;
 use crate::column::DateIter;
 use crate::column::IntegerMetadata;
 use crate::column::StringIter;
-use crate::wip::decompressor::Decompressor;
-use crate::PageReader;
+use crate::reader::decompressor::Decompressor;
+use crate::reader::page_reader::PageReader;
 
 pub type ColumnIter<'a> = Box<dyn Iterator<Item = Result<Column>> + Send + Sync + 'a>;
 
-pub fn chunk_to_col_iter<'a>(
+pub fn data_chunk_to_col_iter<'a>(
     meta: &ColumnMeta,
     chunk: &'a [u8],
     rows: usize,
@@ -33,7 +35,6 @@ pub fn chunk_to_col_iter<'a>(
     compression: &Compression,
 ) -> Result<ColumnIter<'a>> {
     let pages = {
-        // Working with parquet storage format
         let meta = meta.as_parquet().unwrap();
         let page_meta_data = PageMetaData {
             column_start: meta.offset,
@@ -80,8 +81,31 @@ fn pages_to_column_iter<'a>(
             // TODO: StringIter needs to be refactored to support nullable like number/decimal
             Ok(Box::new(StringIter::new(pages, num_rows, chunk_size)))
         }
+        (PhysicalType::Int32, TableDataType::Decimal(DecimalDataType::Decimal64(_))) => {
+            unimplemented!("coming soon")
+        }
         (PhysicalType::Int64, TableDataType::Decimal(DecimalDataType::Decimal64(decimal_size))) => {
             Ok(Box::new(new_decimal64_iter(
+                pages,
+                num_rows,
+                decimal_size.precision(),
+                decimal_size.scale(),
+                is_nullable,
+                chunk_size,
+            )))
+        }
+        (PhysicalType::FixedLenByteArray(_), TableDataType::Decimal(DecimalDataType::Decimal128(decimal_size))) => {
+                    Ok(Box::new(new_decimal128_iter(
+                        pages,
+                        num_rows,
+                        decimal_size.precision(),
+                        decimal_size.scale(),
+                        is_nullable,
+                        chunk_size,
+                    )))
+        }
+        (PhysicalType::FixedLenByteArray(_), TableDataType::Decimal(DecimalDataType::Decimal256(decimal_size))) => {
+            Ok(Box::new(new_decimal256_iter(
                 pages,
                 num_rows,
                 decimal_size.precision(),

@@ -22,11 +22,12 @@ use databend_common_exception::ErrorCode;
 use databend_common_exception::Result;
 use databend_common_expression::types::NullableColumn;
 use databend_common_expression::Column;
+use decompressor::Decompressor;
 use parquet::encodings::rle::RleDecoder;
 use parquet2::schema::types::PhysicalType;
 use streaming_decompression::FallibleStreamingIterator;
 
-use crate::util::get_bit_width;
+use crate::reader::decompressor;
 
 // =============================================================================
 // Common Parquet Deserialization Functions
@@ -65,14 +66,13 @@ pub fn decode_definition_levels(
 
     // Definition levels count should equal the number of values in the page
     // The number of definition levels is determined by the page content, not by how many rows we want to process
-    let expected_levels = num_values;  
+    let expected_levels = num_values;
     let mut levels = vec![0i32; expected_levels];
     let decoded_count = rle_decoder
         .get_batch(&mut levels)
         .map_err(|e| ErrorCode::Internal(format!("Failed to decode definition levels: {}", e)))?;
 
     // Verify we got the expected number of levels
-    // This should now be correct: RleDecoder::get_batch() should decode all available definition levels
     if decoded_count != expected_levels {
         return Err(ErrorCode::Internal(format!(
             "Definition level decoder returned wrong count: expected={}, got={}. This indicates corrupted Parquet data or decoder issues.",
@@ -432,11 +432,7 @@ pub fn process_data_page<T: Copy>(
     Ok(validity_bitmap)
 }
 
-// =============================================================================
-// Generic Parquet Column Iterator Framework
-// =============================================================================
-
-/// Trait for types that can be used in generic Parquet column iteration
+// TODO rename this
 pub trait ParquetColumnType: Copy + Send + Sync + 'static {
     /// Additional metadata needed to create columns (e.g., precision/scale for decimals)
     type Metadata: Clone;
@@ -448,9 +444,9 @@ pub trait ParquetColumnType: Copy + Send + Sync + 'static {
     fn create_column(data: Vec<Self>, metadata: &Self::Metadata) -> Column;
 }
 
-/// Generic Parquet column iterator that can handle any ParquetColumnType
+// TODO rename this
 pub struct ParquetColumnIterator<'a, T: ParquetColumnType> {
-    pages: crate::wip::decompressor::Decompressor<'a>,
+    pages: Decompressor<'a>,
     chunk_size: Option<usize>,
     num_rows: usize,
     is_nullable: bool,
@@ -459,9 +455,8 @@ pub struct ParquetColumnIterator<'a, T: ParquetColumnType> {
 }
 
 impl<'a, T: ParquetColumnType> ParquetColumnIterator<'a, T> {
-    /// Create a new generic Parquet column iterator
     pub fn new(
-        pages: crate::wip::decompressor::Decompressor<'a>,
+        pages: Decompressor<'a>,
         num_rows: usize,
         is_nullable: bool,
         metadata: T::Metadata,
@@ -567,4 +562,8 @@ impl<'a, T: ParquetColumnType> Iterator for ParquetColumnIterator<'a, T> {
             Some(Ok(T::create_column(column_data, &self.metadata)))
         }
     }
+}
+
+fn get_bit_width(max_level: i16) -> u32 {
+    16 - max_level.leading_zeros()
 }

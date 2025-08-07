@@ -13,11 +13,6 @@
 // limitations under the License.
 
 //! Decimal column deserialization for Parquet data
-//!
-//! This module provides efficient deserialization of decimal columns (Decimal64, Decimal128, Decimal256)
-//! from Parquet format, with support for nullable columns, definition level processing,
-//! and performance optimizations.
-
 use databend_common_column::buffer::Buffer;
 use databend_common_expression::types::i256;
 use databend_common_expression::types::DecimalColumn;
@@ -27,7 +22,7 @@ use parquet2::schema::types::PhysicalType;
 
 use crate::column::common::ParquetColumnIterator;
 use crate::column::common::ParquetColumnType;
-use crate::wip::decompressor::Decompressor;
+use crate::reader::decompressor::Decompressor;
 
 // =============================================================================
 // Wrapper Types for Decimal Usage
@@ -56,64 +51,6 @@ pub struct Decimal128(pub i128);
 #[derive(Clone, Copy)]
 #[repr(transparent)]
 pub struct Decimal256(pub i256);
-
-// =============================================================================
-// Trait Definitions
-// =============================================================================
-
-/// Trait for types that can be used as Parquet decimal values
-pub trait ParquetDecimal: Copy + Send + Sync + 'static {
-    /// The Parquet physical type for this decimal type
-    const PHYSICAL_TYPE: PhysicalType;
-
-    /// Create a column from the deserialized data
-    fn create_column(data: Vec<Self>, precision: u8, scale: u8) -> Column;
-}
-
-impl ParquetDecimal for Decimal64 {
-    const PHYSICAL_TYPE: PhysicalType = PhysicalType::Int64;
-
-    fn create_column(data: Vec<Self>, precision: u8, scale: u8) -> Column {
-        let decimal_size = DecimalSize::new_unchecked(precision, scale);
-        // Zero-cost transmute: Vec<Decimal64> -> Vec<i64>
-        // Safe because Decimal64 is #[repr(transparent)] over i64
-        let raw_data: Vec<i64> = unsafe { std::mem::transmute(data) };
-        Column::Decimal(DecimalColumn::Decimal64(
-            Buffer::from(raw_data),
-            decimal_size,
-        ))
-    }
-}
-
-impl ParquetDecimal for Decimal128 {
-    const PHYSICAL_TYPE: PhysicalType = PhysicalType::FixedLenByteArray(16);
-
-    fn create_column(data: Vec<Self>, precision: u8, scale: u8) -> Column {
-        let decimal_size = DecimalSize::new_unchecked(precision, scale);
-        // Zero-cost transmute: Vec<Decimal128> -> Vec<i128>
-        // Safe because Decimal128 is #[repr(transparent)] over i128
-        let raw_data: Vec<i128> = unsafe { std::mem::transmute(data) };
-        Column::Decimal(DecimalColumn::Decimal128(
-            Buffer::from(raw_data),
-            decimal_size,
-        ))
-    }
-}
-
-impl ParquetDecimal for Decimal256 {
-    const PHYSICAL_TYPE: PhysicalType = PhysicalType::FixedLenByteArray(32);
-
-    fn create_column(data: Vec<Self>, precision: u8, scale: u8) -> Column {
-        let decimal_size = DecimalSize::new_unchecked(precision, scale);
-        // Zero-cost transmute: Vec<Decimal256> -> Vec<i256>
-        // Safe because Decimal256 is #[repr(transparent)] over i256
-        let raw_data: Vec<i256> = unsafe { std::mem::transmute(data) };
-        Column::Decimal(DecimalColumn::Decimal256(
-            Buffer::from(raw_data),
-            decimal_size,
-        ))
-    }
-}
 
 // =============================================================================
 // ParquetColumnType Implementation for Decimal Types

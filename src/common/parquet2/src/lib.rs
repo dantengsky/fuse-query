@@ -17,12 +17,10 @@
 //! This crate provides functionality to directly deserialize Parquet data into DataBlock
 //! structures, bypassing the Arrow memory model for improved performance.
 
-pub mod column;
-pub mod column_reader;
-pub mod util;
+mod column;
+mod util;
 
-pub mod wip;
+mod reader;
 
-pub use column_reader::*;
-pub use util::from_table_field_type;
-pub use wip::page_reader::PageReader;
+pub use reader::column_reader::*;
+pub use util::*;

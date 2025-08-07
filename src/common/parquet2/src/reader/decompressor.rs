@@ -22,8 +22,8 @@ use parquet2::page::DictPage;
 use parquet2::page::Page;
 use parquet2::FallibleStreamingIterator;
 
-use crate::wip::page_reader::PageReader;
-use crate::wip::pages::BorrowedCompressedPage;
+use crate::reader::page_reader::PageReader;
+use crate::reader::pages::BorrowedCompressedPage;
 
 pub struct Decompressor<'a> {
     page_reader: PageReader<'a>,
@@ -104,9 +104,9 @@ impl<'a> Decompressor<'a> {
         Ok(page)
     }
 
-    pub fn into_buffer(self) -> Vec<u8> {
-        self.decompression_buffer
-    }
+    // pub fn into_buffer(self) -> Vec<u8> {
+    //    self.decompression_buffer
+    //}
 
     // TODO Implement IntoIterator and drop FallibleStreamingIterator
     pub fn next_owned(&mut self) -> Result<Option<Page>, Error> {

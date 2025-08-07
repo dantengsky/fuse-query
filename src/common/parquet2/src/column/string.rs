@@ -22,7 +22,7 @@ use parquet2::encoding::Encoding;
 use parquet2::page::Page;
 use parquet2::schema::types::PhysicalType;
 
-use crate::wip::decompressor::Decompressor;
+use crate::reader::decompressor::Decompressor;
 
 pub struct StringIter<'a> {
     /// Page decompressor for reading Parquet pages

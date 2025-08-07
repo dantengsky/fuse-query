@@ -17,6 +17,7 @@
 //! This crate provides functionality to directly deserialize Parquet data into DataBlock
 //! structures, bypassing the Arrow memory model for improved performance.
 
+pub mod column_reader;
 pub mod decompressor;
 pub mod page_reader;
 pub mod pages;
