@@ -14,28 +14,11 @@ databend-common-exception = { workspace = true }
 databend-common-expression = { workspace = true }
 databend-storages-common-table-meta = { workspace = true }
 
-ahash = { workspace = true }
-bitpacking = { workspace = true }
-bytemuck = { workspace = true }
-byteorder = { workspace = true }
 bytes = { workspace = true }
-env_logger = { workspace = true }
-hashbrown_v0_14 = { workspace = true }
-log = { workspace = true }
-lz4 = { workspace = true }
 lz4_flex = { version = "^0.9" }
-match-template = { workspace = true }
-num = { workspace = true, features = ["std"] }
-opendal = { workspace = true }
 parquet2 = { version = "0.17.0", default-features = false, features = ["serde_types", "async", "zstd", "snappy", "lz4"] }
 parquet-format-safe = "0.2.0"
 parquet = { workspace = true, features = ["experimental"] }
-rand = { workspace = true }
-ringbuffer = { workspace = true }
-roaring = { workspace = true }
-serde = { workspace = true, features = ["rc"] }
-serde_json = { workspace = true }
-snap = { workspace = true }
 streaming-decompression = "0.1.2"
 zstd = { workspace = true }
 
