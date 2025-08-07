@@ -24,8 +24,14 @@ use parquet2::page::DataPageHeader;
 /// A compressed page that borrows its data from a slice
 #[derive(Debug)]
 pub enum BorrowedCompressedPage<'a> {
-    Data(BorrowedCompressedDataPage<'a>),
+    Data(Box<BorrowedCompressedDataPage<'a>>),
     Dict(BorrowedCompressedDictPage<'a>),
+}
+
+impl<'a> BorrowedCompressedPage<'a> {
+    pub fn new_data_page(data_page: BorrowedCompressedDataPage<'a>) -> Self {
+        Self::Data(Box::new(data_page))
+    }
 }
 
 /// A borrowed compressed data page

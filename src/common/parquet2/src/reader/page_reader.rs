@@ -87,7 +87,7 @@ impl<'a> PageReader<'a> {
                             .to_string(),
                     )
                 })?;
-                Ok(Some(BorrowedCompressedPage::Data(
+                Ok(Some(BorrowedCompressedPage::new_data_page(
                     BorrowedCompressedDataPage::new(
                         DataPageHeader::V1(header),
                         data_slice,
@@ -104,7 +104,7 @@ impl<'a> PageReader<'a> {
                             .to_string(),
                     )
                 })?;
-                Ok(Some(BorrowedCompressedPage::Data(
+                Ok(Some(BorrowedCompressedPage::new_data_page(
                     BorrowedCompressedDataPage::new(
                         DataPageHeader::V2(header),
                         data_slice,
