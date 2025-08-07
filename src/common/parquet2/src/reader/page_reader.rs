@@ -26,7 +26,7 @@ use crate::reader::pages::BorrowedCompressedDataPage;
 use crate::reader::pages::BorrowedCompressedDictPage;
 use crate::reader::pages::BorrowedCompressedPage;
 
-/// Zero-copy Parquet page reader
+/// "Zero-copy" Parquet page reader
 pub struct PageReader<'a> {
     raw_data_slice: &'a [u8],
     compression: Compression,
