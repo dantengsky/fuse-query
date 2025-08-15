@@ -330,6 +330,54 @@ impl<'a> StringIter<'a> {
         self.ensure_dict_views_cached(dict);
         let dict_views = self.cached_dict_views.as_ref().unwrap();
 
+        // Small dictionary optimization: for dictionaries with <= 4 entries,
+        // use get_batch_with_dict for maximum RLE batch fill performance
+        if dict_views.len() <= 4 {
+            #[cfg(debug_assertions)]
+            eprintln!(
+                "🎯 Using get_batch_with_dict optimization for small dictionary (size: {})",
+                dict_views.len()
+            );
+
+            // Reserve space for new views
+            let start_len = views.len();
+            views.reserve(remaining);
+            unsafe {
+                views.set_len(start_len + remaining);
+            }
+
+            // Use get_batch_with_dict for optimal RLE batch fill performance
+            let output_slice = &mut views[start_len..start_len + remaining];
+            let decoded_count = rle_decoder
+                .get_batch_with_dict(dict_views, output_slice, remaining)
+                .map_err(|e| {
+                    ErrorCode::Internal(format!("Failed to decode RLE with dict: {}", e))
+                })?;
+
+            if decoded_count != remaining {
+                return Err(ErrorCode::Internal(format!(
+                    "get_batch_with_dict returned wrong count: expected={}, got={}",
+                    remaining, decoded_count
+                )));
+            }
+
+            // Calculate total bytes length from the decoded views
+            let mut local_bytes_len = 0usize;
+            for view in &views[start_len..start_len + remaining] {
+                local_bytes_len += view.length as usize;
+            }
+
+            *total_bytes_len += local_bytes_len;
+
+            #[cfg(debug_assertions)]
+            eprintln!(
+                "✅ get_batch_with_dict completed: {} views, {} bytes",
+                remaining, local_bytes_len
+            );
+
+            return Ok(());
+        }
+
         // Decode indices and populate views in single pass
         let start_len = views.len();
         // TODO hotspot
