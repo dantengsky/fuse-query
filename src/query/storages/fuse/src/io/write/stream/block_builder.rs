@@ -172,12 +172,13 @@ impl StreamBlockBuilder {
         let buffer = Vec::with_capacity(DEFAULT_BLOCK_BUFFER_SIZE);
         let block_writer = match properties.write_settings.storage_format {
             FuseStorageFormat::Parquet => {
+                let enable_dictionary = properties.enable_parquet_dictionary_encoding;
                 let props = WriterProperties::builder()
                     .set_compression(properties.write_settings.table_compression.into())
                     // use `usize::MAX` to effectively limit the number of row groups to 1
                     .set_max_row_group_size(usize::MAX)
                     .set_encoding(Encoding::PLAIN)
-                    .set_dictionary_enabled(false)
+                    .set_dictionary_enabled(enable_dictionary)
                     .set_statistics_enabled(EnabledStatistics::None)
                     .set_bloom_filter_enabled(false)
                     .build();
@@ -426,6 +427,8 @@ pub struct StreamBlockProperties {
     virtual_column_builder: Option<VirtualColumnBuilder>,
     table_meta_timestamps: TableMetaTimestamps,
     table_indexes: BTreeMap<String, TableIndex>,
+
+    enable_parquet_dictionary_encoding: bool,
 }
 
 impl StreamBlockProperties {
@@ -498,6 +501,10 @@ impl StreamBlockProperties {
             }
         }
         let table_indexes = table.table_info.meta.indexes.clone();
+        let enable_parquet_dictionary_encoding = ctx
+            .get_settings()
+            .get_enable_fuse_parquet_dictionary_encoding()
+            .unwrap_or_default();
         Ok(Arc::new(StreamBlockProperties {
             ctx,
             meta_locations: table.meta_location_generator().clone(),
@@ -514,6 +521,7 @@ impl StreamBlockProperties {
             table_meta_timestamps,
             table_indexes,
             ndv_columns_map,
+            enable_parquet_dictionary_encoding,
         }))
     }
 }
