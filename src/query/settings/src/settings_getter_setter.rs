@@ -1055,4 +1055,8 @@ impl Settings {
     pub fn get_enforce_local(&self) -> Result<bool> {
         Ok(self.try_get_u64("enforce_local")? == 1)
     }
+
+    pub fn get_enable_fuse_parquet_dictionary_encoding(&self) -> Result<bool> {
+        Ok(self.try_get_u64("enable_fuse_parquet_dictionary_encoding")? == 1)
+    }
 }
