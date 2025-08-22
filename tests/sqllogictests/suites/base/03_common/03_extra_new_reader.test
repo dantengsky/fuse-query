@@ -84,4 +84,14 @@ statement ok
 select * from lineitem ignore_result;
 
 
+statement ok
+select sum(length(l_comment)) from lineitem ignore_result;
+
+statement ok
+select sum(length(l_returnflag)) from lineitem ignore_result;
+
+statement ok
+select sum(l_linenumber % 10) from lineitem ignore_result;
+
+
 
