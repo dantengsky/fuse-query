@@ -235,6 +235,7 @@ impl Binder {
                     fields: casted_schema_fields,
                     metadata: casted_schema.metadata.clone(),
                     next_column_id: casted_schema.next_column_id(),
+                    a: 0,
                 });
             }
 

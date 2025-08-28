@@ -200,6 +200,7 @@ mod converters {
                     .collect::<Vec<_>>(),
                 metadata: value.metadata,
                 next_column_id: value.next_column_id,
+                a: 0,
             }
         }
     }

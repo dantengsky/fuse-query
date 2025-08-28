@@ -140,6 +140,7 @@ impl IcebergTable {
             fields,
             metadata: arrow_schema.metadata().clone().into_iter().collect(),
             next_column_id: 0,
+            a: 0,
         })
     }
 

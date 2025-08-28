@@ -182,6 +182,7 @@ impl RealAttachTableHandler {
                 fields: fields_to_attach,
                 metadata: new_table_schema_metadata,
                 next_column_id: base_table_schema.next_column_id,
+                a: 0,
             }
         } else {
             // If columns are not specified, use all the fields of table being attached to,

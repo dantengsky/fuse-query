@@ -258,6 +258,8 @@ pub struct TableSchema {
     // next column id that assign to TableField.column_id
     #[serde(default = "uninit_column_id")]
     pub next_column_id: ColumnId,
+
+    pub a: u8,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
@@ -440,6 +442,7 @@ impl TableSchema {
             fields: vec![],
             metadata: BTreeMap::new(),
             next_column_id: 0,
+            a: 0,
         }
     }
 
@@ -486,6 +489,7 @@ impl TableSchema {
             fields: new_fields,
             metadata: BTreeMap::new(),
             next_column_id,
+            a: 0,
         }
     }
 
@@ -495,6 +499,7 @@ impl TableSchema {
             fields: new_fields,
             metadata,
             next_column_id,
+            a: 0,
         }
     }
 
@@ -508,6 +513,7 @@ impl TableSchema {
             fields: new_fields,
             metadata,
             next_column_id,
+            a: 0,
         }
     }
 
@@ -798,6 +804,7 @@ impl TableSchema {
             fields,
             metadata: self.metadata.clone(),
             next_column_id: self.next_column_id,
+            a: 0,
         }
     }
 
@@ -815,6 +822,7 @@ impl TableSchema {
             fields,
             metadata: self.metadata.clone(),
             next_column_id: self.next_column_id,
+            a: 0,
         }
     }
 
@@ -1028,6 +1036,7 @@ impl TableSchema {
             fields: new_fields,
             metadata: self.metadata.clone(),
             next_column_id: self.next_column_id,
+            a: 0,
         }
     }
 
@@ -1044,6 +1053,7 @@ impl TableSchema {
             fields: new_fields,
             metadata: self.metadata.clone(),
             next_column_id: self.next_column_id,
+            a: 0,
         }
     }
 
@@ -1060,6 +1070,7 @@ impl TableSchema {
             fields: new_fields,
             metadata: self.metadata.clone(),
             next_column_id: self.next_column_id,
+            a: 0,
         }
     }
 }
