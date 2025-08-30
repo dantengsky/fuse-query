@@ -93,5 +93,35 @@ select sum(length(l_returnflag)) from lineitem ignore_result;
 statement ok
 select sum(l_linenumber % 10) from lineitem ignore_result;
 
+# other column types
+
+
+## BOOLEAN
+statement ok
+create or replace table t ( c boolean);
+
+statement ok
+insert into t values (true), (false), (null);
+
+query T
+select * from t order by c;
+----
+0
+1
+NULL
+
+
+statement ok
+create or replace table t ( c boolean not null);
+
+statement ok
+insert into t values (true), (false);
+
+query T
+select * from t order by c;
+----
+0
+1
+
 
 

@@ -320,9 +320,14 @@ fn process_data_page<T: Copy + DictionarySupport>(
         // For non-nullable columns, we need to handle different encodings differently
         match data_page.encoding() {
             parquet2::encoding::Encoding::Plain => {
-                let type_size = std::mem::size_of::<T>();
-                let num_values_in_buffer = values_buffer.len() / type_size;
-                num_values_in_buffer.min(remaining)
+                if *expected_physical_type == PhysicalType::Boolean {
+                    // Boolean values are bit-packed, so we use num_values from page header
+                    num_values.min(remaining)
+                } else {
+                    let type_size = std::mem::size_of::<T>();
+                    let num_values_in_buffer = values_buffer.len() / type_size;
+                    num_values_in_buffer.min(remaining)
+                }
             }
             parquet2::encoding::Encoding::RleDictionary => {
                 // For RLE dictionary, we use num_values from the page header
@@ -350,12 +355,11 @@ fn process_data_page<T: Copy + DictionarySupport>(
             if *expected_physical_type == PhysicalType::Boolean {
                 // For Boolean, we need special bit-packed decoding
                 use crate::column::process_boolean_plain_encoding;
-                
+
                 // Cast to bool slice - this is safe because T must be bool for Boolean physical type
-                let bool_column_data = unsafe {
-                    std::mem::transmute::<&mut Vec<T>, &mut Vec<bool>>(column_data)
-                };
-                
+                let bool_column_data =
+                    unsafe { std::mem::transmute::<&mut Vec<T>, &mut Vec<bool>>(column_data) };
+
                 process_boolean_plain_encoding(
                     values_buffer,
                     page_rows,
