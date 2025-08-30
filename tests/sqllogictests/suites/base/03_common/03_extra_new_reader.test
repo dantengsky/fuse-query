@@ -124,4 +124,34 @@ select * from t order by c;
 1
 
 
+## INT
+statement ok
+create or replace table t ( c int);
+
+statement ok
+insert into t values (0), (1), (null);
+
+query T
+select * from t order by c;
+----
+0
+1
+NULL
+
+
+statement ok
+create or replace table t ( c int not null);
+
+statement ok
+insert into t values (0), (1);
+
+query T
+select * from t order by c;
+----
+0
+1
+
+
+
+
 

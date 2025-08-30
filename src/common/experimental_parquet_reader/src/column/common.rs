@@ -408,16 +408,122 @@ fn process_data_page<T: Copy + DictionarySupport>(
     Ok(validity_bitmap)
 }
 
-/// Process dictionary page for numeric types
-fn process_dictionary_page<T: DictionarySupport>(
+/// Process dictionary page for numeric types with OLAP-optimized performance
+fn process_dictionary_page<T: DictionarySupport + Copy>(
     dict_page: &parquet2::page::DictPage,
     dictionary: &mut Vec<T>,
 ) -> Result<()> {
     let dict_buffer: &[u8] = dict_page.buffer.as_ref();
-    let type_size = match T::PHYSICAL_TYPE {
-        PhysicalType::Int32 => 4,
-        PhysicalType::Int64 => 8,
-        PhysicalType::FixedLenByteArray(len) => len as usize,
+    
+    // Handle empty dictionary case early
+    if dict_buffer.is_empty() {
+        return Ok(());
+    }
+    
+    match T::PHYSICAL_TYPE {
+        PhysicalType::Int32 => {
+            let type_size = 4;
+            let num_entries = dict_buffer.len() / type_size;
+            
+            // Check for invalid buffer size (incomplete entries)
+            if dict_buffer.len() % type_size != 0 {
+                return Err(ErrorCode::Internal(format!(
+                    "Dictionary buffer size {} is not aligned to type size {}",
+                    dict_buffer.len(), type_size
+                )));
+            }
+            
+            if num_entries == 0 {
+                return Ok(());
+            }
+            
+            // Pre-allocate space to avoid reallocations
+            dictionary.reserve(num_entries);
+            let old_len = dictionary.len();
+            
+            #[cfg(target_endian = "little")]
+            {
+                // Little-endian machines: Direct bulk memory copy for maximum performance
+                // Parquet uses little-endian format, so no conversion needed
+                unsafe {
+                    let src_ptr = dict_buffer.as_ptr() as *const T;
+                    let dst_ptr = dictionary.as_mut_ptr().add(old_len);
+                    std::ptr::copy_nonoverlapping(src_ptr, dst_ptr, num_entries);
+                    dictionary.set_len(old_len + num_entries);
+                }
+            }
+            #[cfg(target_endian = "big")]
+            {
+                // Big-endian machines: Pre-allocate and use direct indexing to avoid push overhead
+                unsafe {
+                    dictionary.set_len(old_len + num_entries);
+                    let output_slice = &mut dictionary[old_len..];
+                    
+                    for (i, chunk) in dict_buffer.chunks_exact(4).enumerate() {
+                        let value = i32::from_le_bytes(chunk.try_into().unwrap());
+                        output_slice[i] = std::mem::transmute(value);
+                    }
+                }
+            }
+        }
+        PhysicalType::Int64 => {
+            let type_size = 8;
+            let num_entries = dict_buffer.len() / type_size;
+            
+            // Check for invalid buffer size (incomplete entries)
+            if dict_buffer.len() % type_size != 0 {
+                return Err(ErrorCode::Internal(format!(
+                    "Dictionary buffer size {} is not aligned to type size {}",
+                    dict_buffer.len(), type_size
+                )));
+            }
+            
+            if num_entries == 0 {
+                return Ok(());
+            }
+            
+            // Pre-allocate space to avoid reallocations
+            dictionary.reserve(num_entries);
+            let old_len = dictionary.len();
+            
+            #[cfg(target_endian = "little")]
+            {
+                // Little-endian machines: Direct bulk memory copy for maximum performance
+                unsafe {
+                    let src_ptr = dict_buffer.as_ptr() as *const T;
+                    let dst_ptr = dictionary.as_mut_ptr().add(old_len);
+                    std::ptr::copy_nonoverlapping(src_ptr, dst_ptr, num_entries);
+                    dictionary.set_len(old_len + num_entries);
+                }
+            }
+            #[cfg(target_endian = "big")]
+            {
+                // Big-endian machines: Pre-allocate and use direct indexing to avoid push overhead
+                unsafe {
+                    dictionary.set_len(old_len + num_entries);
+                    let output_slice = &mut dictionary[old_len..];
+                    
+                    for (i, chunk) in dict_buffer.chunks_exact(8).enumerate() {
+                        let value = i64::from_le_bytes(chunk.try_into().unwrap());
+                        output_slice[i] = std::mem::transmute(value);
+                    }
+                }
+            }
+        }
+        PhysicalType::FixedLenByteArray(len) => {
+            // Complex types: Keep original logic but with pre-allocation optimization
+            let type_size = len as usize;
+            let num_entries = dict_buffer.len() / type_size;
+            
+            if num_entries > 0 {
+                dictionary.reserve(num_entries);
+                
+                for chunk in dict_buffer.chunks_exact(type_size) {
+                    let value = T::from_dictionary_entry(chunk)?;
+                    dictionary.push(value);
+                }
+            }
+        }
         _ => {
             return Err(ErrorCode::Internal(format!(
                 "Unsupported physical type for dictionary: {:?}",
@@ -425,13 +531,6 @@ fn process_dictionary_page<T: DictionarySupport>(
             )))
         }
     };
-
-    // TODO optimize this
-    // Parse dictionary entries based on physical type
-    for chunk in dict_buffer.chunks_exact(type_size) {
-        let value = T::from_dictionary_entry(chunk)?;
-        dictionary.push(value);
-    }
 
     Ok(())
 }
@@ -710,15 +809,12 @@ pub fn combine_validity_bitmaps(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use parquet2::compression::Compression;
-    use parquet2::encoding::Encoding;
-    use parquet2::page::DataPage;
-    use parquet2::page::DictPage;
+    use databend_common_expression::types::NumberColumn;
     use parquet2::schema::types::PhysicalType;
+    use parquet2::page::DictPage;
 
     use super::*;
+    use crate::column::{Date, Decimal64, Decimal128, Decimal256};
 
     // Mock implementation for testing
     #[derive(Debug, Clone, Copy, PartialEq)]
@@ -734,7 +830,7 @@ mod tests {
         ) -> databend_common_expression::Column {
             let raw_data: Vec<i32> = unsafe { std::mem::transmute(data) };
             databend_common_expression::Column::Number(
-                databend_common_expression::NumberColumn::Int32(raw_data.into()),
+                NumberColumn::Int32(raw_data.into()),
             )
         }
     }
