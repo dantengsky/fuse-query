@@ -27,6 +27,7 @@ use parquet2::read::PageMetaData;
 use parquet2::schema::types::PhysicalType;
 use parquet2::schema::types::PrimitiveType;
 
+use crate::column::new_boolean_iter;
 use crate::column::new_decimal128_iter;
 use crate::column::new_decimal256_iter;
 use crate::column::new_decimal64_iter;
@@ -81,6 +82,9 @@ fn pages_to_column_iter<'a>(
     };
 
     match (parquet_physical_type, inner_data_type) {
+        (PhysicalType::Boolean, TableDataType::Boolean) => {
+            Ok(Box::new(new_boolean_iter(pages, num_rows, is_nullable, chunk_size)))
+        }
         (PhysicalType::Int32, TableDataType::Number(NumberDataType::Int32)) => {
             Ok(Box::new(new_int32_iter(pages, num_rows, is_nullable, chunk_size)))
         }
@@ -147,6 +151,7 @@ fn pages_to_column_iter<'a>(
             "Unsupported combination: parquet_physical_type={:?}, field_data_type={:?}, nullable={}",
             physical_type, table_data_type, is_nullable
         ))),
+
     }
 }
 

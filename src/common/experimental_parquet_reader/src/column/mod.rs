@@ -12,12 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod boolean;
 mod common;
 mod date;
 mod decimal;
 mod number;
 mod string;
 
+pub use boolean::*;
 pub use date::*;
 pub use decimal::*;
 pub use number::IntegerMetadata;

@@ -18,6 +18,7 @@ use parquet2::schema::types::PhysicalType;
 use parquet2::schema::types::PrimitiveType;
 use parquet2::schema::Repetition;
 
+// TODO refactor this, seems things are duplicated with column_reader.rs
 pub fn from_table_field_type(field_name: String, field_type: &TableDataType) -> PrimitiveType {
     let (inner_type, is_nullable) = match field_type {
         TableDataType::Nullable(inner) => (inner.as_ref(), true),
@@ -55,6 +56,7 @@ pub fn from_table_field_type(field_name: String, field_type: &TableDataType) -> 
             }
         }
         TableDataType::Date => PrimitiveType::from_physical(field_name, PhysicalType::Int32),
+        TableDataType::Boolean => PrimitiveType::from_physical(field_name, PhysicalType::Boolean),
         TableDataType::Nullable(_) => unreachable!("Nullable should have been unwrapped"),
         t => unimplemented!("Unsupported type: {:?} ", t),
     };

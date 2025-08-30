@@ -346,25 +346,43 @@ fn process_data_page<T: Copy + DictionarySupport>(
     // Process values based on encoding
     match data_page.encoding() {
         parquet2::encoding::Encoding::Plain => {
-            // Validate values_buffer alignment for plain encoding
-            #[cfg(debug_assertions)]
-            {
-                let type_size = std::mem::size_of::<T>();
-                if values_buffer.len() % type_size != 0 {
-                    return Err(ErrorCode::Internal(format!(
-                        "Values buffer length ({}) is not aligned to type size ({}). Buffer may be corrupted.",
-                        values_buffer.len(),
-                        type_size
-                    )));
+            // Special handling for Boolean type (bit-packed)
+            if *expected_physical_type == PhysicalType::Boolean {
+                // For Boolean, we need special bit-packed decoding
+                use crate::column::process_boolean_plain_encoding;
+                
+                // Cast to bool slice - this is safe because T must be bool for Boolean physical type
+                let bool_column_data = unsafe {
+                    std::mem::transmute::<&mut Vec<T>, &mut Vec<bool>>(column_data)
+                };
+                
+                process_boolean_plain_encoding(
+                    values_buffer,
+                    page_rows,
+                    bool_column_data,
+                    validity_bitmap.as_ref(),
+                )?;
+            } else {
+                // Validate values_buffer alignment for plain encoding (non-Boolean types)
+                #[cfg(debug_assertions)]
+                {
+                    let type_size = std::mem::size_of::<T>();
+                    if values_buffer.len() % type_size != 0 {
+                        return Err(ErrorCode::Internal(format!(
+                            "Values buffer length ({}) is not aligned to type size ({}). Buffer may be corrupted.",
+                            values_buffer.len(),
+                            type_size
+                        )));
+                    }
                 }
-            }
 
-            process_plain_encoding(
-                values_buffer,
-                page_rows,
-                column_data,
-                validity_bitmap.as_ref(),
-            )?;
+                process_plain_encoding(
+                    values_buffer,
+                    page_rows,
+                    column_data,
+                    validity_bitmap.as_ref(),
+                )?;
+            }
         }
         parquet2::encoding::Encoding::RleDictionary => {
             if let Some(dict) = dictionary {
@@ -570,6 +588,7 @@ impl<'a, T: ParquetColumnType + DictionarySupport> Iterator for ParquetColumnIte
                 parquet2::page::Page::Dict(dict_page) => {
                     if T::PHYSICAL_TYPE == PhysicalType::Int32
                         || T::PHYSICAL_TYPE == PhysicalType::Int64
+                        || T::PHYSICAL_TYPE == PhysicalType::Boolean
                         || matches!(T::PHYSICAL_TYPE, PhysicalType::FixedLenByteArray(_))
                     {
                         // Process dictionary page and cache the dictionary
