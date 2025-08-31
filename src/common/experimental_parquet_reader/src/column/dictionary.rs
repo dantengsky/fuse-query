@@ -19,7 +19,8 @@ use databend_common_exception::Result;
 use parquet::encodings::rle::RleDecoder;
 use parquet2::schema::types::PhysicalType;
 
-use super::traits::{DictionarySupport, ParquetPhysicalMapping};
+use super::traits::DictionarySupport;
+use super::traits::ParquetPhysicalMapping;
 use super::utils::batch_dictionary_lookup;
 
 /// Process dictionary page for numeric types with OLAP-optimized performance
@@ -94,6 +95,7 @@ pub fn process_dictionary_page<T: DictionarySupport + Copy + ParquetPhysicalMapp
                         let target_val: T = match T::TARGET_SIZE {
                             1 => std::mem::transmute_copy(&(int32_val as i8)),
                             2 => std::mem::transmute_copy(&(int32_val as i16)),
+                            // TODO is this reachable?
                             _ => std::mem::transmute_copy(&int32_val),
                         };
                         output_slice[i] = target_val;
