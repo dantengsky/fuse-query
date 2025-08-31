@@ -24,6 +24,7 @@ use crate::column::common::batch_dictionary_lookup;
 use crate::column::common::DictionarySupport;
 use crate::column::common::ParquetColumnIterator;
 use crate::column::common::ParquetColumnType;
+use crate::column::common::ParquetPhysicalMapping;
 use crate::reader::decompressor::Decompressor;
 
 #[derive(Clone, Copy)]
@@ -47,6 +48,11 @@ impl ParquetColumnType for bool {
     fn create_column(data: Vec<Self>, _metadata: &Self::Metadata) -> Column {
         Column::Boolean(Bitmap::from(data))
     }
+}
+
+impl ParquetPhysicalMapping for bool {
+    const PHYSICAL_SIZE: usize = 1; // Boolean -> bool (bit-packed, special case)
+    const TARGET_SIZE: usize = 1;   // Same size
 }
 
 impl DictionarySupport for bool {

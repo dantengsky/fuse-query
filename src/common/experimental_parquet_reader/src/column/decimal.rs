@@ -25,6 +25,7 @@ use crate::column::common::batch_dictionary_lookup;
 use crate::column::common::DictionarySupport;
 use crate::column::common::ParquetColumnIterator;
 use crate::column::common::ParquetColumnType;
+use crate::column::common::ParquetPhysicalMapping;
 use crate::reader::decompressor::Decompressor;
 
 // =============================================================================
@@ -66,6 +67,11 @@ impl ParquetColumnType for Decimal64 {
     }
 }
 
+impl ParquetPhysicalMapping for Decimal64 {
+    const PHYSICAL_SIZE: usize = 8; // Int64 -> Decimal64
+    const TARGET_SIZE: usize = 8;   // Same size
+}
+
 impl ParquetColumnType for Decimal128 {
     type Metadata = DecimalMetadata;
     const PHYSICAL_TYPE: PhysicalType = PhysicalType::FixedLenByteArray(16);
@@ -80,6 +86,11 @@ impl ParquetColumnType for Decimal128 {
     }
 }
 
+impl ParquetPhysicalMapping for Decimal128 {
+    const PHYSICAL_SIZE: usize = 16; // FixedLenByteArray(16) -> Decimal128
+    const TARGET_SIZE: usize = 16;   // Same size
+}
+
 impl ParquetColumnType for Decimal256 {
     type Metadata = DecimalMetadata;
     const PHYSICAL_TYPE: PhysicalType = PhysicalType::FixedLenByteArray(32);
@@ -92,6 +103,11 @@ impl ParquetColumnType for Decimal256 {
             decimal_size,
         ))
     }
+}
+
+impl ParquetPhysicalMapping for Decimal256 {
+    const PHYSICAL_SIZE: usize = 32; // FixedLenByteArray(32) -> Decimal256
+    const TARGET_SIZE: usize = 32;   // Same size
 }
 
 // =============================================================================
@@ -204,7 +220,7 @@ pub fn new_decimal_iter<T>(
     chunk_size: Option<usize>,
 ) -> DecimalIter<T>
 where
-    T: ParquetColumnType<Metadata = DecimalMetadata> + DictionarySupport,
+    T: ParquetColumnType<Metadata = DecimalMetadata> + DictionarySupport + ParquetPhysicalMapping,
 {
     let metadata = DecimalMetadata { precision, scale };
     ParquetColumnIterator::new(pages, num_rows, is_nullable, metadata, chunk_size)

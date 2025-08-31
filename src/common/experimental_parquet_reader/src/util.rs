@@ -28,14 +28,17 @@ pub fn from_table_field_type(field_name: String, field_type: &TableDataType) -> 
     let mut parquet_primitive_type = match inner_type {
         TableDataType::String => PrimitiveType::from_physical(field_name, PhysicalType::ByteArray),
         TableDataType::Number(number_type) => match number_type {
-            NumberDataType::Int8 => PrimitiveType::from_physical(field_name, PhysicalType::Int32),
-            NumberDataType::Int16 => PrimitiveType::from_physical(field_name, PhysicalType::Int32),
-            NumberDataType::Int32 => PrimitiveType::from_physical(field_name, PhysicalType::Int32),
-            NumberDataType::Int64 => PrimitiveType::from_physical(field_name, PhysicalType::Int64),
-            NumberDataType::UInt8 => PrimitiveType::from_physical(field_name, PhysicalType::Int32),
-            NumberDataType::UInt16 => PrimitiveType::from_physical(field_name, PhysicalType::Int32),
-            NumberDataType::UInt32 => PrimitiveType::from_physical(field_name, PhysicalType::Int64),
-            NumberDataType::UInt64 => PrimitiveType::from_physical(field_name, PhysicalType::Int64),
+            NumberDataType::Int8
+            | NumberDataType::Int16
+            | NumberDataType::Int32
+            | NumberDataType::UInt8
+            | NumberDataType::UInt16
+            | NumberDataType::UInt32 => {
+                PrimitiveType::from_physical(field_name, PhysicalType::Int32)
+            }
+            NumberDataType::Int64 | NumberDataType::UInt64 => {
+                PrimitiveType::from_physical(field_name, PhysicalType::Int64)
+            }
             NumberDataType::Float32 => {
                 PrimitiveType::from_physical(field_name, PhysicalType::Float)
             }

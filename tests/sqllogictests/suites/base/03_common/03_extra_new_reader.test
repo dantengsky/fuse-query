@@ -151,6 +151,249 @@ select * from t order by c;
 0
 1
 
+## TINYINT (Int8)
+statement ok
+create or replace table t ( c tinyint);
+
+statement ok
+insert into t values (-128), (127), (null);
+
+query T
+select * from t order by c;
+----
+-128
+127
+NULL
+
+statement ok
+create or replace table t ( c tinyint not null);
+
+statement ok
+insert into t values (-1), (0), (1);
+
+query T
+select * from t order by c;
+----
+-1
+0
+1
+
+## SMALLINT (Int16)
+statement ok
+create or replace table t ( c smallint);
+
+statement ok
+insert into t values (-32768), (32767), (null);
+
+query T
+select * from t order by c;
+----
+-32768
+32767
+NULL
+
+statement ok
+create or replace table t ( c smallint not null);
+
+statement ok
+insert into t values (-100), (0), (100);
+
+query T
+select * from t order by c;
+----
+-100
+0
+100
+
+## BIGINT (Int64)
+statement ok
+create or replace table t ( c bigint);
+
+statement ok
+insert into t values (-9223372036854775808), (9223372036854775807), (null);
+
+query T
+select * from t order by c;
+----
+-9223372036854775808
+9223372036854775807
+NULL
+
+statement ok
+create or replace table t ( c bigint not null);
+
+statement ok
+insert into t values (-1000), (0), (1000);
+
+query T
+select * from t order by c;
+----
+-1000
+0
+1000
+
+## UNSIGNED TINYINT (UInt8)
+statement ok
+create or replace table t ( c uint8);
+
+statement ok
+insert into t values (0), (255), (null);
+
+query T
+select * from t order by c;
+----
+0
+255
+NULL
+
+statement ok
+create or replace table t ( c uint8 not null);
+
+statement ok
+insert into t values (0), (128), (255);
+
+query T
+select * from t order by c;
+----
+0
+128
+255
+
+## UNSIGNED SMALLINT (UInt16)
+statement ok
+create or replace table t ( c uint16);
+
+statement ok
+insert into t values (0), (65535), (null);
+
+query T
+select * from t order by c;
+----
+0
+65535
+NULL
+
+statement ok
+create or replace table t ( c  uint16 not null);
+
+statement ok
+insert into t values (0), (32768), (65535);
+
+query T
+select * from t order by c;
+----
+0
+32768
+65535
+
+## UNSIGNED INT (UInt32)
+statement ok
+create or replace table t ( c uint32);
+
+statement ok
+insert into t values (0), (4294967295), (null);
+
+query T
+select * from t order by c;
+----
+0
+4294967295
+NULL
+
+statement ok
+create or replace table t ( c uint32 not null);
+
+statement ok
+insert into t values (0), (2147483648), (4294967295);
+
+query T
+select * from t order by c;
+----
+0
+2147483648
+4294967295
+
+## UNSIGNED BIGINT (UInt64)
+statement ok
+create or replace table t ( c uint64);
+
+statement ok
+insert into t values (0), (18446744073709551615), (null);
+
+query T
+select * from t order by c;
+----
+0
+18446744073709551615
+NULL
+
+statement ok
+create or replace table t ( c uint64 not null);
+
+statement ok
+insert into t values (0), (9223372036854775808), (18446744073709551615);
+
+query T
+select * from t order by c;
+----
+0
+9223372036854775808
+18446744073709551615
+
+## FLOAT (Float32)
+statement ok
+create or replace table t ( c float);
+
+statement ok
+insert into t values (-3.14), (3.14), (null);
+
+query T
+select * from t order by c;
+----
+-3.14
+3.14
+NULL
+
+statement ok
+create or replace table t ( c float not null);
+
+statement ok
+insert into t values (-1.0), (0.0), (1.0);
+
+query T
+select * from t order by c;
+----
+-1
+0
+1
+
+## DOUBLE (Float64)
+statement ok
+create or replace table t ( c double);
+
+statement ok
+insert into t values (-3.141592653589793), (3.141592653589793), (null);
+
+query T
+select * from t order by c;
+----
+-3.141592653589793
+3.141592653589793
+NULL
+
+statement ok
+create or replace table t ( c double not null);
+
+statement ok
+insert into t values (-1.0), (0.0), (1.0);
+
+query T
+select * from t order by c;
+----
+-1
+0
+1
+
 
 
 

@@ -31,8 +31,16 @@ use crate::column::new_boolean_iter;
 use crate::column::new_decimal128_iter;
 use crate::column::new_decimal256_iter;
 use crate::column::new_decimal64_iter;
+use crate::column::new_float32_iter;
+use crate::column::new_float64_iter;
+use crate::column::new_int16_iter;
 use crate::column::new_int32_iter;
 use crate::column::new_int64_iter;
+use crate::column::new_int8_iter;
+use crate::column::new_uint16_iter;
+use crate::column::new_uint32_iter;
+use crate::column::new_uint64_iter;
+use crate::column::new_uint8_iter;
 use crate::column::DateIter;
 use crate::column::IntegerMetadata;
 use crate::column::StringIter;
@@ -85,15 +93,49 @@ fn pages_to_column_iter<'a>(
         (PhysicalType::Boolean, TableDataType::Boolean) => {
             Ok(Box::new(new_boolean_iter(pages, num_rows, is_nullable, chunk_size)))
         }
+
+        // ===== Signed Integer Types =====
+        (PhysicalType::Int32, TableDataType::Number(NumberDataType::Int8)) => {
+            Ok(Box::new(new_int8_iter(pages, num_rows, is_nullable, chunk_size)))
+        }
+        (PhysicalType::Int32, TableDataType::Number(NumberDataType::Int16)) => {
+            Ok(Box::new(new_int16_iter(pages, num_rows, is_nullable, chunk_size)))
+        }
         (PhysicalType::Int32, TableDataType::Number(NumberDataType::Int32)) => {
             Ok(Box::new(new_int32_iter(pages, num_rows, is_nullable, chunk_size)))
         }
         (PhysicalType::Int64, TableDataType::Number(NumberDataType::Int64)) => {
             Ok(Box::new(new_int64_iter(pages, num_rows, is_nullable, chunk_size)))
         }
+
+        // ===== Unsigned Integer Types =====
+        (PhysicalType::Int32, TableDataType::Number(NumberDataType::UInt8)) => {
+            Ok(Box::new(new_uint8_iter(pages, num_rows, is_nullable, chunk_size)))
+        }
+        (PhysicalType::Int32, TableDataType::Number(NumberDataType::UInt16)) => {
+            Ok(Box::new(new_uint16_iter(pages, num_rows, is_nullable, chunk_size)))
+        }
+        (PhysicalType::Int32, TableDataType::Number(NumberDataType::UInt32)) => {
+            Ok(Box::new(new_uint32_iter(pages, num_rows, is_nullable, chunk_size)))
+        }
+        (PhysicalType::Int64, TableDataType::Number(NumberDataType::UInt64)) => {
+            Ok(Box::new(new_uint64_iter(pages, num_rows, is_nullable, chunk_size)))
+        }
+
+        // ===== Float Types =====
+        (PhysicalType::Float, TableDataType::Number(NumberDataType::Float32)) => {
+            Ok(Box::new(new_float32_iter(pages, num_rows, is_nullable, chunk_size)))
+        }
+        (PhysicalType::Double, TableDataType::Number(NumberDataType::Float64)) => {
+            Ok(Box::new(new_float64_iter(pages, num_rows, is_nullable, chunk_size)))
+        }
+
+        // ===== String and Other Types =====
         (PhysicalType::ByteArray, TableDataType::String) => {
             Ok(Box::new(StringIter::new(pages, num_rows, chunk_size)))
         }
+
+        // ===== Decimal Types =====
         (PhysicalType::Int32, TableDataType::Decimal(DecimalDataType::Decimal64(_))) => {
             unimplemented!("coming soon")
         }
@@ -138,6 +180,8 @@ fn pages_to_column_iter<'a>(
                 chunk_size,
             )))
         }
+
+        // ===== Date Type =====
         (PhysicalType::Int32, TableDataType::Date) => {
             Ok(Box::new(DateIter::new(
                 pages,
@@ -147,11 +191,12 @@ fn pages_to_column_iter<'a>(
                 chunk_size,
             )))
         }
+
+        // ===== Unsupported Combinations =====
         (physical_type, table_data_type) => Err(ErrorCode::StorageOther(format!(
             "Unsupported combination: parquet_physical_type={:?}, field_data_type={:?}, nullable={}",
             physical_type, table_data_type, is_nullable
         ))),
-
     }
 }
 

@@ -22,6 +22,35 @@ use databend_common_expression::Column;
 use decompressor::Decompressor;
 use parquet::encodings::rle::RleDecoder;
 use parquet2::schema::types::PhysicalType;
+
+/// Compile-time mapping between Rust types and their Parquet physical storage
+/// This trait provides zero-overhead type information for performance-critical operations
+pub trait ParquetPhysicalMapping {
+    const PHYSICAL_SIZE: usize;
+    const TARGET_SIZE: usize;
+    const NEEDS_CONVERSION: bool = Self::PHYSICAL_SIZE != Self::TARGET_SIZE;
+}
+
+// Same-size mappings (performance-critical, zero overhead)
+impl ParquetPhysicalMapping for i32 { const PHYSICAL_SIZE: usize = 4; const TARGET_SIZE: usize = 4; }
+impl ParquetPhysicalMapping for i64 { const PHYSICAL_SIZE: usize = 8; const TARGET_SIZE: usize = 8; }
+impl ParquetPhysicalMapping for f32 { const PHYSICAL_SIZE: usize = 4; const TARGET_SIZE: usize = 4; }
+impl ParquetPhysicalMapping for f64 { const PHYSICAL_SIZE: usize = 8; const TARGET_SIZE: usize = 8; }
+
+// Different-size mappings (need conversion but optimized)
+impl ParquetPhysicalMapping for i8  { const PHYSICAL_SIZE: usize = 4; const TARGET_SIZE: usize = 1; } // Int32 -> i8
+impl ParquetPhysicalMapping for i16 { const PHYSICAL_SIZE: usize = 4; const TARGET_SIZE: usize = 2; } // Int32 -> i16
+impl ParquetPhysicalMapping for u8  { const PHYSICAL_SIZE: usize = 4; const TARGET_SIZE: usize = 1; } // Int32 -> u8
+impl ParquetPhysicalMapping for u16 { const PHYSICAL_SIZE: usize = 4; const TARGET_SIZE: usize = 2; } // Int32 -> u16
+impl ParquetPhysicalMapping for u32 { const PHYSICAL_SIZE: usize = 4; const TARGET_SIZE: usize = 4; } // Int32 -> u32 (same size, reinterpret)
+impl ParquetPhysicalMapping for u64 { const PHYSICAL_SIZE: usize = 8; const TARGET_SIZE: usize = 8; } // Int64 -> u64 (same size)
+
+// Float wrapper types (import these since they're commonly available)
+use databend_common_expression::types::{F32, F64};
+impl ParquetPhysicalMapping for F32 { const PHYSICAL_SIZE: usize = 4; const TARGET_SIZE: usize = 4; } // Float -> F32
+impl ParquetPhysicalMapping for F64 { const PHYSICAL_SIZE: usize = 8; const TARGET_SIZE: usize = 8; } // Double -> F64
+
+// Note: Date, Decimal, Boolean types implement ParquetPhysicalMapping in their own modules
 use streaming_decompression::FallibleStreamingIterator;
 
 use crate::reader::decompressor;
@@ -192,13 +221,14 @@ pub fn decode_definition_levels(
 /// * `page_rows` - The number of rows in the page
 /// * `column_data` - The vector to which the decoded values will be appended， capacity should be reserved properly
 /// * `validity_bitmap` - The validity bitmap for the column if any
-fn process_plain_encoding<T: Copy>(
+/// Process plain encoding with correct type size handling
+/// This function fixes the critical bug where small integer types used wrong byte offsets
+fn process_plain_encoding<T: Copy + ParquetPhysicalMapping>(
     values_buffer: &[u8],
     page_rows: usize,
     column_data: &mut Vec<T>,
     validity_bitmap: Option<&Bitmap>,
 ) -> Result<()> {
-    let type_size = std::mem::size_of::<T>();
     let old_len = column_data.len();
 
     // Calculate how many non-null values we expect to read
@@ -210,7 +240,6 @@ fn process_plain_encoding<T: Copy>(
 
     if let Some(bitmap) = validity_bitmap {
         // Nullable column: process values based on validity bitmap
-        // Extend vector to final size, leaving NULL positions uninitialized
         unsafe {
             column_data.set_len(old_len + page_rows);
         }
@@ -218,27 +247,97 @@ fn process_plain_encoding<T: Copy>(
         let mut values_read = 0;
         for (i, is_valid) in bitmap.iter().enumerate() {
             if is_valid && values_read < non_null_count {
-                let src_offset = values_read * type_size;
+                // CRITICAL FIX: Use the correct physical size from Parquet
+                let src_offset = values_read * T::PHYSICAL_SIZE;  // This was the bug!
                 let dst_offset = old_len + i;
 
-                if src_offset + type_size <= values_buffer.len() {
-                    // Handle endianness conversion for numeric types
-                    #[cfg(target_endian = "big")]
-                    {
-                        // On big-endian systems, convert from Parquet's little-endian format
-                        convert_endianness_and_copy::<T>(
-                            &values_buffer[src_offset..src_offset + type_size],
-                            &mut column_data[dst_offset..dst_offset + 1],
-                        );
-                    }
-                    #[cfg(target_endian = "little")]
-                    {
-                        // On little-endian systems, direct copy is sufficient
-                        unsafe {
-                            let src_ptr = values_buffer.as_ptr().add(src_offset);
-                            let dst_ptr =
-                                column_data[dst_offset..dst_offset + 1].as_mut_ptr() as *mut u8;
-                            std::ptr::copy_nonoverlapping(src_ptr, dst_ptr, type_size);
+                if src_offset + T::PHYSICAL_SIZE <= values_buffer.len() {
+                    // For small types, we need to read from Parquet physical size but copy target size
+                    if T::PHYSICAL_SIZE != T::TARGET_SIZE {
+                        // Different size: read Int32/Int64 and convert to target type
+                        #[cfg(target_endian = "little")]
+                        {
+                            // Read the full physical value and convert to target type
+                            match (T::PHYSICAL_SIZE, T::TARGET_SIZE) {
+                                (4, 1) => {
+                                    // Int32 -> i8/u8: read as Int32, convert to target
+                                    let int32_val = i32::from_le_bytes([
+                                        values_buffer[src_offset],
+                                        values_buffer[src_offset + 1],
+                                        values_buffer[src_offset + 2], 
+                                        values_buffer[src_offset + 3],
+                                    ]);
+                                    let target_ptr = column_data[dst_offset..dst_offset + 1].as_mut_ptr() as *mut i8;
+                                    unsafe { *target_ptr = int32_val as i8; }
+                                }
+                                (4, 2) => {
+                                    // Int32 -> i16/u16
+                                    let int32_val = i32::from_le_bytes([
+                                        values_buffer[src_offset],
+                                        values_buffer[src_offset + 1],
+                                        values_buffer[src_offset + 2],
+                                        values_buffer[src_offset + 3],
+                                    ]);
+                                    let target_ptr = column_data[dst_offset..dst_offset + 1].as_mut_ptr() as *mut i16;
+                                    unsafe { *target_ptr = int32_val as i16; }
+                                }
+                                _ => {
+                                    return Err(ErrorCode::Internal(format!(
+                                        "Unsupported size conversion: {} -> {}", T::PHYSICAL_SIZE, T::TARGET_SIZE
+                                    )));
+                                }
+                            }
+                        }
+                        #[cfg(target_endian = "big")]
+                        {
+                            // On big-endian, we need proper endian conversion
+                            // For now, fall back to safe conversion
+                            match (T::PHYSICAL_SIZE, T::TARGET_SIZE) {
+                                (4, 1) => {
+                                    // Int32 -> i8/u8: read as Int32, convert to target
+                                    let int32_val = i32::from_le_bytes([
+                                        values_buffer[src_offset],
+                                        values_buffer[src_offset + 1],
+                                        values_buffer[src_offset + 2], 
+                                        values_buffer[src_offset + 3],
+                                    ]);
+                                    let target_ptr = column_data[dst_offset..dst_offset + 1].as_mut_ptr() as *mut i8;
+                                    unsafe { *target_ptr = int32_val as i8; }
+                                }
+                                (4, 2) => {
+                                    // Int32 -> i16/u16
+                                    let int32_val = i32::from_le_bytes([
+                                        values_buffer[src_offset],
+                                        values_buffer[src_offset + 1],
+                                        values_buffer[src_offset + 2],
+                                        values_buffer[src_offset + 3],
+                                    ]);
+                                    let target_ptr = column_data[dst_offset..dst_offset + 1].as_mut_ptr() as *mut i16;
+                                    unsafe { *target_ptr = int32_val as i16; }
+                                }
+                                _ => {
+                                    return Err(ErrorCode::Internal(format!(
+                                        "Unsupported size conversion: {} -> {}", T::PHYSICAL_SIZE, T::TARGET_SIZE
+                                    )));
+                                }
+                            }
+                        }
+                    } else {
+                        // Same size: direct copy with endian handling
+                        #[cfg(target_endian = "big")]
+                        {
+                            convert_endianness_and_copy::<T>(
+                                &values_buffer[src_offset..src_offset + T::TARGET_SIZE],
+                                &mut column_data[dst_offset..dst_offset + 1],
+                            );
+                        }
+                        #[cfg(target_endian = "little")]
+                        {
+                            unsafe {
+                                let src_ptr = values_buffer.as_ptr().add(src_offset);
+                                let dst_ptr = column_data[dst_offset..dst_offset + 1].as_mut_ptr() as *mut u8;
+                                std::ptr::copy_nonoverlapping(src_ptr, dst_ptr, T::TARGET_SIZE);
+                            }
                         }
                     }
                     values_read += 1;
@@ -246,41 +345,124 @@ fn process_plain_encoding<T: Copy>(
                     return Err(ErrorCode::Internal("Values buffer underflow".to_string()));
                 }
             }
-            // Note: NULL positions (is_valid == false) are left uninitialized
-            // This is safe because the validity bitmap controls access
         }
     } else {
+        // Non-nullable column: bulk processing
         let values_to_copy = non_null_count.min(page_rows);
-        let total_bytes = values_to_copy * type_size;
 
-        if total_bytes <= values_buffer.len() {
-            #[cfg(target_endian = "big")]
-            {
-                // On big-endian systems, convert each value individually
-                unsafe {
-                    column_data.set_len(old_len + values_to_copy);
+        if T::PHYSICAL_SIZE == T::TARGET_SIZE {
+            // Same size: preserve existing performance optimizations
+            let total_bytes = values_to_copy * T::TARGET_SIZE;
+            
+            if total_bytes <= values_buffer.len() {
+                #[cfg(target_endian = "big")]
+                {
+                    unsafe {
+                        column_data.set_len(old_len + values_to_copy);
+                    }
+                    for i in 0..values_to_copy {
+                        let src_offset = i * T::TARGET_SIZE;
+                        let dst_offset = old_len + i;
+                        convert_endianness_and_copy::<T>(
+                            &values_buffer[src_offset..src_offset + T::TARGET_SIZE],
+                            &mut column_data[dst_offset..dst_offset + 1],
+                        );
+                    }
                 }
-                for i in 0..values_to_copy {
-                    let src_offset = i * type_size;
-                    let dst_offset = old_len + i;
-                    convert_endianness_and_copy::<T>(
-                        &values_buffer[src_offset..src_offset + type_size],
-                        &mut column_data[dst_offset..dst_offset + 1],
-                    );
+                #[cfg(target_endian = "little")]
+                {
+                    // CRITICAL PERFORMANCE PATH: bulk copy for i32, i64, f32, f64
+                    unsafe {
+                        let src_ptr = values_buffer.as_ptr();
+                        let dst_ptr = column_data.as_mut_ptr().add(old_len) as *mut u8;
+                        std::ptr::copy_nonoverlapping(src_ptr, dst_ptr, total_bytes);
+                        column_data.set_len(old_len + values_to_copy);
+                    }
                 }
-            }
-            #[cfg(target_endian = "little")]
-            {
-                // On little-endian systems, batch copy for performance
-                unsafe {
-                    let src_ptr = values_buffer.as_ptr();
-                    let dst_ptr = column_data.as_mut_ptr().add(old_len) as *mut u8;
-                    std::ptr::copy_nonoverlapping(src_ptr, dst_ptr, total_bytes);
-                    column_data.set_len(old_len + values_to_copy);
-                }
+            } else {
+                return Err(ErrorCode::Internal("Values buffer underflow".to_string()));
             }
         } else {
-            return Err(ErrorCode::Internal("Values buffer underflow".to_string()));
+            // Different size: per-element conversion  
+            let total_parquet_bytes = values_to_copy * T::PHYSICAL_SIZE;
+            
+            if total_parquet_bytes <= values_buffer.len() {
+                unsafe {
+                    column_data.set_len(old_len + values_to_copy);
+                }
+                
+                for i in 0..values_to_copy {
+                    let src_offset = i * T::PHYSICAL_SIZE;  // CRITICAL FIX: Use physical size
+                    let dst_offset = old_len + i;
+                    
+                    #[cfg(target_endian = "little")]
+                    {
+                        // Read the full physical value and convert to target type
+                        match (T::PHYSICAL_SIZE, T::TARGET_SIZE) {
+                            (4, 1) => {
+                                // Int32 -> i8/u8: read as Int32, convert to target
+                                let int32_val = i32::from_le_bytes([
+                                    values_buffer[src_offset],
+                                    values_buffer[src_offset + 1],
+                                    values_buffer[src_offset + 2], 
+                                    values_buffer[src_offset + 3],
+                                ]);
+                                let target_ptr = column_data[dst_offset..dst_offset + 1].as_mut_ptr() as *mut i8;
+                                unsafe { *target_ptr = int32_val as i8; }
+                            }
+                            (4, 2) => {
+                                // Int32 -> i16/u16
+                                let int32_val = i32::from_le_bytes([
+                                    values_buffer[src_offset],
+                                    values_buffer[src_offset + 1],
+                                    values_buffer[src_offset + 2],
+                                    values_buffer[src_offset + 3],
+                                ]);
+                                let target_ptr = column_data[dst_offset..dst_offset + 1].as_mut_ptr() as *mut i16;
+                                unsafe { *target_ptr = int32_val as i16; }
+                            }
+                            _ => {
+                                return Err(ErrorCode::Internal(format!(
+                                    "Unsupported size conversion: {} -> {}", T::PHYSICAL_SIZE, T::TARGET_SIZE
+                                )));
+                            }
+                        }
+                    }
+                    #[cfg(target_endian = "big")]
+                    {
+                        // Proper endian conversion for different sizes
+                        match (T::PHYSICAL_SIZE, T::TARGET_SIZE) {
+                            (4, 1) => {
+                                let int32_val = i32::from_le_bytes([
+                                    values_buffer[src_offset],
+                                    values_buffer[src_offset + 1],
+                                    values_buffer[src_offset + 2],
+                                    values_buffer[src_offset + 3],
+                                ]);
+                                let target_ptr = column_data[dst_offset..dst_offset + 1].as_mut_ptr() as *mut i8;
+                                unsafe { *target_ptr = int32_val as i8; }
+                            }
+                            (4, 2) => {
+                                let int32_val = i32::from_le_bytes([
+                                    values_buffer[src_offset],
+                                    values_buffer[src_offset + 1],
+                                    values_buffer[src_offset + 2],
+                                    values_buffer[src_offset + 3],
+                                ]);
+                                let target_ptr = column_data[dst_offset..dst_offset + 1].as_mut_ptr() as *mut i16;
+                                unsafe { *target_ptr = int32_val as i16; }
+                            }
+                            _ => {
+                                return Err(ErrorCode::Internal(format!(
+                                    "Unsupported size conversion: {} -> {}", T::PHYSICAL_SIZE, T::TARGET_SIZE
+                                )));
+                            }
+                        }
+                    }
+                }
+            } else {
+                return Err(ErrorCode::Internal("Values buffer underflow".to_string()));
+            }
         }
     }
 
@@ -288,7 +470,7 @@ fn process_plain_encoding<T: Copy>(
 }
 
 /// Process a complete data page for any type T
-fn process_data_page<T: Copy + DictionarySupport>(
+fn process_data_page<T: Copy + DictionarySupport + ParquetPhysicalMapping>(
     data_page: &parquet2::page::DataPage,
     column_data: &mut Vec<T>,
     target_rows: usize,
@@ -367,19 +549,7 @@ fn process_data_page<T: Copy + DictionarySupport>(
                     validity_bitmap.as_ref(),
                 )?;
             } else {
-                // Validate values_buffer alignment for plain encoding (non-Boolean types)
-                #[cfg(debug_assertions)]
-                {
-                    let type_size = std::mem::size_of::<T>();
-                    if values_buffer.len() % type_size != 0 {
-                        return Err(ErrorCode::Internal(format!(
-                            "Values buffer length ({}) is not aligned to type size ({}). Buffer may be corrupted.",
-                            values_buffer.len(),
-                            type_size
-                        )));
-                    }
-                }
-
+                // Use compile-time type information for zero-overhead optimization
                 process_plain_encoding(
                     values_buffer,
                     page_rows,
@@ -409,7 +579,7 @@ fn process_data_page<T: Copy + DictionarySupport>(
 }
 
 /// Process dictionary page for numeric types with OLAP-optimized performance
-fn process_dictionary_page<T: DictionarySupport + Copy>(
+fn process_dictionary_page<T: DictionarySupport + Copy + ParquetPhysicalMapping>(
     dict_page: &parquet2::page::DictPage,
     dictionary: &mut Vec<T>,
 ) -> Result<()> {
@@ -441,27 +611,48 @@ fn process_dictionary_page<T: DictionarySupport + Copy>(
             dictionary.reserve(num_entries);
             let old_len = dictionary.len();
             
-            #[cfg(target_endian = "little")]
-            {
-                // Little-endian machines: Direct bulk memory copy for maximum performance
-                // Parquet uses little-endian format, so no conversion needed
-                unsafe {
-                    let src_ptr = dict_buffer.as_ptr() as *const T;
-                    let dst_ptr = dictionary.as_mut_ptr().add(old_len);
-                    std::ptr::copy_nonoverlapping(src_ptr, dst_ptr, num_entries);
-                    dictionary.set_len(old_len + num_entries);
+            // CRITICAL FIX: Check if we need type conversion for small integer types
+            if T::PHYSICAL_SIZE == T::TARGET_SIZE {
+                // Same size: can use direct bulk copy (for i32, u32, f32)
+                #[cfg(target_endian = "little")]
+                {
+                    // Little-endian machines: Direct bulk memory copy for maximum performance
+                    // Parquet uses little-endian format, so no conversion needed
+                    unsafe {
+                        let src_ptr = dict_buffer.as_ptr() as *const T;
+                        let dst_ptr = dictionary.as_mut_ptr().add(old_len);
+                        std::ptr::copy_nonoverlapping(src_ptr, dst_ptr, num_entries);
+                        dictionary.set_len(old_len + num_entries);
+                    }
                 }
-            }
-            #[cfg(target_endian = "big")]
-            {
-                // Big-endian machines: Pre-allocate and use direct indexing to avoid push overhead
+                #[cfg(target_endian = "big")]
+                {
+                    // Big-endian machines: Per-element endian conversion
+                    unsafe {
+                        dictionary.set_len(old_len + num_entries);
+                        let output_slice = &mut dictionary[old_len..];
+                        
+                        for (i, chunk) in dict_buffer.chunks_exact(4).enumerate() {
+                            let value = i32::from_le_bytes(chunk.try_into().unwrap());
+                            output_slice[i] = std::mem::transmute(value);
+                        }
+                    }
+                }
+            } else {
+                // Different size: need proper type conversion (for i8, i16, u8, u16 from Int32)
                 unsafe {
                     dictionary.set_len(old_len + num_entries);
                     let output_slice = &mut dictionary[old_len..];
                     
                     for (i, chunk) in dict_buffer.chunks_exact(4).enumerate() {
-                        let value = i32::from_le_bytes(chunk.try_into().unwrap());
-                        output_slice[i] = std::mem::transmute(value);
+                        // Read as Int32, convert to target type
+                        let int32_val = i32::from_le_bytes(chunk.try_into().unwrap());
+                        let target_val: T = match T::TARGET_SIZE {
+                            1 => std::mem::transmute_copy(&(int32_val as i8)),
+                            2 => std::mem::transmute_copy(&(int32_val as i16)),
+                            _ => std::mem::transmute_copy(&int32_val),
+                        };
+                        output_slice[i] = target_val;
                     }
                 }
             }
@@ -486,28 +677,37 @@ fn process_dictionary_page<T: DictionarySupport + Copy>(
             dictionary.reserve(num_entries);
             let old_len = dictionary.len();
             
-            #[cfg(target_endian = "little")]
-            {
-                // Little-endian machines: Direct bulk memory copy for maximum performance
-                unsafe {
-                    let src_ptr = dict_buffer.as_ptr() as *const T;
-                    let dst_ptr = dictionary.as_mut_ptr().add(old_len);
-                    std::ptr::copy_nonoverlapping(src_ptr, dst_ptr, num_entries);
-                    dictionary.set_len(old_len + num_entries);
-                }
-            }
-            #[cfg(target_endian = "big")]
-            {
-                // Big-endian machines: Pre-allocate and use direct indexing to avoid push overhead
-                unsafe {
-                    dictionary.set_len(old_len + num_entries);
-                    let output_slice = &mut dictionary[old_len..];
-                    
-                    for (i, chunk) in dict_buffer.chunks_exact(8).enumerate() {
-                        let value = i64::from_le_bytes(chunk.try_into().unwrap());
-                        output_slice[i] = std::mem::transmute(value);
+            // CRITICAL FIX: Check if we need type conversion
+            if T::PHYSICAL_SIZE == T::TARGET_SIZE {
+                // Same size: can use direct bulk copy (for i64, u64, f64)
+                #[cfg(target_endian = "little")]
+                {
+                    // Little-endian machines: Direct bulk memory copy for maximum performance
+                    unsafe {
+                        let src_ptr = dict_buffer.as_ptr() as *const T;
+                        let dst_ptr = dictionary.as_mut_ptr().add(old_len);
+                        std::ptr::copy_nonoverlapping(src_ptr, dst_ptr, num_entries);
+                        dictionary.set_len(old_len + num_entries);
                     }
                 }
+                #[cfg(target_endian = "big")]
+                {
+                    // Big-endian machines: Per-element endian conversion
+                    unsafe {
+                        dictionary.set_len(old_len + num_entries);
+                        let output_slice = &mut dictionary[old_len..];
+                        
+                        for (i, chunk) in dict_buffer.chunks_exact(8).enumerate() {
+                            let value = i64::from_le_bytes(chunk.try_into().unwrap());
+                            output_slice[i] = std::mem::transmute(value);
+                        }
+                    }
+                }
+            } else {
+                // Different size types should not use Int64 storage
+                return Err(ErrorCode::Internal(
+                    "Int64 storage with size mismatch not supported".to_string()
+                ));
             }
         }
         PhysicalType::FixedLenByteArray(len) => {
@@ -536,7 +736,7 @@ fn process_dictionary_page<T: DictionarySupport + Copy>(
 }
 
 /// Process RLE dictionary encoded data page
-fn process_rle_dictionary_encoding<T: DictionarySupport>(
+fn process_rle_dictionary_encoding<T: DictionarySupport + ParquetPhysicalMapping>(
     values_buffer: &[u8],
     page_rows: usize,
     column_data: &mut Vec<T>,
@@ -598,7 +798,7 @@ pub trait ParquetColumnType: Copy + Send + Sync + 'static {
 }
 
 // TODO rename this
-pub struct ParquetColumnIterator<'a, T: ParquetColumnType + DictionarySupport> {
+pub struct ParquetColumnIterator<'a, T: ParquetColumnType + DictionarySupport + ParquetPhysicalMapping> {
     pages: Decompressor<'a>,
     chunk_size: Option<usize>,
     num_rows: usize,
@@ -608,7 +808,7 @@ pub struct ParquetColumnIterator<'a, T: ParquetColumnType + DictionarySupport> {
     _phantom: std::marker::PhantomData<T>,
 }
 
-impl<'a, T: ParquetColumnType + DictionarySupport> ParquetColumnIterator<'a, T> {
+impl<'a, T: ParquetColumnType + DictionarySupport + ParquetPhysicalMapping> ParquetColumnIterator<'a, T> {
     pub fn new(
         pages: Decompressor<'a>,
         num_rows: usize,
@@ -629,7 +829,7 @@ impl<'a, T: ParquetColumnType + DictionarySupport> ParquetColumnIterator<'a, T> 
 }
 
 // WIP: State of iterator should be adjusted, if we allow chunk_size be chosen freely
-impl<'a, T: ParquetColumnType + DictionarySupport> Iterator for ParquetColumnIterator<'a, T> {
+impl<'a, T: ParquetColumnType + DictionarySupport + ParquetPhysicalMapping> Iterator for ParquetColumnIterator<'a, T> {
     type Item = Result<databend_common_expression::Column>;
 
     fn next(&mut self) -> Option<Self::Item> {

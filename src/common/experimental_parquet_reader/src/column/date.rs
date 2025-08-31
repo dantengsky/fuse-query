@@ -19,6 +19,7 @@ use crate::column::common::batch_dictionary_lookup;
 use crate::column::common::DictionarySupport;
 use crate::column::common::ParquetColumnIterator;
 use crate::column::common::ParquetColumnType;
+use crate::column::common::ParquetPhysicalMapping;
 use crate::column::number::IntegerMetadata;
 
 /// Date type alias for i32 (days since epoch)
@@ -33,6 +34,11 @@ impl ParquetColumnType for Date {
         let raw_data: Vec<i32> = unsafe { std::mem::transmute(data) };
         Column::Date(raw_data.into())
     }
+}
+
+impl ParquetPhysicalMapping for Date {
+    const PHYSICAL_SIZE: usize = 4; // Int32 -> Date
+    const TARGET_SIZE: usize = 4;   // Same size
 }
 
 // =============================================================================
