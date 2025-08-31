@@ -20,10 +20,8 @@ use databend_common_expression::Column;
 use parquet::util::bit_util::BitReader;
 use parquet2::schema::types::PhysicalType;
 
-use crate::column::common::DictionarySupport;
+use crate::column::{DictionarySupport, ParquetColumnType, ParquetPhysicalMapping};
 use crate::column::common::ParquetColumnIterator;
-use crate::column::common::ParquetColumnType;
-use crate::column::common::ParquetPhysicalMapping;
 use crate::reader::decompressor::Decompressor;
 
 #[derive(Clone, Copy)]

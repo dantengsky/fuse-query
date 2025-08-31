@@ -19,9 +19,8 @@ use databend_common_expression::types::F64;
 use databend_common_expression::Column;
 use parquet2::schema::types::PhysicalType;
 
-use crate::column::common::DictionarySupport;
+use crate::column::{DictionarySupport, ParquetColumnType};
 use crate::column::common::ParquetColumnIterator;
-use crate::column::common::ParquetColumnType;
 use crate::reader::decompressor::Decompressor;
 
 #[derive(Clone, Copy)]

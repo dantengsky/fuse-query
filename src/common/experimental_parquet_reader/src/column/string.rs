@@ -226,6 +226,7 @@ impl<'a> StringIter<'a> {
 
         let bit_width = values_buffer[0];
 
+        // TODO why clone dictionary?
         // Clone dictionary to avoid borrowing issues
         if let Some(dict) = self.dictionary.clone() {
             // Check if we can use the optimized small string fast path
