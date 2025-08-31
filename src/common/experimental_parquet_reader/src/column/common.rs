@@ -32,23 +32,60 @@ pub trait ParquetPhysicalMapping {
 }
 
 // Same-size mappings (performance-critical, zero overhead)
-impl ParquetPhysicalMapping for i32 { const PHYSICAL_SIZE: usize = 4; const TARGET_SIZE: usize = 4; }
-impl ParquetPhysicalMapping for i64 { const PHYSICAL_SIZE: usize = 8; const TARGET_SIZE: usize = 8; }
-impl ParquetPhysicalMapping for f32 { const PHYSICAL_SIZE: usize = 4; const TARGET_SIZE: usize = 4; }
-impl ParquetPhysicalMapping for f64 { const PHYSICAL_SIZE: usize = 8; const TARGET_SIZE: usize = 8; }
+impl ParquetPhysicalMapping for i32 {
+    const PHYSICAL_SIZE: usize = 4;
+    const TARGET_SIZE: usize = 4;
+}
+impl ParquetPhysicalMapping for i64 {
+    const PHYSICAL_SIZE: usize = 8;
+    const TARGET_SIZE: usize = 8;
+}
+impl ParquetPhysicalMapping for f32 {
+    const PHYSICAL_SIZE: usize = 4;
+    const TARGET_SIZE: usize = 4;
+}
+impl ParquetPhysicalMapping for f64 {
+    const PHYSICAL_SIZE: usize = 8;
+    const TARGET_SIZE: usize = 8;
+}
 
 // Different-size mappings (need conversion but optimized)
-impl ParquetPhysicalMapping for i8  { const PHYSICAL_SIZE: usize = 4; const TARGET_SIZE: usize = 1; } // Int32 -> i8
-impl ParquetPhysicalMapping for i16 { const PHYSICAL_SIZE: usize = 4; const TARGET_SIZE: usize = 2; } // Int32 -> i16
-impl ParquetPhysicalMapping for u8  { const PHYSICAL_SIZE: usize = 4; const TARGET_SIZE: usize = 1; } // Int32 -> u8
-impl ParquetPhysicalMapping for u16 { const PHYSICAL_SIZE: usize = 4; const TARGET_SIZE: usize = 2; } // Int32 -> u16
-impl ParquetPhysicalMapping for u32 { const PHYSICAL_SIZE: usize = 4; const TARGET_SIZE: usize = 4; } // Int32 -> u32 (same size, reinterpret)
-impl ParquetPhysicalMapping for u64 { const PHYSICAL_SIZE: usize = 8; const TARGET_SIZE: usize = 8; } // Int64 -> u64 (same size)
+impl ParquetPhysicalMapping for i8 {
+    const PHYSICAL_SIZE: usize = 4;
+    const TARGET_SIZE: usize = 1;
+} // Int32 -> i8
+impl ParquetPhysicalMapping for i16 {
+    const PHYSICAL_SIZE: usize = 4;
+    const TARGET_SIZE: usize = 2;
+} // Int32 -> i16
+impl ParquetPhysicalMapping for u8 {
+    const PHYSICAL_SIZE: usize = 4;
+    const TARGET_SIZE: usize = 1;
+} // Int32 -> u8
+impl ParquetPhysicalMapping for u16 {
+    const PHYSICAL_SIZE: usize = 4;
+    const TARGET_SIZE: usize = 2;
+} // Int32 -> u16
+impl ParquetPhysicalMapping for u32 {
+    const PHYSICAL_SIZE: usize = 4;
+    const TARGET_SIZE: usize = 4;
+} // Int32 -> u32 (same size, reinterpret)
+impl ParquetPhysicalMapping for u64 {
+    const PHYSICAL_SIZE: usize = 8;
+    const TARGET_SIZE: usize = 8;
+} // Int64 -> u64 (same size)
 
 // Float wrapper types (import these since they're commonly available)
-use databend_common_expression::types::{F32, F64};
-impl ParquetPhysicalMapping for F32 { const PHYSICAL_SIZE: usize = 4; const TARGET_SIZE: usize = 4; } // Float -> F32
-impl ParquetPhysicalMapping for F64 { const PHYSICAL_SIZE: usize = 8; const TARGET_SIZE: usize = 8; } // Double -> F64
+use databend_common_expression::types::F32;
+use databend_common_expression::types::F64;
+impl ParquetPhysicalMapping for F32 {
+    const PHYSICAL_SIZE: usize = 4;
+    const TARGET_SIZE: usize = 4;
+} // Float -> F32
+impl ParquetPhysicalMapping for F64 {
+    const PHYSICAL_SIZE: usize = 8;
+    const TARGET_SIZE: usize = 8;
+} // Double -> F64
 
 // Note: Date, Decimal, Boolean types implement ParquetPhysicalMapping in their own modules
 use streaming_decompression::FallibleStreamingIterator;
@@ -70,22 +107,6 @@ pub trait DictionarySupport: ParquetColumnType {
     /// # Returns
     /// Decoded value of type Self
     fn from_dictionary_entry(entry: &[u8]) -> Result<Self>;
-
-    /// Batch lookup from dictionary into provided output slice
-    ///
-    /// # Arguments
-    /// * `dictionary` - The dictionary values to lookup from
-    /// * `indices` - Array of dictionary indices
-    /// * `output` - Output slice to write results into (must have same length as indices)
-    ///
-    /// # Performance
-    /// This is the performance-critical path for dictionary decoding.
-    /// Implementations should use batch bounds checking and unsafe operations for maximum speed.
-    fn batch_from_dictionary_into_slice(
-        dictionary: &[Self],
-        indices: &[i32],
-        output: &mut [Self],
-    ) -> Result<()>;
 }
 
 /// Generic batch dictionary lookup with bounds checking and optimized copying
@@ -221,8 +242,6 @@ pub fn decode_definition_levels(
 /// * `page_rows` - The number of rows in the page
 /// * `column_data` - The vector to which the decoded values will be appended， capacity should be reserved properly
 /// * `validity_bitmap` - The validity bitmap for the column if any
-/// Process plain encoding with correct type size handling
-/// This function fixes the critical bug where small integer types used wrong byte offsets
 fn process_plain_encoding<T: Copy + ParquetPhysicalMapping>(
     values_buffer: &[u8],
     page_rows: usize,
@@ -248,7 +267,7 @@ fn process_plain_encoding<T: Copy + ParquetPhysicalMapping>(
         for (i, is_valid) in bitmap.iter().enumerate() {
             if is_valid && values_read < non_null_count {
                 // CRITICAL FIX: Use the correct physical size from Parquet
-                let src_offset = values_read * T::PHYSICAL_SIZE;  // This was the bug!
+                let src_offset = values_read * T::PHYSICAL_SIZE; // This was the bug!
                 let dst_offset = old_len + i;
 
                 if src_offset + T::PHYSICAL_SIZE <= values_buffer.len() {
@@ -264,11 +283,15 @@ fn process_plain_encoding<T: Copy + ParquetPhysicalMapping>(
                                     let int32_val = i32::from_le_bytes([
                                         values_buffer[src_offset],
                                         values_buffer[src_offset + 1],
-                                        values_buffer[src_offset + 2], 
+                                        values_buffer[src_offset + 2],
                                         values_buffer[src_offset + 3],
                                     ]);
-                                    let target_ptr = column_data[dst_offset..dst_offset + 1].as_mut_ptr() as *mut i8;
-                                    unsafe { *target_ptr = int32_val as i8; }
+                                    let target_ptr = column_data[dst_offset..dst_offset + 1]
+                                        .as_mut_ptr()
+                                        as *mut i8;
+                                    unsafe {
+                                        *target_ptr = int32_val as i8;
+                                    }
                                 }
                                 (4, 2) => {
                                     // Int32 -> i16/u16
@@ -278,12 +301,18 @@ fn process_plain_encoding<T: Copy + ParquetPhysicalMapping>(
                                         values_buffer[src_offset + 2],
                                         values_buffer[src_offset + 3],
                                     ]);
-                                    let target_ptr = column_data[dst_offset..dst_offset + 1].as_mut_ptr() as *mut i16;
-                                    unsafe { *target_ptr = int32_val as i16; }
+                                    let target_ptr = column_data[dst_offset..dst_offset + 1]
+                                        .as_mut_ptr()
+                                        as *mut i16;
+                                    unsafe {
+                                        *target_ptr = int32_val as i16;
+                                    }
                                 }
                                 _ => {
                                     return Err(ErrorCode::Internal(format!(
-                                        "Unsupported size conversion: {} -> {}", T::PHYSICAL_SIZE, T::TARGET_SIZE
+                                        "Unsupported size conversion: {} -> {}",
+                                        T::PHYSICAL_SIZE,
+                                        T::TARGET_SIZE
                                     )));
                                 }
                             }
@@ -298,11 +327,15 @@ fn process_plain_encoding<T: Copy + ParquetPhysicalMapping>(
                                     let int32_val = i32::from_le_bytes([
                                         values_buffer[src_offset],
                                         values_buffer[src_offset + 1],
-                                        values_buffer[src_offset + 2], 
+                                        values_buffer[src_offset + 2],
                                         values_buffer[src_offset + 3],
                                     ]);
-                                    let target_ptr = column_data[dst_offset..dst_offset + 1].as_mut_ptr() as *mut i8;
-                                    unsafe { *target_ptr = int32_val as i8; }
+                                    let target_ptr = column_data[dst_offset..dst_offset + 1]
+                                        .as_mut_ptr()
+                                        as *mut i8;
+                                    unsafe {
+                                        *target_ptr = int32_val as i8;
+                                    }
                                 }
                                 (4, 2) => {
                                     // Int32 -> i16/u16
@@ -312,12 +345,18 @@ fn process_plain_encoding<T: Copy + ParquetPhysicalMapping>(
                                         values_buffer[src_offset + 2],
                                         values_buffer[src_offset + 3],
                                     ]);
-                                    let target_ptr = column_data[dst_offset..dst_offset + 1].as_mut_ptr() as *mut i16;
-                                    unsafe { *target_ptr = int32_val as i16; }
+                                    let target_ptr = column_data[dst_offset..dst_offset + 1]
+                                        .as_mut_ptr()
+                                        as *mut i16;
+                                    unsafe {
+                                        *target_ptr = int32_val as i16;
+                                    }
                                 }
                                 _ => {
                                     return Err(ErrorCode::Internal(format!(
-                                        "Unsupported size conversion: {} -> {}", T::PHYSICAL_SIZE, T::TARGET_SIZE
+                                        "Unsupported size conversion: {} -> {}",
+                                        T::PHYSICAL_SIZE,
+                                        T::TARGET_SIZE
                                     )));
                                 }
                             }
@@ -335,7 +374,8 @@ fn process_plain_encoding<T: Copy + ParquetPhysicalMapping>(
                         {
                             unsafe {
                                 let src_ptr = values_buffer.as_ptr().add(src_offset);
-                                let dst_ptr = column_data[dst_offset..dst_offset + 1].as_mut_ptr() as *mut u8;
+                                let dst_ptr =
+                                    column_data[dst_offset..dst_offset + 1].as_mut_ptr() as *mut u8;
                                 std::ptr::copy_nonoverlapping(src_ptr, dst_ptr, T::TARGET_SIZE);
                             }
                         }
@@ -353,7 +393,7 @@ fn process_plain_encoding<T: Copy + ParquetPhysicalMapping>(
         if T::PHYSICAL_SIZE == T::TARGET_SIZE {
             // Same size: preserve existing performance optimizations
             let total_bytes = values_to_copy * T::TARGET_SIZE;
-            
+
             if total_bytes <= values_buffer.len() {
                 #[cfg(target_endian = "big")]
                 {
@@ -383,18 +423,18 @@ fn process_plain_encoding<T: Copy + ParquetPhysicalMapping>(
                 return Err(ErrorCode::Internal("Values buffer underflow".to_string()));
             }
         } else {
-            // Different size: per-element conversion  
+            // Different size: per-element conversion
             let total_parquet_bytes = values_to_copy * T::PHYSICAL_SIZE;
-            
+
             if total_parquet_bytes <= values_buffer.len() {
                 unsafe {
                     column_data.set_len(old_len + values_to_copy);
                 }
-                
+
                 for i in 0..values_to_copy {
-                    let src_offset = i * T::PHYSICAL_SIZE;  // CRITICAL FIX: Use physical size
+                    let src_offset = i * T::PHYSICAL_SIZE; // CRITICAL FIX: Use physical size
                     let dst_offset = old_len + i;
-                    
+
                     #[cfg(target_endian = "little")]
                     {
                         // Read the full physical value and convert to target type
@@ -404,11 +444,14 @@ fn process_plain_encoding<T: Copy + ParquetPhysicalMapping>(
                                 let int32_val = i32::from_le_bytes([
                                     values_buffer[src_offset],
                                     values_buffer[src_offset + 1],
-                                    values_buffer[src_offset + 2], 
+                                    values_buffer[src_offset + 2],
                                     values_buffer[src_offset + 3],
                                 ]);
-                                let target_ptr = column_data[dst_offset..dst_offset + 1].as_mut_ptr() as *mut i8;
-                                unsafe { *target_ptr = int32_val as i8; }
+                                let target_ptr =
+                                    column_data[dst_offset..dst_offset + 1].as_mut_ptr() as *mut i8;
+                                unsafe {
+                                    *target_ptr = int32_val as i8;
+                                }
                             }
                             (4, 2) => {
                                 // Int32 -> i16/u16
@@ -418,12 +461,18 @@ fn process_plain_encoding<T: Copy + ParquetPhysicalMapping>(
                                     values_buffer[src_offset + 2],
                                     values_buffer[src_offset + 3],
                                 ]);
-                                let target_ptr = column_data[dst_offset..dst_offset + 1].as_mut_ptr() as *mut i16;
-                                unsafe { *target_ptr = int32_val as i16; }
+                                let target_ptr = column_data[dst_offset..dst_offset + 1]
+                                    .as_mut_ptr()
+                                    as *mut i16;
+                                unsafe {
+                                    *target_ptr = int32_val as i16;
+                                }
                             }
                             _ => {
                                 return Err(ErrorCode::Internal(format!(
-                                    "Unsupported size conversion: {} -> {}", T::PHYSICAL_SIZE, T::TARGET_SIZE
+                                    "Unsupported size conversion: {} -> {}",
+                                    T::PHYSICAL_SIZE,
+                                    T::TARGET_SIZE
                                 )));
                             }
                         }
@@ -439,8 +488,11 @@ fn process_plain_encoding<T: Copy + ParquetPhysicalMapping>(
                                     values_buffer[src_offset + 2],
                                     values_buffer[src_offset + 3],
                                 ]);
-                                let target_ptr = column_data[dst_offset..dst_offset + 1].as_mut_ptr() as *mut i8;
-                                unsafe { *target_ptr = int32_val as i8; }
+                                let target_ptr =
+                                    column_data[dst_offset..dst_offset + 1].as_mut_ptr() as *mut i8;
+                                unsafe {
+                                    *target_ptr = int32_val as i8;
+                                }
                             }
                             (4, 2) => {
                                 let int32_val = i32::from_le_bytes([
@@ -449,12 +501,18 @@ fn process_plain_encoding<T: Copy + ParquetPhysicalMapping>(
                                     values_buffer[src_offset + 2],
                                     values_buffer[src_offset + 3],
                                 ]);
-                                let target_ptr = column_data[dst_offset..dst_offset + 1].as_mut_ptr() as *mut i16;
-                                unsafe { *target_ptr = int32_val as i16; }
+                                let target_ptr = column_data[dst_offset..dst_offset + 1]
+                                    .as_mut_ptr()
+                                    as *mut i16;
+                                unsafe {
+                                    *target_ptr = int32_val as i16;
+                                }
                             }
                             _ => {
                                 return Err(ErrorCode::Internal(format!(
-                                    "Unsupported size conversion: {} -> {}", T::PHYSICAL_SIZE, T::TARGET_SIZE
+                                    "Unsupported size conversion: {} -> {}",
+                                    T::PHYSICAL_SIZE,
+                                    T::TARGET_SIZE
                                 )));
                             }
                         }
@@ -584,34 +642,34 @@ fn process_dictionary_page<T: DictionarySupport + Copy + ParquetPhysicalMapping>
     dictionary: &mut Vec<T>,
 ) -> Result<()> {
     let dict_buffer: &[u8] = dict_page.buffer.as_ref();
-    
+
     // Handle empty dictionary case early
     if dict_buffer.is_empty() {
         return Ok(());
     }
-    
+
     match T::PHYSICAL_TYPE {
-        PhysicalType::Int32 => {
+        PhysicalType::Int32 | PhysicalType::Float => {
             let type_size = 4;
             let num_entries = dict_buffer.len() / type_size;
-            
+
             // Check for invalid buffer size (incomplete entries)
             if dict_buffer.len() % type_size != 0 {
                 return Err(ErrorCode::Internal(format!(
                     "Dictionary buffer size {} is not aligned to type size {}",
-                    dict_buffer.len(), type_size
+                    dict_buffer.len(),
+                    type_size
                 )));
             }
-            
+
             if num_entries == 0 {
                 return Ok(());
             }
-            
+
             // Pre-allocate space to avoid reallocations
             dictionary.reserve(num_entries);
             let old_len = dictionary.len();
-            
-            // CRITICAL FIX: Check if we need type conversion for small integer types
+
             if T::PHYSICAL_SIZE == T::TARGET_SIZE {
                 // Same size: can use direct bulk copy (for i32, u32, f32)
                 #[cfg(target_endian = "little")]
@@ -631,7 +689,7 @@ fn process_dictionary_page<T: DictionarySupport + Copy + ParquetPhysicalMapping>
                     unsafe {
                         dictionary.set_len(old_len + num_entries);
                         let output_slice = &mut dictionary[old_len..];
-                        
+
                         for (i, chunk) in dict_buffer.chunks_exact(4).enumerate() {
                             let value = i32::from_le_bytes(chunk.try_into().unwrap());
                             output_slice[i] = std::mem::transmute(value);
@@ -643,7 +701,7 @@ fn process_dictionary_page<T: DictionarySupport + Copy + ParquetPhysicalMapping>
                 unsafe {
                     dictionary.set_len(old_len + num_entries);
                     let output_slice = &mut dictionary[old_len..];
-                    
+
                     for (i, chunk) in dict_buffer.chunks_exact(4).enumerate() {
                         // Read as Int32, convert to target type
                         let int32_val = i32::from_le_bytes(chunk.try_into().unwrap());
@@ -657,26 +715,27 @@ fn process_dictionary_page<T: DictionarySupport + Copy + ParquetPhysicalMapping>
                 }
             }
         }
-        PhysicalType::Int64 => {
+        PhysicalType::Int64 | PhysicalType::Double => {
             let type_size = 8;
             let num_entries = dict_buffer.len() / type_size;
-            
+
             // Check for invalid buffer size (incomplete entries)
             if dict_buffer.len() % type_size != 0 {
                 return Err(ErrorCode::Internal(format!(
                     "Dictionary buffer size {} is not aligned to type size {}",
-                    dict_buffer.len(), type_size
+                    dict_buffer.len(),
+                    type_size
                 )));
             }
-            
+
             if num_entries == 0 {
                 return Ok(());
             }
-            
+
             // Pre-allocate space to avoid reallocations
             dictionary.reserve(num_entries);
             let old_len = dictionary.len();
-            
+
             // CRITICAL FIX: Check if we need type conversion
             if T::PHYSICAL_SIZE == T::TARGET_SIZE {
                 // Same size: can use direct bulk copy (for i64, u64, f64)
@@ -696,7 +755,7 @@ fn process_dictionary_page<T: DictionarySupport + Copy + ParquetPhysicalMapping>
                     unsafe {
                         dictionary.set_len(old_len + num_entries);
                         let output_slice = &mut dictionary[old_len..];
-                        
+
                         for (i, chunk) in dict_buffer.chunks_exact(8).enumerate() {
                             let value = i64::from_le_bytes(chunk.try_into().unwrap());
                             output_slice[i] = std::mem::transmute(value);
@@ -706,18 +765,17 @@ fn process_dictionary_page<T: DictionarySupport + Copy + ParquetPhysicalMapping>
             } else {
                 // Different size types should not use Int64 storage
                 return Err(ErrorCode::Internal(
-                    "Int64 storage with size mismatch not supported".to_string()
+                    "Int64 storage with size mismatch not supported".to_string(),
                 ));
             }
         }
         PhysicalType::FixedLenByteArray(len) => {
-            // Complex types: Keep original logic but with pre-allocation optimization
-            let type_size = len as usize;
+            let type_size = len;
             let num_entries = dict_buffer.len() / type_size;
-            
+
             if num_entries > 0 {
                 dictionary.reserve(num_entries);
-                
+
                 for chunk in dict_buffer.chunks_exact(type_size) {
                     let value = T::from_dictionary_entry(chunk)?;
                     dictionary.push(value);
@@ -757,6 +815,7 @@ fn process_rle_dictionary_encoding<T: DictionarySupport + ParquetPhysicalMapping
 
     // Decode indices - avoid zero initialization for performance
     let mut indices = Vec::with_capacity(page_rows);
+    #[allow(clippy::uninit_vec)]
     unsafe {
         indices.set_len(page_rows);
     }
@@ -774,6 +833,7 @@ fn process_rle_dictionary_encoding<T: DictionarySupport + ParquetPhysicalMapping
     // Batch dictionary lookup - performance critical path
     let old_len = column_data.len();
     column_data.reserve(page_rows);
+    #[allow(clippy::uninit_vec)]
     unsafe {
         column_data.set_len(old_len + page_rows);
     }
@@ -798,7 +858,10 @@ pub trait ParquetColumnType: Copy + Send + Sync + 'static {
 }
 
 // TODO rename this
-pub struct ParquetColumnIterator<'a, T: ParquetColumnType + DictionarySupport + ParquetPhysicalMapping> {
+pub struct ParquetColumnIterator<
+    'a,
+    T: ParquetColumnType + DictionarySupport + ParquetPhysicalMapping,
+> {
     pages: Decompressor<'a>,
     chunk_size: Option<usize>,
     num_rows: usize,
@@ -808,7 +871,9 @@ pub struct ParquetColumnIterator<'a, T: ParquetColumnType + DictionarySupport + 
     _phantom: std::marker::PhantomData<T>,
 }
 
-impl<'a, T: ParquetColumnType + DictionarySupport + ParquetPhysicalMapping> ParquetColumnIterator<'a, T> {
+impl<'a, T: ParquetColumnType + DictionarySupport + ParquetPhysicalMapping>
+    ParquetColumnIterator<'a, T>
+{
     pub fn new(
         pages: Decompressor<'a>,
         num_rows: usize,
@@ -829,7 +894,9 @@ impl<'a, T: ParquetColumnType + DictionarySupport + ParquetPhysicalMapping> Parq
 }
 
 // WIP: State of iterator should be adjusted, if we allow chunk_size be chosen freely
-impl<'a, T: ParquetColumnType + DictionarySupport + ParquetPhysicalMapping> Iterator for ParquetColumnIterator<'a, T> {
+impl<'a, T: ParquetColumnType + DictionarySupport + ParquetPhysicalMapping> Iterator
+    for ParquetColumnIterator<'a, T>
+{
     type Item = Result<databend_common_expression::Column>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -859,7 +926,7 @@ impl<'a, T: ParquetColumnType + DictionarySupport + ParquetPhysicalMapping> Iter
                         target_rows,
                         self.is_nullable,
                         &T::PHYSICAL_TYPE,
-                        self.dictionary.as_ref().map(|dict| dict.as_slice()),
+                        self.dictionary.as_deref(),
                     ) {
                         Ok(validity_bitmap) => {
                             if self.is_nullable {
@@ -892,6 +959,8 @@ impl<'a, T: ParquetColumnType + DictionarySupport + ParquetPhysicalMapping> Iter
                     if T::PHYSICAL_TYPE == PhysicalType::Int32
                         || T::PHYSICAL_TYPE == PhysicalType::Int64
                         || T::PHYSICAL_TYPE == PhysicalType::Boolean
+                        || T::PHYSICAL_TYPE == PhysicalType::Float
+                        || T::PHYSICAL_TYPE == PhysicalType::Double
                         || matches!(T::PHYSICAL_TYPE, PhysicalType::FixedLenByteArray(_))
                     {
                         // Process dictionary page and cache the dictionary
@@ -1010,11 +1079,14 @@ pub fn combine_validity_bitmaps(
 #[cfg(test)]
 mod tests {
     use databend_common_expression::types::NumberColumn;
-    use parquet2::schema::types::PhysicalType;
     use parquet2::page::DictPage;
+    use parquet2::schema::types::PhysicalType;
 
     use super::*;
-    use crate::column::{Date, Decimal64, Decimal128, Decimal256};
+    use crate::column::Date;
+    use crate::column::Decimal128;
+    use crate::column::Decimal256;
+    use crate::column::Decimal64;
 
     // Mock implementation for testing
     #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1029,9 +1101,7 @@ mod tests {
             metadata: &Self::Metadata,
         ) -> databend_common_expression::Column {
             let raw_data: Vec<i32> = unsafe { std::mem::transmute(data) };
-            databend_common_expression::Column::Number(
-                NumberColumn::Int32(raw_data.into()),
-            )
+            databend_common_expression::Column::Number(NumberColumn::Int32(raw_data.into()))
         }
     }
 

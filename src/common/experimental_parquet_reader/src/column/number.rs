@@ -14,11 +14,11 @@
 
 use databend_common_column::buffer::Buffer;
 use databend_common_expression::types::Number;
-use databend_common_expression::types::{F32, F64};
+use databend_common_expression::types::F32;
+use databend_common_expression::types::F64;
 use databend_common_expression::Column;
 use parquet2::schema::types::PhysicalType;
 
-use crate::column::common::batch_dictionary_lookup;
 use crate::column::common::DictionarySupport;
 use crate::column::common::ParquetColumnIterator;
 use crate::column::common::ParquetColumnType;
@@ -139,19 +139,13 @@ impl DictionarySupport for i8 {
         if i32_value < i8::MIN as i32 || i32_value > i8::MAX as i32 {
             return Err(databend_common_exception::ErrorCode::Internal(format!(
                 "i8 overflow: value {} out of range [{}, {}]",
-                i32_value, i8::MIN, i8::MAX
+                i32_value,
+                i8::MIN,
+                i8::MAX
             )));
         }
 
         Ok(i32_value as i8)
-    }
-
-    fn batch_from_dictionary_into_slice(
-        dictionary: &[Self],
-        indices: &[i32],
-        output: &mut [Self],
-    ) -> databend_common_exception::Result<()> {
-        batch_dictionary_lookup(dictionary, indices, output)
     }
 }
 
@@ -169,19 +163,13 @@ impl DictionarySupport for i16 {
         if i32_value < i16::MIN as i32 || i32_value > i16::MAX as i32 {
             return Err(databend_common_exception::ErrorCode::Internal(format!(
                 "i16 overflow: value {} out of range [{}, {}]",
-                i32_value, i16::MIN, i16::MAX
+                i32_value,
+                i16::MIN,
+                i16::MAX
             )));
         }
 
         Ok(i32_value as i16)
-    }
-
-    fn batch_from_dictionary_into_slice(
-        dictionary: &[Self],
-        indices: &[i32],
-        output: &mut [Self],
-    ) -> databend_common_exception::Result<()> {
-        batch_dictionary_lookup(dictionary, indices, output)
     }
 }
 
@@ -203,14 +191,6 @@ impl DictionarySupport for i32 {
 
         Ok(i32::from_le_bytes(bytes))
     }
-
-    fn batch_from_dictionary_into_slice(
-        dictionary: &[Self],
-        indices: &[i32],
-        output: &mut [Self],
-    ) -> databend_common_exception::Result<()> {
-        batch_dictionary_lookup(dictionary, indices, output)
-    }
 }
 
 impl DictionarySupport for i64 {
@@ -231,14 +211,6 @@ impl DictionarySupport for i64 {
 
         Ok(i64::from_le_bytes(bytes))
     }
-
-    fn batch_from_dictionary_into_slice(
-        dictionary: &[Self],
-        indices: &[i32],
-        output: &mut [Self],
-    ) -> databend_common_exception::Result<()> {
-        batch_dictionary_lookup(dictionary, indices, output)
-    }
 }
 
 // ===== Dictionary Support for Unsigned Integer Types =====
@@ -257,19 +229,12 @@ impl DictionarySupport for u8 {
         if i32_value < 0 || i32_value > u8::MAX as i32 {
             return Err(databend_common_exception::ErrorCode::Internal(format!(
                 "u8 overflow: value {} out of range [0, {}]",
-                i32_value, u8::MAX
+                i32_value,
+                u8::MAX
             )));
         }
 
         Ok(i32_value as u8)
-    }
-
-    fn batch_from_dictionary_into_slice(
-        dictionary: &[Self],
-        indices: &[i32],
-        output: &mut [Self],
-    ) -> databend_common_exception::Result<()> {
-        batch_dictionary_lookup(dictionary, indices, output)
     }
 }
 
@@ -287,19 +252,12 @@ impl DictionarySupport for u16 {
         if i32_value < 0 || i32_value > u16::MAX as i32 {
             return Err(databend_common_exception::ErrorCode::Internal(format!(
                 "u16 overflow: value {} out of range [0, {}]",
-                i32_value, u16::MAX
+                i32_value,
+                u16::MAX
             )));
         }
 
         Ok(i32_value as u16)
-    }
-
-    fn batch_from_dictionary_into_slice(
-        dictionary: &[Self],
-        indices: &[i32],
-        output: &mut [Self],
-    ) -> databend_common_exception::Result<()> {
-        batch_dictionary_lookup(dictionary, indices, output)
     }
 }
 
@@ -317,14 +275,6 @@ impl DictionarySupport for u32 {
         // Reinterpret i32 bits as u32 (no range checking needed)
         Ok(i32_value as u32)
     }
-
-    fn batch_from_dictionary_into_slice(
-        dictionary: &[Self],
-        indices: &[i32],
-        output: &mut [Self],
-    ) -> databend_common_exception::Result<()> {
-        batch_dictionary_lookup(dictionary, indices, output)
-    }
 }
 
 impl DictionarySupport for u64 {
@@ -340,14 +290,6 @@ impl DictionarySupport for u64 {
         let i64_value = i64::from_le_bytes(entry.try_into().unwrap());
         // For u64, we interpret the i64 bits as u64 (two's complement interpretation)
         Ok(i64_value as u64)
-    }
-
-    fn batch_from_dictionary_into_slice(
-        dictionary: &[Self],
-        indices: &[i32],
-        output: &mut [Self],
-    ) -> databend_common_exception::Result<()> {
-        batch_dictionary_lookup(dictionary, indices, output)
     }
 }
 
@@ -371,14 +313,6 @@ impl DictionarySupport for F32 {
 
         Ok(F32::from(f32::from_le_bytes(bytes)))
     }
-
-    fn batch_from_dictionary_into_slice(
-        dictionary: &[Self],
-        indices: &[i32],
-        output: &mut [Self],
-    ) -> databend_common_exception::Result<()> {
-        batch_dictionary_lookup(dictionary, indices, output)
-    }
 }
 
 impl DictionarySupport for F64 {
@@ -399,14 +333,6 @@ impl DictionarySupport for F64 {
 
         Ok(F64::from(f64::from_le_bytes(bytes)))
     }
-
-    fn batch_from_dictionary_into_slice(
-        dictionary: &[Self],
-        indices: &[i32],
-        output: &mut [Self],
-    ) -> databend_common_exception::Result<()> {
-        batch_dictionary_lookup(dictionary, indices, output)
-    }
 }
 
 // ===== Iterator Type Definitions =====
@@ -417,7 +343,7 @@ pub type Int16Iter<'a> = ParquetColumnIterator<'a, i16>;
 pub type Int32Iter<'a> = ParquetColumnIterator<'a, i32>;
 pub type Int64Iter<'a> = ParquetColumnIterator<'a, i64>;
 
-// Unsigned Integer Iterators  
+// Unsigned Integer Iterators
 pub type UInt8Iter<'a> = ParquetColumnIterator<'a, u8>;
 pub type UInt16Iter<'a> = ParquetColumnIterator<'a, u16>;
 pub type UInt32Iter<'a> = ParquetColumnIterator<'a, u32>;
@@ -564,105 +490,6 @@ mod tests {
         let entry = [42u8, 0, 0, 0, 0, 0, 0]; // Only 7 bytes
         let result = i64::from_dictionary_entry(&entry);
         assert!(result.is_err());
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_i32_batch_from_dictionary_into_slice() -> Result<()> {
-        // Setup dictionary
-        let dictionary = vec![10i32, 20, 30, 40, 50];
-
-        // Test normal indices
-        let indices = [0i32, 2, 4, 1, 3];
-        let mut output = vec![0i32; 5];
-
-        i32::batch_from_dictionary_into_slice(&dictionary, &indices, &mut output)?;
-        assert_eq!(output, vec![10, 30, 50, 20, 40]);
-
-        // Test repeated indices
-        let indices = [1i32, 1, 1, 1];
-        let mut output = vec![0i32; 4];
-
-        i32::batch_from_dictionary_into_slice(&dictionary, &indices, &mut output)?;
-        assert_eq!(output, vec![20, 20, 20, 20]);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_i64_batch_from_dictionary_into_slice() -> Result<()> {
-        // Setup dictionary
-        let dictionary = vec![100i64, 200, 300];
-
-        // Test normal indices
-        let indices = [2i32, 0, 1, 2, 0];
-        let mut output = vec![0i64; 5];
-
-        i64::batch_from_dictionary_into_slice(&dictionary, &indices, &mut output)?;
-        assert_eq!(output, vec![300, 100, 200, 300, 100]);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_batch_dictionary_bounds_checking() -> Result<()> {
-        let dictionary = vec![10i32, 20, 30];
-
-        // Test out of bounds index
-        let indices = [0i32, 3, 1]; // Index 3 is out of bounds
-        let mut output = vec![0i32; 3];
-
-        let result = i32::batch_from_dictionary_into_slice(&dictionary, &indices, &mut output);
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Dictionary index out of bounds"));
-
-        // Test negative index (should be caught as out of bounds when cast to usize)
-        let indices = [0i32, -1, 1];
-        let mut output = vec![0i32; 3];
-
-        let result = i32::batch_from_dictionary_into_slice(&dictionary, &indices, &mut output);
-        assert!(result.is_err());
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_empty_dictionary_and_indices() -> Result<()> {
-        // Test empty indices with non-empty dictionary
-        let dictionary = vec![10i32, 20, 30];
-        let indices: [i32; 0] = [];
-        let mut output: Vec<i32> = vec![];
-
-        i32::batch_from_dictionary_into_slice(&dictionary, &indices, &mut output)?;
-        assert_eq!(output.len(), 0);
-
-        // Test empty dictionary with empty indices
-        let dictionary: Vec<i32> = vec![];
-        let indices: [i32; 0] = [];
-        let mut output: Vec<i32> = vec![];
-
-        i32::batch_from_dictionary_into_slice(&dictionary, &indices, &mut output)?;
-        assert_eq!(output.len(), 0);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_mismatched_output_slice_length() -> Result<()> {
-        let dictionary = vec![10i32, 20, 30];
-        let indices = [0i32, 1, 2];
-        let mut output = vec![0i32; 2]; // Output too small
-
-        let result = i32::batch_from_dictionary_into_slice(&dictionary, &indices, &mut output);
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Output slice length mismatch"));
 
         Ok(())
     }

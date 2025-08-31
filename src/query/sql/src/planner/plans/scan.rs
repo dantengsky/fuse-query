@@ -285,7 +285,7 @@ impl Operator for Scan {
                         ndv = ndv.min((m - n).saturating_add(1))
                     }
                     (Datum::Int(m), Datum::Int(n)) if m >= n => {
-                        ndv = ndv.min(((m - n) as u64).saturating_add(1))
+                        ndv = ndv.min(m.saturating_add(1).saturating_sub(*n) as u64)
                     }
                     _ => {
                         if max == min {

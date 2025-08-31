@@ -20,7 +20,6 @@ use databend_common_expression::Column;
 use parquet::util::bit_util::BitReader;
 use parquet2::schema::types::PhysicalType;
 
-use crate::column::common::batch_dictionary_lookup;
 use crate::column::common::DictionarySupport;
 use crate::column::common::ParquetColumnIterator;
 use crate::column::common::ParquetColumnType;
@@ -52,7 +51,7 @@ impl ParquetColumnType for bool {
 
 impl ParquetPhysicalMapping for bool {
     const PHYSICAL_SIZE: usize = 1; // Boolean -> bool (bit-packed, special case)
-    const TARGET_SIZE: usize = 1;   // Same size
+    const TARGET_SIZE: usize = 1; // Same size
 }
 
 impl DictionarySupport for bool {
@@ -64,14 +63,6 @@ impl DictionarySupport for bool {
             )));
         }
         Ok(entry[0] != 0)
-    }
-
-    fn batch_from_dictionary_into_slice(
-        dictionary: &[Self],
-        indices: &[i32],
-        output: &mut [Self],
-    ) -> Result<()> {
-        batch_dictionary_lookup(dictionary, indices, output)
     }
 }
 
@@ -164,16 +155,5 @@ mod tests {
         // Test error handling
         assert!(bool::from_dictionary_entry(&[]).is_err());
         assert!(bool::from_dictionary_entry(&[1, 2]).is_err());
-    }
-
-    #[test]
-    fn test_boolean_batch_dictionary_lookup() {
-        let dictionary = [true, false, true];
-        let indices = [0i32, 2, 1, 0];
-        let mut output = [false; 4];
-
-        let result = bool::batch_from_dictionary_into_slice(&dictionary, &indices, &mut output);
-        assert!(result.is_ok());
-        assert_eq!(output, [true, true, false, true]);
     }
 }

@@ -363,9 +363,9 @@ insert into t values (-1.0), (0.0), (1.0);
 query T
 select * from t order by c;
 ----
--1
-0
-1
+-1.0
+0.0
+1.0
 
 ## DOUBLE (Float64)
 statement ok
@@ -390,10 +390,9 @@ insert into t values (-1.0), (0.0), (1.0);
 query T
 select * from t order by c;
 ----
--1
-0
-1
-
+-1.0
+0.0
+1.0
 
 
 
