@@ -41,6 +41,7 @@ use crate::column::new_uint16_iter;
 use crate::column::new_uint32_iter;
 use crate::column::new_uint64_iter;
 use crate::column::new_uint8_iter;
+use crate::column::BinaryIter;
 use crate::column::DateIter;
 use crate::column::IntegerMetadata;
 use crate::column::StringIter;
@@ -130,9 +131,26 @@ fn pages_to_column_iter<'a>(
             Ok(Box::new(new_float64_iter(pages, num_rows, is_nullable, chunk_size)))
         }
 
-        // ===== String and Other Types =====
+        // ===== String and Binary Types =====
         (PhysicalType::ByteArray, TableDataType::String) => {
             Ok(Box::new(StringIter::new(pages, num_rows, chunk_size)))
+        }
+
+        // ===== Binary Types =====
+        (PhysicalType::ByteArray, TableDataType::Binary) => {
+            Ok(Box::new(BinaryIter::new(pages, num_rows, is_nullable, inner_data_type.clone(), chunk_size)))
+        }
+        (PhysicalType::ByteArray, TableDataType::Variant) => {
+            Ok(Box::new(BinaryIter::new(pages, num_rows, is_nullable, inner_data_type.clone(), chunk_size)))
+        }
+        (PhysicalType::ByteArray, TableDataType::Bitmap) => {
+            Ok(Box::new(BinaryIter::new(pages, num_rows, is_nullable, inner_data_type.clone(), chunk_size)))
+        }
+        (PhysicalType::ByteArray, TableDataType::Geometry) => {
+            Ok(Box::new(BinaryIter::new(pages, num_rows, is_nullable, inner_data_type.clone(), chunk_size)))
+        }
+        (PhysicalType::ByteArray, TableDataType::Geography) => {
+            Ok(Box::new(BinaryIter::new(pages, num_rows, is_nullable, inner_data_type.clone(), chunk_size)))
         }
 
         // ===== Decimal Types =====
@@ -181,7 +199,7 @@ fn pages_to_column_iter<'a>(
             )))
         }
 
-        // ===== Date Type =====
+        // ===== Date and Timestamp Types =====
         (PhysicalType::Int32, TableDataType::Date) => {
             Ok(Box::new(DateIter::new(
                 pages,
@@ -190,6 +208,10 @@ fn pages_to_column_iter<'a>(
                 IntegerMetadata,
                 chunk_size,
             )))
+        }
+        (PhysicalType::Int64, TableDataType::Timestamp) => {
+            // Timestamp is stored as Int64 (microseconds since epoch)
+            Ok(Box::new(new_int64_iter(pages, num_rows, is_nullable, chunk_size)))
         }
 
         // ===== Unsupported Combinations =====

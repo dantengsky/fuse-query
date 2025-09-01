@@ -32,9 +32,9 @@ use super::traits::{DictionarySupport, ParquetColumnType, ParquetPhysicalMapping
 // Import utility functions from separate module
 use super::utils::{decode_definition_levels, extract_page_data, get_bit_width};
 // Import validation functions from separate module
-use super::validation::{
-    combine_validity_bitmaps, validate_column_nullability, validate_physical_type,
-};
+#[cfg(debug_assertions)]
+use super::validation::validate_column_nullability;
+use super::validation::{combine_validity_bitmaps, validate_physical_type};
 use crate::reader::decompressor;
 
 /// Process a complete data page for any type T
@@ -61,6 +61,9 @@ fn process_data_page<T: Copy + DictionarySupport + ParquetPhysicalMapping>(
 
     // Number of values(not rows), including NULLs
     let num_values = data_page.num_values();
+
+    // TODO: review this:
+    // let page_rows = num_values.min(remaining) seems enough
 
     // Calculate how many rows this page will actually contribute
     let page_rows = if is_nullable {

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod binary;
 mod boolean;
 mod common;
 mod date;
@@ -24,6 +25,7 @@ mod traits;
 mod utils;
 mod validation;
 
+pub use binary::BinaryIter;
 pub use boolean::*;
 pub use date::*;
 pub use decimal::*;

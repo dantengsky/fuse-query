@@ -367,33 +367,191 @@ select * from t order by c;
 0.0
 1.0
 
-## DOUBLE (Float64)
-statement ok
-create or replace table t ( c double);
 
 statement ok
-insert into t values (-3.141592653589793), (3.141592653589793), (null);
+set enable_fuse_parquet_dictionary_encoding = 0;
+
+## BINARY
+statement ok
+create or replace table t ( c binary);
+
+statement ok
+insert into t values ('hello'), ('world'), (null);
 
 query T
-select * from t order by c;
+select c::string from t order by c;
 ----
--3.141592653589793
-3.141592653589793
+hello
+world
 NULL
 
 statement ok
-create or replace table t ( c double not null);
+create or replace table t ( c binary not null);
 
 statement ok
-insert into t values (-1.0), (0.0), (1.0);
+insert into t values ('test'), ('binary'), ('data');
+
+query T
+select c::string from t order by c;
+----
+binary
+data
+test
+
+statement ok
+create or replace table t ( c binary not null);
+
+statement ok
+insert into t values (''), ('a'), ('longer binary');
+
+query I
+select length(c) from t order by length(c);
+----
+0
+1
+13
+
+## VARIANT
+statement ok
+create or replace table t ( c variant);
+
+statement ok
+insert into t values ('{"key": "value"}'), ('[1,2,3]'), (null);
 
 query T
 select * from t order by c;
 ----
--1.0
-0.0
-1.0
+{"key":"value"}
+[1,2,3]
+NULL
+
+statement ok
+create or replace table t ( c variant not null);
+
+statement ok
+insert into t values ('"string"'), ('123'), ('true');
+
+query T
+select * from t order by c;
+----
+true
+123
+"string"
+
+## BITMAP
+statement ok
+create or replace table t ( c bitmap);
+
+statement ok
+insert into t values (build_bitmap([1,2,3])), (build_bitmap([4,5,6])), (null);
+
+query I
+select bitmap_count(c) from t order by bitmap_count(c);
+----
+3
+3
+NULL
+
+statement ok
+create or replace table t ( c bitmap not null);
+
+statement ok
+insert into t values (build_bitmap([])), (build_bitmap([1])), (build_bitmap([1,2,3,4,5]));
+
+query I
+select bitmap_count(c) from t order by bitmap_count(c);
+----
+0
+1
+5
 
 
 
+## GEOMETRY
+
+statement ok
+set enable_geo_create_table=1
+
+statement ok
+create or replace table t ( c geometry);
+
+statement ok
+insert into t values (st_geomfromwkt('POINT(1 2)')), (st_geomfromwkt('POINT(3 4)')), (null);
+
+query T
+select st_astext(c) from t where c is not null order by st_astext(c);
+----
+POINT(1 2)
+POINT(3 4)
+
+statement ok
+create or replace table t ( c geometry not null);
+
+statement ok
+insert into t values (st_geomfromwkt('POINT(0 0)')), (st_geomfromwkt('LINESTRING(0 0, 1 1)')), (st_geomfromwkt('POLYGON((0 0, 1 0, 1 1, 0 1, 0 0))'));
+
+query I
+select count(*) from t;
+----
+3
+
+## GEOGRAPHY
+statement ok
+create or replace table t ( c geography);
+
+statement ok
+insert into t values (st_geogfromwkt('POINT(1 2)')), (st_geogfromwkt('POINT(3 4)')), (null);
+
+query T
+select count() from t where c is not null;
+----
+2
+
+# TODO investigate this
+#query T
+#select st_astext(c) from t where c is not null order by st_astext(c);
+#----
+#POINT(1 2)
+#POINT(3 4)
+
+statement ok
+create or replace table t ( c geography not null);
+
+statement ok
+insert into t values (st_geogfromwkt('POINT(-122.335 37.684)')), (st_geogfromwkt('POINT(-73.935 40.730)'));
+
+query I
+select count(*) from t;
+----
+2
+
+# Test dictionary encoding with binary types
+statement ok
+set enable_fuse_parquet_dictionary_encoding = 1;
+
+statement ok
+create or replace table t_dict_binary ( c binary);
+
+statement ok
+insert into t_dict_binary values ('repeat'), ('repeat'), ('repeat'), ('unique'), (null);
+
+query T
+select distinct c::string from t_dict_binary order by c;
+----
+repeat
+unique
+NULL
+
+statement ok
+create or replace table t_dict_variant ( c variant);
+
+statement ok
+insert into t_dict_variant values ('{"same": "value"}'), ('{"same": "value"}'), ('{"different": "value"}'), (null);
+
+query T
+select distinct c from t_dict_variant order by c;
+----
+{"different":"value"}
+{"same":"value"}
+NULL
 

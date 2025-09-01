@@ -79,10 +79,21 @@ impl RowConverter {
     /// Convert columns into [`BinaryColumn`] represented comparable row format.
     pub fn convert_columns(&self, columns: &[Column], num_rows: usize) -> BinaryColumn {
         debug_assert_eq!(columns.len(), self.fields.len());
-        debug_assert!(columns
-            .iter()
-            .zip(self.fields.iter())
-            .all(|(col, f)| col.len() == num_rows && col.data_type() == f.data_type));
+        debug_assert!(columns.iter().zip(self.fields.iter()).all(|(col, f)| {
+            if col.len() != num_rows {
+                eprintln!("col.len() {}, num_rows {}", col.len(), num_rows);
+            }
+            if col.data_type() != f.data_type {
+                eprintln!(
+                    "col.data_type() {:?}, f.data_type() {:?}",
+                    col.data_type(),
+                    f.data_type
+                );
+                eprintln!("Column details: {:?}", col);
+                eprintln!("Field details: {:?}", f);
+            }
+            col.len() == num_rows && col.data_type() == f.data_type
+        }));
 
         let mut builder = self.new_empty_rows(columns, num_rows);
         for (column, field) in columns.iter().zip(self.fields.iter()) {
