@@ -335,8 +335,6 @@ impl<'a> StringIter<'a> {
 
         // Decode indices and populate views in single pass
         let start_len = views.len();
-        // TODO hotspot
-        // let mut indices = vec![0i32; remaining];
 
         let indices: &mut Vec<i32> = if let Some(indices) = self.rle_index_buffer.as_mut() {
             if indices.capacity() < remaining {

@@ -183,6 +183,9 @@ impl<'a> BinaryIter<'a> {
                         // Binary columns represent nulls as empty byte arrays
                     }
                     // Record offset for both null and non-null
+                    eprintln!("puting offset {}", data.len());
+                    // TODO TODO TODO
+                    // Way does this work? .....
                     offsets.push(data.len() as u64);
                 }
             } else {
@@ -235,7 +238,7 @@ impl<'a> BinaryIter<'a> {
             ErrorCode::Internal("Dictionary not found for RLE_DICTIONARY encoding".to_string())
         })?;
 
-        // Extract definition levels and values buffer properly - note split_buffer returns (rep, def, values)  
+        // Extract definition levels and values buffer properly - note split_buffer returns (rep, def, values)
         let (_, def_levels, values_buffer) = parquet2::page::split_buffer(data_page)
             .map_err(|e| ErrorCode::Internal(format!("Failed to split buffer: {}", e)))?;
 

@@ -31,10 +31,11 @@ use super::encoding::process_plain_encoding;
 use super::traits::{DictionarySupport, ParquetColumnType, ParquetPhysicalMapping};
 // Import utility functions from separate module
 use super::utils::{decode_definition_levels, extract_page_data, get_bit_width};
+use super::validation::combine_validity_bitmaps;
 // Import validation functions from separate module
 #[cfg(debug_assertions)]
 use super::validation::validate_column_nullability;
-use super::validation::{combine_validity_bitmaps, validate_physical_type};
+use super::validation::validate_physical_type;
 use crate::reader::decompressor;
 
 /// Process a complete data page for any type T
@@ -66,29 +67,30 @@ fn process_data_page<T: Copy + DictionarySupport + ParquetPhysicalMapping>(
     // let page_rows = num_values.min(remaining) seems enough
 
     // Calculate how many rows this page will actually contribute
-    let page_rows = if is_nullable {
-        // For nullable columns, page contributes num_values rows (including NULLs)
-        num_values.min(remaining)
-    } else {
-        // For non-nullable columns, we need to handle different encodings differently
-        match data_page.encoding() {
-            parquet2::encoding::Encoding::Plain => {
-                if *expected_physical_type == PhysicalType::Boolean {
-                    // Boolean values are bit-packed, so we use num_values from page header
-                    num_values.min(remaining)
-                } else {
-                    let type_size = std::mem::size_of::<T>();
-                    let num_values_in_buffer = values_buffer.len() / type_size;
-                    num_values_in_buffer.min(remaining)
-                }
-            }
-            parquet2::encoding::Encoding::RleDictionary => {
-                // For RLE dictionary, we use num_values from the page header
-                num_values.min(remaining)
-            }
-            _ => num_values.min(remaining),
-        }
-    };
+    let page_rows = num_values.min(remaining);
+    // let page_rows = if is_nullable {
+    //    // For nullable columns, page contributes num_values rows (including NULLs)
+    //    num_values.min(remaining)
+    //} else {
+    //    // For non-nullable columns, we need to handle different encodings differently
+    //    match data_page.encoding() {
+    //        parquet2::encoding::Encoding::Plain => {
+    //            if *expected_physical_type == PhysicalType::Boolean {
+    //                // Boolean values are bit-packed, so we use num_values from page header
+    //                num_values.min(remaining)
+    //            } else {
+    //                let type_size = std::mem::size_of::<T>();
+    //                let num_values_in_buffer = values_buffer.len() / type_size;
+    //                num_values_in_buffer.min(remaining)
+    //            }
+    //        }
+    //        parquet2::encoding::Encoding::RleDictionary => {
+    //            // For RLE dictionary, we use num_values from the page header
+    //            num_values.min(remaining)
+    //        }
+    //        _ => num_values.min(remaining),
+    //    }
+    //};
 
     // Process definition levels to create validity bitmap (only for nullable columns)
     let validity_bitmap = if is_nullable {
