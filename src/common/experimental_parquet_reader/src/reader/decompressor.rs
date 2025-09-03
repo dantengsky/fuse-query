@@ -19,7 +19,6 @@ use parquet2::error::Error;
 use parquet2::page::DataPage;
 use parquet2::page::DictPage;
 use parquet2::page::Page;
-use parquet2::FallibleStreamingIterator;
 
 use crate::reader::page_reader::PageReader;
 use crate::reader::pages::BorrowedCompressedPage;
@@ -27,7 +26,6 @@ use crate::reader::pages::BorrowedCompressedPage;
 pub struct Decompressor<'a> {
     page_reader: PageReader<'a>,
     decompression_buffer: Vec<u8>,
-    current_page: Option<Page>,
     was_decompressed: bool,
 }
 
@@ -36,7 +34,6 @@ impl<'a> Decompressor<'a> {
         Self {
             page_reader,
             decompression_buffer,
-            current_page: None,
             was_decompressed: false,
         }
     }
@@ -114,34 +111,5 @@ impl<'a> Decompressor<'a> {
         } else {
             Ok(None)
         }
-    }
-}
-
-impl<'a> FallibleStreamingIterator for Decompressor<'a> {
-    type Item = Page;
-    type Error = Error;
-
-    fn advance(&mut self) -> Result<(), Self::Error> {
-        self.current_page = None;
-        let page_tuple = self.page_reader.next_page()?;
-
-        if let Some(page) = page_tuple {
-            self.was_decompressed = page.compression() != Compression::Uncompressed;
-
-            let decompress_page =
-                Self::decompress_borrowed_page(page, &mut self.decompression_buffer)?;
-
-            self.current_page = Some(decompress_page);
-        }
-
-        Ok(())
-    }
-
-    fn get(&self) -> Option<&Self::Item> {
-        self.current_page.as_ref()
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        (0, None)
     }
 }

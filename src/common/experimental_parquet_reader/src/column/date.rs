@@ -15,9 +15,11 @@
 use databend_common_expression::Column;
 use parquet2::schema::types::PhysicalType;
 
-use crate::column::{DictionarySupport, ParquetColumnType, ParquetPhysicalMapping};
 use crate::column::common::ParquetColumnIterator;
 use crate::column::number::IntegerMetadata;
+use crate::column::DictionarySupport;
+use crate::column::ParquetColumnType;
+use crate::column::ParquetPhysicalMapping;
 
 /// Date type alias for i32 (days since epoch)
 #[derive(Clone, Copy, Debug, PartialEq)]

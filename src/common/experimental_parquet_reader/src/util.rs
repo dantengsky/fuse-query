@@ -60,14 +60,18 @@ pub fn from_table_field_type(field_name: String, field_type: &TableDataType) -> 
         }
         TableDataType::Date => PrimitiveType::from_physical(field_name, PhysicalType::Int32),
         TableDataType::Boolean => PrimitiveType::from_physical(field_name, PhysicalType::Boolean),
-        
+
         // Binary-like types all use ByteArray physical type
         TableDataType::Binary => PrimitiveType::from_physical(field_name, PhysicalType::ByteArray),
         TableDataType::Variant => PrimitiveType::from_physical(field_name, PhysicalType::ByteArray),
         TableDataType::Bitmap => PrimitiveType::from_physical(field_name, PhysicalType::ByteArray),
-        TableDataType::Geometry => PrimitiveType::from_physical(field_name, PhysicalType::ByteArray),
-        TableDataType::Geography => PrimitiveType::from_physical(field_name, PhysicalType::ByteArray),
-        
+        TableDataType::Geometry => {
+            PrimitiveType::from_physical(field_name, PhysicalType::ByteArray)
+        }
+        TableDataType::Geography => {
+            PrimitiveType::from_physical(field_name, PhysicalType::ByteArray)
+        }
+
         TableDataType::Nullable(_) => unreachable!("Nullable should have been unwrapped"),
         t => unimplemented!("Unsupported type: {:?} ", t),
     };

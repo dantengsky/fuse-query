@@ -47,7 +47,8 @@ pub fn batch_dictionary_lookup<T: Copy>(
         if max_idx < 0 || max_idx as usize >= dictionary.len() {
             return Err(ErrorCode::Internal(format!(
                 "Dictionary index out of bounds: {} >= {}",
-                max_idx, dictionary.len()
+                max_idx,
+                dictionary.len()
             )));
         }
     }

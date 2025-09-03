@@ -4022,7 +4022,6 @@ dependencies = [
  "parquet",
  "parquet-format-safe",
  "parquet2",
- "streaming-decompression",
  "zstd 0.12.4",
 ]
 

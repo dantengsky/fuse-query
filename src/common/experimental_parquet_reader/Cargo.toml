@@ -19,7 +19,6 @@ lz4_flex = { workspace = true }
 parquet = { workspace = true, features = ["experimental"] }
 parquet-format-safe = { workspace = true }
 parquet2 = { workspace = true }
-streaming-decompression = { workspace = true }
 zstd = { workspace = true }
 
 [dev-dependencies]

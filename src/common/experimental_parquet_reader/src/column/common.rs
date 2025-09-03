@@ -21,23 +21,20 @@ use databend_common_expression::types::NullableColumn;
 use databend_common_expression::Column;
 use decompressor::Decompressor;
 use parquet2::schema::types::PhysicalType;
-use streaming_decompression::FallibleStreamingIterator;
 
-// Import encoding functions from separate module
 use super::encoding::process_plain_encoding;
-// Import core traits from separate module
-use super::traits::{DictionarySupport, ParquetColumnType, ParquetPhysicalMapping};
-// Import utility functions from separate module
-use super::utils::{decode_definition_levels, extract_page_data, get_bit_width};
+use super::traits::DictionarySupport;
+use super::traits::ParquetColumnType;
+use super::traits::ParquetPhysicalMapping;
+use super::utils::decode_definition_levels;
+use super::utils::extract_page_data;
+use super::utils::get_bit_width;
 use super::validation::combine_validity_bitmaps;
-// Import validation functions from separate module
 #[cfg(debug_assertions)]
 use super::validation::validate_column_nullability;
 use super::validation::validate_physical_type;
-// Import dictionary processing functions from separate module
-use crate::column::encoding::dictionary::{
-    process_dictionary_page, process_rle_dictionary_encoding,
-};
+use crate::column::encoding::dictionary::process_dictionary_page;
+use crate::column::encoding::dictionary::process_rle_dictionary_encoding;
 use crate::reader::decompressor;
 
 /// Process a complete data page for any type T
@@ -202,7 +199,7 @@ impl<'a, T: ParquetColumnType + DictionarySupport + ParquetPhysicalMapping> Iter
 
         while column_data.len() < target_rows {
             // Get the next page
-            let page = match self.pages.next() {
+            let page = match self.pages.next_owned() {
                 Ok(Some(page)) => page,
                 Ok(None) => break,
                 Err(e) => {
@@ -213,7 +210,8 @@ impl<'a, T: ParquetColumnType + DictionarySupport + ParquetPhysicalMapping> Iter
                 }
             };
 
-            match page {
+            // TODO take advantage of ownership?
+            match &page {
                 parquet2::page::Page::Data(data_page) => {
                     let data_len_before = column_data.len();
                     match process_data_page(

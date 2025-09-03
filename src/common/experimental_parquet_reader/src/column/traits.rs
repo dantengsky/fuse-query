@@ -15,11 +15,10 @@
 //! Core traits for Parquet column processing
 
 use databend_common_exception::Result;
-use parquet2::schema::types::PhysicalType;
-
 // Float wrapper types (import these since they're commonly available)
 use databend_common_expression::types::F32;
 use databend_common_expression::types::F64;
+use parquet2::schema::types::PhysicalType;
 
 /// Compile-time mapping between Rust types and their Parquet physical storage
 /// This trait provides zero-overhead type information for performance-critical operations
