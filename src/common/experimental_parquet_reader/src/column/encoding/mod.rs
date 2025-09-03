@@ -14,6 +14,7 @@
 
 //! Parquet encoding implementations
 
+pub mod dictionary;
 pub mod plain;
 
 pub use plain::process_plain_encoding;

@@ -19,9 +19,9 @@ use databend_common_exception::Result;
 use parquet::encodings::rle::RleDecoder;
 use parquet2::schema::types::PhysicalType;
 
-use super::traits::DictionarySupport;
-use super::traits::ParquetPhysicalMapping;
-use super::utils::batch_dictionary_lookup;
+use crate::column::utils::batch_dictionary_lookup;
+use crate::column::DictionarySupport;
+use crate::column::ParquetPhysicalMapping;
 
 /// Process dictionary page for numeric types with OLAP-optimized performance
 pub fn process_dictionary_page<T: DictionarySupport + Copy + ParquetPhysicalMapping>(

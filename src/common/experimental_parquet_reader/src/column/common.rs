@@ -23,8 +23,6 @@ use decompressor::Decompressor;
 use parquet2::schema::types::PhysicalType;
 use streaming_decompression::FallibleStreamingIterator;
 
-// Import dictionary processing functions from separate module
-use super::dictionary::{process_dictionary_page, process_rle_dictionary_encoding};
 // Import encoding functions from separate module
 use super::encoding::process_plain_encoding;
 // Import core traits from separate module
@@ -36,6 +34,10 @@ use super::validation::combine_validity_bitmaps;
 #[cfg(debug_assertions)]
 use super::validation::validate_column_nullability;
 use super::validation::validate_physical_type;
+// Import dictionary processing functions from separate module
+use crate::column::encoding::dictionary::{
+    process_dictionary_page, process_rle_dictionary_encoding,
+};
 use crate::reader::decompressor;
 
 /// Process a complete data page for any type T

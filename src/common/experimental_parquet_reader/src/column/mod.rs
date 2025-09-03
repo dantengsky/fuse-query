@@ -17,14 +17,12 @@ mod boolean;
 mod common;
 mod date;
 mod decimal;
-mod dictionary;
 mod encoding;
 mod number;
 mod string;
 mod traits;
 mod utils;
 mod validation;
-
 
 pub use binary::BinaryIter;
 pub use boolean::*;
@@ -34,5 +32,3 @@ pub use number::IntegerMetadata;
 pub use number::*;
 pub use string::*;
 pub use traits::*;
-
-
