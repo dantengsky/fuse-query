@@ -33,6 +33,7 @@ use databend_storages_common_table_meta::meta::ColumnMeta;
 use databend_storages_common_table_meta::meta::Compression;
 use parquet2::metadata::Descriptor;
 use v2_reader::calculate_parquet_max_levels;
+use v2_reader::create_nested_column_iter;
 use v2_reader::data_chunk_to_col_iter;
 use v2_reader::from_table_field_type;
 
@@ -158,7 +159,55 @@ impl BlockReader {
         let is_nested = column_node.is_nested;
 
         if is_nested {
-            unimplemented!("Nested type is not supported now");
+            // Use schema-driven approach for nested types
+            // This supports Arrays and provides clear error messages for Tuples
+            
+            // For nested types, we use the first leaf column data
+            // TODO: For complex nested types (Tuple), we'll need to handle multiple leaf columns
+            let leaf_column_id = column_node.leaf_column_ids[0];
+            
+            let Some(column_meta) = deserialization_context.column_metas.get(&leaf_column_id) else {
+                return Ok(None);
+            };
+            let Some(chunk) = column_chunks.get(&leaf_column_id) else {
+                return Ok(None);
+            };
+            
+            match chunk {
+                DataItem::RawData(data) => {
+                    let field_uncompressed_size = data.len();
+                    let num_rows = deserialization_context.num_rows;
+                    let field_name = column_node.field.name().to_owned();
+                    
+                    // Use schema-driven nested column iterator
+                    let mut column_iter = create_nested_column_iter(
+                        column_node,
+                        column_meta,
+                        data,
+                        num_rows,
+                        compression,
+                    )?;
+                    
+                    let column = column_iter.next().transpose()?.ok_or_else(|| {
+                        ErrorCode::StorageOther(format!("no column found for nested field {field_name}"))
+                    })?;
+                    
+                    // Since we deserialize all the rows of this column, the iterator should be drained
+                    assert!(column_iter.next().is_none());
+                    
+                    // Deserialized from raw bytes, and intended to be cached
+                    return Ok(Some(DeserializedColumn::Column((
+                        column,
+                        field_uncompressed_size,
+                    ))));
+                }
+                DataItem::CachedColumn(cached_array) => {
+                    // Use cached column directly
+                    return Ok(Some(DeserializedColumn::CachedColumn(
+                        cached_array.clone(),
+                    )));
+                }
+            }
         }
 
         let column_chunks = deserialization_context.column_chunks;

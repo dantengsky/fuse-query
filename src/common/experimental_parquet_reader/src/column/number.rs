@@ -24,7 +24,7 @@ use crate::column::DictionarySupport;
 use crate::column::ParquetColumnType;
 use crate::reader::decompressor::Decompressor;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub struct IntegerMetadata;
 
 // ===== Signed Integer Types =====

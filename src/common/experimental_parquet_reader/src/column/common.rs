@@ -23,6 +23,9 @@ use decompressor::Decompressor;
 use parquet2::schema::types::PhysicalType;
 
 use super::encoding::process_plain_encoding;
+use super::level_decoder::LevelDecoder;
+use super::levels::LevelInfo;
+use super::traits::ColumnIteratorWithLevels;
 use super::traits::DictionarySupport;
 use super::traits::ParquetColumnType;
 use super::traits::ParquetPhysicalMapping;
@@ -161,6 +164,9 @@ pub struct ParquetColumnIterator<
     is_nullable: bool,
     metadata: T::Metadata,
     dictionary: Option<Vec<T>>, // Cached dictionary values
+    // Level processing support (optional for nested types)
+    level_decoder: Option<LevelDecoder>,
+    current_levels: Option<LevelInfo>,
     _phantom: std::marker::PhantomData<T>,
 }
 
@@ -181,6 +187,37 @@ impl<'a, T: ParquetColumnType + DictionarySupport + ParquetPhysicalMapping>
             is_nullable,
             metadata,
             dictionary: None,
+            level_decoder: None,
+            current_levels: None,
+            _phantom: std::marker::PhantomData,
+        }
+    }
+
+    /// Create a new iterator with level support for nested types
+    pub fn new_with_levels(
+        pages: Decompressor<'a>,
+        num_rows: usize,
+        is_nullable: bool,
+        metadata: T::Metadata,
+        chunk_size: Option<usize>,
+        max_def_level: u16,
+        max_rep_level: u16,
+    ) -> Self {
+        let level_decoder = if max_def_level > 0 || max_rep_level > 0 {
+            Some(LevelDecoder::new(max_def_level, max_rep_level))
+        } else {
+            None
+        };
+
+        Self {
+            pages,
+            chunk_size,
+            num_rows,
+            is_nullable,
+            metadata,
+            dictionary: None,
+            level_decoder,
+            current_levels: None,
             _phantom: std::marker::PhantomData,
         }
     }
@@ -196,6 +233,10 @@ impl<'a, T: ParquetColumnType + DictionarySupport + ParquetPhysicalMapping> Iter
         let target_rows = self.chunk_size.unwrap_or(self.num_rows);
         let mut column_data: Vec<T> = Vec::with_capacity(target_rows);
         let mut validity_bitmaps = Vec::new();
+        
+        // Reset current levels for this batch
+        self.current_levels = None;
+        let mut batch_levels: Option<LevelInfo> = None;
 
         while column_data.len() < target_rows {
             // Get the next page
@@ -214,6 +255,25 @@ impl<'a, T: ParquetColumnType + DictionarySupport + ParquetPhysicalMapping> Iter
             match &page {
                 parquet2::page::Page::Data(data_page) => {
                     let data_len_before = column_data.len();
+                    
+                    // Process levels if level decoder is present
+                    if let Some(ref mut level_decoder) = self.level_decoder {
+                        match level_decoder.decode_levels(data_page) {
+                            Ok(level_info) => {
+                                // Accumulate levels for this batch
+                                if let Some(ref mut existing_levels) = batch_levels {
+                                    // Extend existing levels
+                                    existing_levels.def_levels.extend_from_slice(&level_info.def_levels);
+                                    existing_levels.rep_levels.extend_from_slice(&level_info.rep_levels);
+                                } else {
+                                    // First level info for this batch
+                                    batch_levels = Some(level_info);
+                                }
+                            }
+                            Err(e) => return Some(Err(e)),
+                        }
+                    }
+                    
                     match process_data_page(
                         data_page,
                         &mut column_data,
@@ -283,6 +343,9 @@ impl<'a, T: ParquetColumnType + DictionarySupport + ParquetPhysicalMapping> Iter
             return None;
         }
 
+        // Store the accumulated levels for this batch
+        self.current_levels = batch_levels;
+
         // Return the appropriate Column variant based on nullability
         if self.is_nullable {
             // For nullable columns, create NullableColumn
@@ -301,6 +364,29 @@ impl<'a, T: ParquetColumnType + DictionarySupport + ParquetPhysicalMapping> Iter
             // For non-nullable columns, return the column directly
             Some(Ok(T::create_column(column_data, &self.metadata)))
         }
+    }
+}
+
+// Implement ColumnIteratorWithLevels trait for ParquetColumnIterator
+impl<'a, T: ParquetColumnType + DictionarySupport + ParquetPhysicalMapping> ColumnIteratorWithLevels 
+    for ParquetColumnIterator<'a, T>
+{
+    fn current_levels(&self) -> Option<&LevelInfo> {
+        self.current_levels.as_ref()
+    }
+
+    fn max_def_level(&self) -> u16 {
+        self.level_decoder
+            .as_ref()
+            .map(|decoder| decoder.max_def_level())
+            .unwrap_or(0)
+    }
+
+    fn max_rep_level(&self) -> u16 {
+        self.level_decoder
+            .as_ref()
+            .map(|decoder| decoder.max_rep_level())
+            .unwrap_or(0)
     }
 }
 

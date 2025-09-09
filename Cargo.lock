@@ -4017,6 +4017,7 @@ dependencies = [
  "databend-common-column",
  "databend-common-exception",
  "databend-common-expression",
+ "databend-common-storage",
  "databend-storages-common-table-meta",
  "lz4_flex",
  "parquet",

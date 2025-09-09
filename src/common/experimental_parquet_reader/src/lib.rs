@@ -14,6 +14,8 @@
 
 //! Direct deserialization from parquet to DataBlock
 
+// Declare macros first so they can be used in other modules
+#[macro_use]
 mod column;
 mod util;
 

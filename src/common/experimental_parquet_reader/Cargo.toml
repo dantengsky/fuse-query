@@ -12,6 +12,7 @@ edition = { workspace = true }
 databend-common-column = { workspace = true }
 databend-common-exception = { workspace = true }
 databend-common-expression = { workspace = true }
+databend-common-storage = { workspace = true }
 databend-storages-common-table-meta = { workspace = true }
 
 bytes = { workspace = true }

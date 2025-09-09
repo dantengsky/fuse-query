@@ -14,11 +14,15 @@
 
 //! Core traits for Parquet column processing
 
+use databend_common_exception::ErrorCode;
 use databend_common_exception::Result;
 // Float wrapper types (import these since they're commonly available)
 use databend_common_expression::types::F32;
 use databend_common_expression::types::F64;
+use databend_common_expression::Column;
 use parquet2::schema::types::PhysicalType;
+
+use crate::column::levels::LevelInfo;
 
 /// Compile-time mapping between Rust types and their Parquet physical storage
 /// This trait provides zero-overhead type information for performance-critical operations
@@ -109,4 +113,129 @@ pub trait DictionarySupport: ParquetColumnType {
     /// # Returns
     /// Decoded value of type Self
     fn from_dictionary_entry(entry: &[u8]) -> Result<Self>;
+}
+
+/// Extended trait for column iterators that can provide level information
+/// This trait enables nested type support by exposing definition and repetition levels
+pub trait ColumnIteratorWithLevels: Iterator<Item = Result<Column>> {
+    /// Get the current level information
+    /// 
+    /// Returns the definition and repetition levels for the current batch of values.
+    /// This is required for nested type processing.
+    fn current_levels(&self) -> Option<&LevelInfo>;
+
+    /// Check if this iterator provides level information
+    fn has_levels(&self) -> bool {
+        self.current_levels().is_some()
+    }
+    
+    /// Get maximum definition level for this column
+    fn max_def_level(&self) -> u16;
+    
+    /// Get maximum repetition level for this column
+    fn max_rep_level(&self) -> u16;
+    
+    /// Check if this column requires definition levels (has nullable components)
+    fn requires_def_levels(&self) -> bool {
+        self.max_def_level() > 0
+    }
+    
+    /// Check if this column requires repetition levels (has repeated components)
+    fn requires_rep_levels(&self) -> bool {
+        self.max_rep_level() > 0
+    }
+}
+
+/// Wrapper to add level information to any column iterator
+/// This allows existing iterators to be upgraded to support levels without breaking changes
+pub struct ColumnIteratorLevels<I> {
+    /// The underlying column iterator
+    inner: I,
+    /// Current level information
+    current_levels: Option<LevelInfo>,
+    /// Maximum definition level
+    max_def_level: u16,
+    /// Maximum repetition level
+    max_rep_level: u16,
+}
+
+impl<I> ColumnIteratorLevels<I> {
+    /// Create a new leveled iterator wrapper
+    pub fn new(inner: I, max_def_level: u16, max_rep_level: u16) -> Self {
+        Self {
+            inner,
+            current_levels: None,
+            max_def_level,
+            max_rep_level,
+        }
+    }
+
+    /// Update the current level information
+    pub fn set_current_levels(&mut self, levels: LevelInfo) {
+        self.current_levels = Some(levels);
+    }
+
+    /// Clear current level information
+    pub fn clear_levels(&mut self) {
+        self.current_levels = None;
+    }
+
+    /// Get a reference to the inner iterator
+    pub fn inner(&self) -> &I {
+        &self.inner
+    }
+
+    /// Get a mutable reference to the inner iterator
+    pub fn inner_mut(&mut self) -> &mut I {
+        &mut self.inner
+    }
+
+    /// Consume this wrapper and return the inner iterator
+    pub fn into_inner(self) -> I {
+        self.inner
+    }
+}
+
+impl<I> Iterator for ColumnIteratorLevels<I>
+where
+    I: Iterator<Item = Result<Column>>,
+{
+    type Item = Result<Column>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next()
+    }
+}
+
+impl<I> ColumnIteratorWithLevels for ColumnIteratorLevels<I>
+where
+    I: Iterator<Item = Result<Column>>,
+{
+    fn current_levels(&self) -> Option<&LevelInfo> {
+        self.current_levels.as_ref()
+    }
+
+    fn max_def_level(&self) -> u16 {
+        self.max_def_level
+    }
+
+    fn max_rep_level(&self) -> u16 {
+        self.max_rep_level
+    }
+}
+
+/// Extension trait to convert any column iterator to support levels
+/// This provides a convenient way to upgrade existing iterators
+pub trait ColumnIteratorExt: Iterator<Item = Result<Column>> + Sized {
+    /// Add level support to this iterator
+    fn with_levels(self, max_def_level: u16, max_rep_level: u16) -> ColumnIteratorLevels<Self> {
+        ColumnIteratorLevels::new(self, max_def_level, max_rep_level)
+    }
+}
+
+// Blanket implementation for all compatible iterators
+impl<I> ColumnIteratorExt for I
+where
+    I: Iterator<Item = Result<Column>>,
+{
 }

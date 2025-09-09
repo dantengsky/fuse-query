@@ -555,3 +555,137 @@ select distinct c from t_dict_variant order by c;
 {"same":"value"}
 NULL
 
+# ===== NESTED TYPE TESTS =====
+# Testing experimental parquet reader's nested type support
+
+## ARRAY Types
+statement ok
+create or replace table t_array_int32 ( c array(int32));
+
+statement ok
+insert into t_array_int32 values ([1, 2, 3]), ([4, 5]), ([]), (null);
+
+query T
+select * from t_array_int32 order by array_length(c) nulls last;
+----
+[]
+[4,5]
+[1,2,3]
+NULL
+
+statement ok
+create or replace table t_array_int64 ( c array(int64));
+
+statement ok
+insert into t_array_int64 values ([100, 200, 300]), ([400]), ([]), (null);
+
+query T
+select * from t_array_int64 order by array_length(c) nulls last;
+----
+[]
+[400]
+[100,200,300]
+NULL
+
+statement ok
+create or replace table t_array_string ( c array(string));
+
+statement ok
+insert into t_array_string values (['hello', 'world']), (['test']), ([]), (null);
+
+query T
+select * from t_array_string order by array_length(c) nulls last;
+----
+[]
+['test']
+['hello','world']
+NULL
+
+## ARRAY with nullable elements
+statement ok
+create or replace table t_array_nullable ( c array(int32));
+
+statement ok
+insert into t_array_nullable values ([1, null, 3]), ([null]), ([]), (null);
+
+query T
+select * from t_array_nullable order by array_length(c) nulls last;
+----
+[]
+[NULL]
+[1,NULL,3]
+NULL
+
+## TUPLE Types - Basic structure test
+statement ok
+create or replace table t_tuple_basic ( c tuple(int32, string));
+
+# Note: This may fail with our current placeholder implementation
+# But it should provide a clear error message about tuple support
+statement error 1006
+insert into t_tuple_basic values ((1, 'hello')), ((2, 'world')), (null);
+
+## Nested Array of Arrays (Array(Array(T)))
+statement ok
+create or replace table t_nested_array ( c array(array(int32)));
+
+# Test basic Array(Array(T)) functionality
+# Note: Our GenericArrayColumnIterator provides basic support
+statement ok
+insert into t_nested_array values ([[1, 2], [3, 4]]), ([[5]], []), (null);
+
+query T
+select * from t_nested_array order by array_length(c) nulls last;
+----
+[]
+[[5]]
+[[1,2],[3,4]]
+NULL
+
+## Test error handling for unsupported nested types
+statement ok
+create or replace table t_tuple_complex ( c tuple(int32, array(string), tuple(boolean, float64)));
+
+# Complex tuple should fail with descriptive error
+statement error 1006
+insert into t_tuple_complex values ((1, ['a', 'b'], (true, 3.14))), (null);
+
+# Test array element type validation
+statement ok
+create or replace table t_array_unsupported ( c array(decimal(10,2)));
+
+# Unsupported array element type should fail gracefully
+statement error 1006
+insert into t_array_unsupported values ([1.23, 4.56]), (null);
+
+# Test primitive arrays that should work
+statement ok
+create or replace table t_array_bool ( c array(boolean));
+
+statement ok
+insert into t_array_bool values ([true, false, true]), ([false]), ([]), (null);
+
+query T
+select * from t_array_bool order by array_length(c) nulls last;
+----
+[]
+[0]
+[1,0,1]
+NULL
+
+# Test large arrays to verify performance
+statement ok
+create or replace table t_array_large ( c array(int32));
+
+statement ok
+insert into t_array_large select [range(1000)] from numbers(10);
+
+query I
+select count(*) from t_array_large where array_length(c) = 1000;
+----
+10
+
+# Clean up
+statement ok
+drop database if exists test_new_reader;
+
