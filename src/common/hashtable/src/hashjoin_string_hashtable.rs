@@ -97,19 +97,45 @@ impl<A: Allocator + Clone + Default> HashJoinStringHashTable<A> {
         unsafe { (*entry_ptr).next = remove_header_tag(old_header) };
     }
 
-    pub fn drain_entries<F>(&mut self, mut f: F)
-    where F: FnMut(*mut StringRawEntry) {
-        for header in self.pointers.iter_mut() {
-            let mut ptr = remove_header_tag(*header);
-            while ptr != 0 {
+    pub fn merge_from(&mut self, other: &mut Self) {
+        for (idx, src_header) in other.pointers.iter_mut().enumerate() {
+            let src_header_val = *src_header;
+            if src_header_val == 0 {
+                continue;
+            }
+            let src_ptr = remove_header_tag(src_header_val);
+            let mut tail = src_ptr;
+            while tail != 0 {
                 unsafe {
-                    let entry = ptr as *mut StringRawEntry;
+                    let entry = tail as *mut StringRawEntry;
                     let next = (*entry).next;
-                    f(entry);
-                    ptr = next;
+                    if next == 0 {
+                        break;
+                    }
+                    tail = next;
                 }
             }
-            *header = 0;
+
+            let dest_header = self.pointers[idx];
+            let dest_ptr = remove_header_tag(dest_header);
+            if dest_ptr != 0 {
+                unsafe {
+                    let tail_entry = tail as *mut StringRawEntry;
+                    (*tail_entry).next = dest_ptr;
+                }
+            }
+
+            let new_header = if dest_header == 0 {
+                src_header_val
+            } else {
+                combine_header(src_header_val, dest_header)
+            };
+
+            self.pointers[idx] = new_header;
+            unsafe { (*self.atomic_pointers.add(idx)).store(new_header, Ordering::Relaxed) };
+
+            *src_header = 0;
+            unsafe { (*other.atomic_pointers.add(idx)).store(0, Ordering::Relaxed) };
         }
     }
 }

@@ -228,17 +228,11 @@ impl HashJoinBuildState {
         dest: &mut HashJoinHashMap<K>,
         src: &mut HashJoinHashMap<K>,
     ) {
-        src.drain_entries(|entry| unsafe {
-            let key = (*entry).key;
-            dest.insert_single_writer(key, entry);
-        });
+        dest.merge_from(src);
     }
 
     fn merge_binary_map(dest: &mut BinaryHashJoinHashMap, src: &mut BinaryHashJoinHashMap) {
-        src.drain_entries(|entry| unsafe {
-            let key = std::slice::from_raw_parts((*entry).key, (*entry).length as usize);
-            dest.insert_single_writer(key, entry);
-        });
+        dest.merge_from(src);
     }
 
     pub(crate) fn add_build_block(&self, data_block: DataBlock) -> Result<()> {
