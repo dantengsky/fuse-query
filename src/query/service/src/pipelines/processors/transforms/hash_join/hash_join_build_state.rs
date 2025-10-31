@@ -44,6 +44,7 @@ use databend_common_expression::RemoteExpr;
 use databend_common_functions::BUILTIN_FUNCTIONS;
 use databend_common_hashtable::BinaryHashJoinHashMap;
 use databend_common_hashtable::HashJoinHashMap;
+use databend_common_hashtable::HashtableKeyable;
 use databend_common_hashtable::RawEntry;
 use databend_common_hashtable::RowPtr;
 use databend_common_hashtable::StringRawEntry;
@@ -163,6 +164,83 @@ impl HashJoinBuildState {
         Ok(())
     }
 
+    fn merge_worker_hash_tables(&self) -> Result<()> {
+        let worker_tables_cell = unsafe { &mut *self.hash_join_state.worker_hash_tables.get() };
+        if worker_tables_cell.is_empty() {
+            return Ok(());
+        }
+
+        let mut tables = std::mem::take(worker_tables_cell);
+        let mut final_table = match tables.pop() {
+            Some(table) => table,
+            None => return Ok(()),
+        };
+
+        for mut table in tables {
+            Self::merge_two_hash_tables(&mut final_table, &mut table)?;
+        }
+
+        unsafe {
+            *self.hash_join_state.hash_table.get() = final_table;
+        }
+        Ok(())
+    }
+
+    fn merge_two_hash_tables(
+        dest: &mut HashJoinHashTable,
+        src: &mut HashJoinHashTable,
+    ) -> Result<()> {
+        match (dest, src) {
+            (HashJoinHashTable::Serializer(dest), HashJoinHashTable::Serializer(src)) => {
+                Self::merge_binary_map(&mut dest.hash_table, &mut src.hash_table);
+            }
+            (HashJoinHashTable::SingleBinary(dest), HashJoinHashTable::SingleBinary(src)) => {
+                Self::merge_binary_map(&mut dest.hash_table, &mut src.hash_table);
+            }
+            (HashJoinHashTable::KeysU8(dest), HashJoinHashTable::KeysU8(src)) => {
+                Self::merge_numeric_map(&mut dest.hash_table, &mut src.hash_table);
+            }
+            (HashJoinHashTable::KeysU16(dest), HashJoinHashTable::KeysU16(src)) => {
+                Self::merge_numeric_map(&mut dest.hash_table, &mut src.hash_table);
+            }
+            (HashJoinHashTable::KeysU32(dest), HashJoinHashTable::KeysU32(src)) => {
+                Self::merge_numeric_map(&mut dest.hash_table, &mut src.hash_table);
+            }
+            (HashJoinHashTable::KeysU64(dest), HashJoinHashTable::KeysU64(src)) => {
+                Self::merge_numeric_map(&mut dest.hash_table, &mut src.hash_table);
+            }
+            (HashJoinHashTable::KeysU128(dest), HashJoinHashTable::KeysU128(src)) => {
+                Self::merge_numeric_map(&mut dest.hash_table, &mut src.hash_table);
+            }
+            (HashJoinHashTable::KeysU256(dest), HashJoinHashTable::KeysU256(src)) => {
+                Self::merge_numeric_map(&mut dest.hash_table, &mut src.hash_table);
+            }
+            _ => {
+                return Err(ErrorCode::Internal(
+                    "hash join worker tables have mismatched hash method".to_string(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn merge_numeric_map<K: HashtableKeyable>(
+        dest: &mut HashJoinHashMap<K>,
+        src: &mut HashJoinHashMap<K>,
+    ) {
+        src.drain_entries(|entry| unsafe {
+            let key = (*entry).key;
+            dest.insert_single_writer(key, entry);
+        });
+    }
+
+    fn merge_binary_map(dest: &mut BinaryHashJoinHashMap, src: &mut BinaryHashJoinHashMap) {
+        src.drain_entries(|entry| unsafe {
+            let key = std::slice::from_raw_parts((*entry).key, (*entry).length as usize);
+            dest.insert_single_writer(key, entry);
+        });
+    }
+
     pub(crate) fn add_build_block(&self, data_block: DataBlock) -> Result<()> {
         let block_outer_scan_map = if self.hash_join_state.need_outer_scan()
             || matches!(
@@ -205,11 +283,12 @@ impl HashJoinBuildState {
     }
 
     /// Attach to state: `collect_counter` and `finalize_counter`.
-    pub fn build_attach(&self) {
-        self.build_worker_num.fetch_add(1, Ordering::AcqRel);
+    pub fn build_attach(&self) -> usize {
+        let idx = self.build_worker_num.fetch_add(1, Ordering::AcqRel) as usize;
         self.collect_counter.fetch_add(1, Ordering::AcqRel);
         self.finalize_counter.fetch_add(1, Ordering::AcqRel);
         self.next_round_counter.fetch_add(1, Ordering::AcqRel);
+        idx
     }
 
     /// Detach to state: `collect_counter`,
@@ -256,68 +335,99 @@ impl HashJoinBuildState {
             // Divide the finalize phase into multiple tasks.
             self.generate_finalize_task()?;
 
-            // Create a fixed size hash table.
-            let (hash_join_hash_table, entry_size) = match self.method.clone() {
-                HashMethodKind::Serializer(_) => (
-                    HashJoinHashTable::Serializer(SerializerHashJoinHashTable {
-                        hash_table: BinaryHashJoinHashMap::with_build_row_num(build_num_rows),
-                        hash_method: HashMethodSerializer::default(),
-                    }),
-                    std::mem::size_of::<StringRawEntry>(),
-                ),
-                HashMethodKind::SingleBinary(_) => (
-                    HashJoinHashTable::SingleBinary(SingleBinaryHashJoinHashTable {
-                        hash_table: BinaryHashJoinHashMap::with_build_row_num(build_num_rows),
-                        hash_method: HashMethodSingleBinary::default(),
-                    }),
-                    std::mem::size_of::<StringRawEntry>(),
-                ),
-                HashMethodKind::KeysU8(hash_method) => (
-                    HashJoinHashTable::KeysU8(FixedKeyHashJoinHashTable {
-                        hash_table: HashJoinHashMap::<u8>::with_build_row_num(build_num_rows),
-                        hash_method,
-                    }),
-                    std::mem::size_of::<RawEntry<u8>>(),
-                ),
-                HashMethodKind::KeysU16(hash_method) => (
-                    HashJoinHashTable::KeysU16(FixedKeyHashJoinHashTable {
-                        hash_table: HashJoinHashMap::<u16>::with_build_row_num(build_num_rows),
-                        hash_method,
-                    }),
-                    std::mem::size_of::<RawEntry<u16>>(),
-                ),
-                HashMethodKind::KeysU32(hash_method) => (
-                    HashJoinHashTable::KeysU32(FixedKeyHashJoinHashTable {
-                        hash_table: HashJoinHashMap::<u32>::with_build_row_num(build_num_rows),
-                        hash_method,
-                    }),
-                    std::mem::size_of::<RawEntry<u32>>(),
-                ),
-                HashMethodKind::KeysU64(hash_method) => (
-                    HashJoinHashTable::KeysU64(FixedKeyHashJoinHashTable {
-                        hash_table: HashJoinHashMap::<u64>::with_build_row_num(build_num_rows),
-                        hash_method,
-                    }),
-                    std::mem::size_of::<RawEntry<u64>>(),
-                ),
-                HashMethodKind::KeysU128(hash_method) => (
-                    HashJoinHashTable::KeysU128(FixedKeyHashJoinHashTable {
-                        hash_table: HashJoinHashMap::<u128>::with_build_row_num(build_num_rows),
-                        hash_method,
-                    }),
-                    std::mem::size_of::<RawEntry<u128>>(),
-                ),
-                HashMethodKind::KeysU256(hash_method) => (
-                    HashJoinHashTable::KeysU256(FixedKeyHashJoinHashTable {
-                        hash_table: HashJoinHashMap::<U256>::with_build_row_num(build_num_rows),
-                        hash_method,
-                    }),
-                    std::mem::size_of::<RawEntry<U256>>(),
-                ),
+            // Create fixed size hash tables for each build worker.
+            let worker_num =
+                std::cmp::max(1, self.build_worker_num.load(Ordering::Acquire) as usize);
+            let (worker_tables, entry_size) = match self.method.clone() {
+                HashMethodKind::Serializer(_) => {
+                    let mut tables = Vec::with_capacity(worker_num);
+                    for _ in 0..worker_num {
+                        tables.push(HashJoinHashTable::Serializer(SerializerHashJoinHashTable {
+                            hash_table: BinaryHashJoinHashMap::with_build_row_num(build_num_rows),
+                            hash_method: HashMethodSerializer::default(),
+                        }));
+                    }
+                    (tables, std::mem::size_of::<StringRawEntry>())
+                }
+                HashMethodKind::SingleBinary(_) => {
+                    let mut tables = Vec::with_capacity(worker_num);
+                    for _ in 0..worker_num {
+                        tables.push(HashJoinHashTable::SingleBinary(
+                            SingleBinaryHashJoinHashTable {
+                                hash_table: BinaryHashJoinHashMap::with_build_row_num(
+                                    build_num_rows,
+                                ),
+                                hash_method: HashMethodSingleBinary::default(),
+                            },
+                        ));
+                    }
+                    (tables, std::mem::size_of::<StringRawEntry>())
+                }
+                HashMethodKind::KeysU8(hash_method) => {
+                    let mut tables = Vec::with_capacity(worker_num);
+                    for _ in 0..worker_num {
+                        tables.push(HashJoinHashTable::KeysU8(FixedKeyHashJoinHashTable {
+                            hash_table: HashJoinHashMap::<u8>::with_build_row_num(build_num_rows),
+                            hash_method: hash_method.clone(),
+                        }));
+                    }
+                    (tables, std::mem::size_of::<RawEntry<u8>>())
+                }
+                HashMethodKind::KeysU16(hash_method) => {
+                    let mut tables = Vec::with_capacity(worker_num);
+                    for _ in 0..worker_num {
+                        tables.push(HashJoinHashTable::KeysU16(FixedKeyHashJoinHashTable {
+                            hash_table: HashJoinHashMap::<u16>::with_build_row_num(build_num_rows),
+                            hash_method: hash_method.clone(),
+                        }));
+                    }
+                    (tables, std::mem::size_of::<RawEntry<u16>>())
+                }
+                HashMethodKind::KeysU32(hash_method) => {
+                    let mut tables = Vec::with_capacity(worker_num);
+                    for _ in 0..worker_num {
+                        tables.push(HashJoinHashTable::KeysU32(FixedKeyHashJoinHashTable {
+                            hash_table: HashJoinHashMap::<u32>::with_build_row_num(build_num_rows),
+                            hash_method: hash_method.clone(),
+                        }));
+                    }
+                    (tables, std::mem::size_of::<RawEntry<u32>>())
+                }
+                HashMethodKind::KeysU64(hash_method) => {
+                    let mut tables = Vec::with_capacity(worker_num);
+                    for _ in 0..worker_num {
+                        tables.push(HashJoinHashTable::KeysU64(FixedKeyHashJoinHashTable {
+                            hash_table: HashJoinHashMap::<u64>::with_build_row_num(build_num_rows),
+                            hash_method: hash_method.clone(),
+                        }));
+                    }
+                    (tables, std::mem::size_of::<RawEntry<u64>>())
+                }
+                HashMethodKind::KeysU128(hash_method) => {
+                    let mut tables = Vec::with_capacity(worker_num);
+                    for _ in 0..worker_num {
+                        tables.push(HashJoinHashTable::KeysU128(FixedKeyHashJoinHashTable {
+                            hash_table: HashJoinHashMap::<u128>::with_build_row_num(build_num_rows),
+                            hash_method: hash_method.clone(),
+                        }));
+                    }
+                    (tables, std::mem::size_of::<RawEntry<u128>>())
+                }
+                HashMethodKind::KeysU256(hash_method) => {
+                    let mut tables = Vec::with_capacity(worker_num);
+                    for _ in 0..worker_num {
+                        tables.push(HashJoinHashTable::KeysU256(FixedKeyHashJoinHashTable {
+                            hash_table: HashJoinHashMap::<U256>::with_build_row_num(build_num_rows),
+                            hash_method: hash_method.clone(),
+                        }));
+                    }
+                    (tables, std::mem::size_of::<RawEntry<U256>>())
+                }
             };
             self.entry_size.store(entry_size, Ordering::Release);
-            let hash_table = unsafe { &mut *self.hash_join_state.hash_table.get() };
-            *hash_table = hash_join_hash_table;
+            let worker_tables_cell = unsafe { &mut *self.hash_join_state.worker_hash_tables.get() };
+            *worker_tables_cell = worker_tables;
+            unsafe { *self.hash_join_state.hash_table.get() = HashJoinHashTable::Null };
             self.merge_into_try_generate_matched_memory();
         }
         Ok(())
@@ -338,11 +448,20 @@ impl HashJoinBuildState {
     }
 
     /// Get the finalize task and using the `chunks` in `hash_join_state.row_space` to build hash table in parallel.
-    pub(crate) fn finalize(&self, task: usize) -> Result<()> {
+    pub(crate) fn finalize(&self, worker_index: usize, task: usize) -> Result<()> {
         let entry_size = self.entry_size.load(Ordering::Acquire);
         let mut local_raw_entry_spaces: Vec<Vec<u8>> = Vec::new();
-        let hashtable = unsafe { &mut *self.hash_join_state.hash_table.get() };
+        let hashtable = {
+            let worker_tables = unsafe { &mut *self.hash_join_state.worker_hash_tables.get() };
+            if worker_tables.is_empty() {
+                unsafe { &mut *self.hash_join_state.hash_table.get() }
+            } else {
+                let index = std::cmp::min(worker_index, worker_tables.len() - 1);
+                &mut worker_tables[index]
+            }
+        };
         let build_state = unsafe { &mut *self.hash_join_state.build_state.get() };
+        let single_writer = self.build_worker_num.load(Ordering::Acquire) == 1;
 
         macro_rules! insert_key {
             ($table: expr, $method: expr, $chunk: expr, $build_keys: expr, $valids: expr, $chunk_index: expr, $entry_size: expr, $local_raw_entry_spaces: expr, $t: ty,) => {{
@@ -380,7 +499,11 @@ impl HashJoinBuildState {
                                     next: 0,
                                 }
                             }
-                            $table.insert(*key, raw_entry_ptr);
+                            if single_writer {
+                                $table.insert_single_writer(*key, raw_entry_ptr);
+                            } else {
+                                $table.insert(*key, raw_entry_ptr);
+                            }
                             raw_entry_ptr = unsafe { raw_entry_ptr.add(1) };
                         }
                     }
@@ -400,7 +523,11 @@ impl HashJoinBuildState {
                                     next: 0,
                                 }
                             }
-                            $table.insert(*key, raw_entry_ptr);
+                            if single_writer {
+                                $table.insert_single_writer(*key, raw_entry_ptr);
+                            } else {
+                                $table.insert(*key, raw_entry_ptr);
+                            }
                             raw_entry_ptr = unsafe { raw_entry_ptr.add(1) };
                         }
                     }
@@ -471,7 +598,11 @@ impl HashJoinBuildState {
                                 string_local_space_ptr = string_local_space_ptr.add(key.len());
                             }
 
-                            $table.insert(key, raw_entry_ptr);
+                            if single_writer {
+                                $table.insert_single_writer(key, raw_entry_ptr);
+                            } else {
+                                $table.insert(key, raw_entry_ptr);
+                            }
                             raw_entry_ptr = unsafe { raw_entry_ptr.add(1) };
                         }
                     }
@@ -504,7 +635,11 @@ impl HashJoinBuildState {
                                 string_local_space_ptr = string_local_space_ptr.add(key.len());
                             }
 
-                            $table.insert(key, raw_entry_ptr);
+                            if single_writer {
+                                $table.insert_single_writer(key, raw_entry_ptr);
+                            } else {
+                                $table.insert(key, raw_entry_ptr);
+                            }
                             raw_entry_ptr = unsafe { raw_entry_ptr.add(1) };
                         }
                     }
@@ -713,6 +848,7 @@ impl HashJoinBuildState {
     /// Detach to state: `finalize_counter`.
     pub(crate) fn finalize_done(&self, hash_table_type: HashTableType) -> Result<()> {
         if self.finalize_counter.fetch_sub(1, Ordering::AcqRel) == 1 {
+            self.merge_worker_hash_tables()?;
             self.build_generation_state();
             if self.hash_join_state.need_next_round.load(Ordering::Acquire) {
                 let partition_id = if self.join_type() != JoinType::Cross {

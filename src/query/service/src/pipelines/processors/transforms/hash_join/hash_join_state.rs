@@ -83,7 +83,9 @@ pub enum HashJoinHashTable {
 /// It will like a bridge to connect build and probe.
 /// Such as build side will pass hash table to probe side by it
 pub struct HashJoinState {
-    /// A shared big hash table stores all the rows from build side
+    /// Hash tables owned by each build worker before merge.
+    pub(crate) worker_hash_tables: SyncUnsafeCell<Vec<HashJoinHashTable>>,
+    /// The merged hash table shared with probe side.
     pub(crate) hash_table: SyncUnsafeCell<HashJoinHashTable>,
     /// After HashTable is built, send message to notify all probe processors.
     /// There are three types of messages:
@@ -172,6 +174,7 @@ impl HashJoinState {
         }
         let build_schema = DataSchemaRefExt::create(projected_build_fields);
         Ok(Arc::new(HashJoinState {
+            worker_hash_tables: SyncUnsafeCell::new(Vec::new()),
             hash_table: SyncUnsafeCell::new(HashJoinHashTable::Null),
             build_watcher,
             _build_done_dummy_receiver,
@@ -274,6 +277,7 @@ impl HashJoinState {
             build_state.mark_scan_map.clear();
         }
         build_state.generation_state.is_build_projected = true;
+        unsafe { &mut *self.worker_hash_tables.get() }.clear();
     }
 
     pub fn num_build_chunks(&self) -> usize {

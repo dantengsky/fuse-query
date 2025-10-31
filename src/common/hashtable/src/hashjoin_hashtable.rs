@@ -152,6 +152,32 @@ impl<K: Keyable, A: Allocator + Clone + Default> HashJoinHashTable<K, A> {
         }
         unsafe { (*entry_ptr).next = remove_header_tag(old_header) };
     }
+
+    pub fn insert_single_writer(&mut self, key: K, entry_ptr: *mut RawEntry<K>) {
+        let hash = key.hash();
+        let index = (hash >> self.hash_shift) as usize;
+        let old_header = self.pointers[index];
+        let combined = combine_header(new_header(entry_ptr as u64, hash), old_header);
+        self.pointers[index] = combined;
+        unsafe { (*self.atomic_pointers.add(index)).store(combined, Ordering::Relaxed) };
+        unsafe { (*entry_ptr).next = remove_header_tag(old_header) };
+    }
+
+    pub fn drain_entries<F>(&mut self, mut f: F)
+    where F: FnMut(*mut RawEntry<K>) {
+        for header in self.pointers.iter_mut() {
+            let mut ptr = remove_header_tag(*header);
+            while ptr != 0 {
+                unsafe {
+                    let entry = ptr as *mut RawEntry<K>;
+                    let next = (*entry).next;
+                    f(entry);
+                    ptr = next;
+                }
+            }
+            *header = 0;
+        }
+    }
 }
 
 impl<K, A> HashJoinHashtableLike for HashJoinHashTable<K, A>

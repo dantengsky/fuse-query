@@ -99,6 +99,7 @@ pub struct TransformHashJoinBuild {
     memory_settings: MemorySettings,
 
     step: Step,
+    worker_index: usize,
 }
 
 impl TransformHashJoinBuild {
@@ -106,7 +107,7 @@ impl TransformHashJoinBuild {
         input_port: Arc<InputPort>,
         build_state: Arc<HashJoinBuildState>,
     ) -> Result<Box<dyn Processor>> {
-        build_state.build_attach();
+        let worker_index = build_state.build_attach();
 
         // Create a hash join spiller.
         let hash_join_state = build_state.hash_join_state.clone();
@@ -138,6 +139,7 @@ impl TransformHashJoinBuild {
             spiller,
             memory_settings,
             step: Step::Sync(SyncStep::Collect),
+            worker_index,
         }))
     }
 
@@ -254,7 +256,7 @@ impl Processor for TransformHashJoinBuild {
             }
             Step::Sync(SyncStep::Finalize) => {
                 if let Some(task) = self.build_state.finalize_task() {
-                    self.build_state.finalize(task)
+                    self.build_state.finalize(self.worker_index, task)
                 } else {
                     self.is_finalize_finished = true;
                     self.build_state.finalize_done(self.hash_table_type)
