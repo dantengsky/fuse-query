@@ -16,12 +16,13 @@ hyper-util = { workspace = true }
 prost = { workspace = true }
 serde = { workspace = true }
 tonic = { workspace = true }
+tonic-prost = { workspace = true }
 
 [build-dependencies]
 lenient_semver = { workspace = true }
 prost-build = { workspace = true }
 semver = { workspace = true }
-tonic-build = { workspace = true }
+tonic-prost-build = { workspace = true }
 
 [dev-dependencies]
 tower = { workspace = true }
