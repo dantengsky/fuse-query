@@ -217,18 +217,18 @@ anyerror = { version = "=0.1.13" }
 anyhow = { version = "1.0.65" }
 apache-avro = { version = "0.17.0", features = ["snappy", "zstandard", "xz", "snappy", "bzip"] }
 approx = "0.5.1"
-arrow = { version = "57" }
-arrow-array = { version = "57" }
-arrow-buffer = { version = "57" }
-arrow-cast = { version = "57", features = ["prettyprint"] }
-arrow-csv = { version = "57" }
-arrow-data = { version = "57" }
-arrow-flight = { version = "57", features = ["flight-sql-experimental", "tls-ring"] }
-arrow-ipc = { version = "57", features = ["lz4", "zstd"] }
-arrow-json = { version = "57" }
-arrow-ord = { version = "57" }
-arrow-schema = { version = "57", features = ["serde"] }
-arrow-select = { version = "57" }
+arrow = { version = "56" }
+arrow-array = { version = "56" }
+arrow-buffer = { version = "56" }
+arrow-cast = { version = "56", features = ["prettyprint"] }
+arrow-csv = { version = "56" }
+arrow-data = { version = "56" }
+arrow-flight = { version = "56", features = ["flight-sql-experimental", "tls-ring"] }
+arrow-ipc = { version = "56", features = ["lz4", "zstd"] }
+arrow-json = { version = "56" }
+arrow-ord = { version = "56" }
+arrow-schema = { version = "56", features = ["serde"] }
+arrow-select = { version = "56" }
 arrow-udf-runtime = { version = "0.8.0", default-features = false, features = ["javascript", "wasm"] }
 async-backtrace = "0.2"
 async-channel = "2.3.1"
@@ -416,7 +416,7 @@ ordered-float = { version = "5.0.0", default-features = false }
 ordq = "0.2.0"
 p256 = "0.13"
 parking_lot = "0.12.1"
-parquet = { version = "57", features = ["async"] }
+parquet = { version = "56", features = ["async"] }
 passwords = { version = "3.1.16" }
 paste = "1.0.15"
 percent-encoding = "2.3.1"
@@ -433,8 +433,8 @@ pretty_assertions = "1.3.0"
 procfs = { version = "0.17.0" }
 proj4rs = { version = "0.1.4", features = ["geo-types", "crs-definitions"] }
 proptest = { version = "1", default-features = false, features = ["std"] }
-prost = { version = "0.14" }
-prost-build = { version = "0.14" }
+prost = { version = "0.13" }
+prost-build = { version = "0.13" }
 prqlc = "0.11.3"
 raft-log = { version = "0.2.11" }
 rand = { version = "0.8.5", features = ["small_rng", "serde1"] }
@@ -520,10 +520,11 @@ tokio-stream = { version = "0.1.11", features = ["net"] }
 tokio-util = { version = "0.7.13" }
 toml = { version = "0.8", features = ["parse"] }
 #tonic = { version = "0.12.3", features = ["transport", "codegen", "prost", "tls-roots", "tls"] }
-tonic = { version = "0.14", features = ["transport", "codegen", "tls-native-roots"] }
-tonic-prost = { version = "0.14" }
-tonic-prost-build = { version = "0.14" }
-tonic-reflection = { version = "0.14" }
+tonic = { version = "0.13", features = ["transport", "codegen", "tls-native-roots"] }
+tonic-build = { version = "0.13" }
+#tonic-prost = { version = "0.13" }
+tonic-prost-build = { version = "0.13" }
+tonic-reflection = { version = "0.13" }
 tower = { version = "0.5.1", features = ["util"] }
 tower-service = "0.3.3"
 twox-hash = "1.6.3"

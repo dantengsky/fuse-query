@@ -20,7 +20,7 @@ use databend_common_expression::TableSchema;
 use databend_storages_common_table_meta::table::TableCompression;
 use parquet::arrow::ArrowWriter;
 use parquet::basic::Encoding;
-use parquet::file::metadata::{KeyValue, ParquetMetaData};
+use parquet::file::metadata::KeyValue;
 use parquet::file::properties::EnabledStatistics;
 use parquet::file::properties::WriterProperties;
 use parquet::file::properties::WriterPropertiesBuilder;
@@ -35,7 +35,7 @@ pub fn blocks_to_parquet(
     compression: TableCompression,
     enable_dictionary: bool,
     metadata: Option<Vec<KeyValue>>,
-) -> Result<ParquetMetaData> {
+) -> Result<FileMetaData> {
     assert!(!blocks.is_empty());
     let builder = parquet_writer_properties_builder(compression, enable_dictionary, metadata);
 

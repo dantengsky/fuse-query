@@ -43,28 +43,28 @@ fn build_proto() {
     config.protoc_arg("--experimental_allow_proto3_optional");
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
-    tonic_prost_build::configure()
-        .btree_map("RaftLogStatus.wal_closed_chunk_sizes")
+    tonic_build::configure()
+        .btree_map(["RaftLogStatus.wal_closed_chunk_sizes"])
         .file_descriptor_set_path(out_dir.join("meta_descriptor.bin"))
         .type_attribute(
             "SeqV",
-            "#[derive(serde::Serialize, serde::Deserialize, deepsize::DeepSizeOf)]",
+            "#[derive(Eq, serde::Serialize, serde::Deserialize, deepsize::DeepSizeOf)]",
         )
         .type_attribute(
             "TxnGetRequest",
-            "#[derive(serde::Serialize, serde::Deserialize, deepsize::DeepSizeOf)]",
+            "#[derive(Eq, serde::Serialize, serde::Deserialize, deepsize::DeepSizeOf)]",
         )
         .type_attribute(
             "TxnPutRequest",
-            "#[derive(serde::Serialize, serde::Deserialize, deepsize::DeepSizeOf)]",
+            "#[derive(Eq, serde::Serialize, serde::Deserialize, deepsize::DeepSizeOf)]",
         )
         .type_attribute(
             "TxnDeleteRequest",
-            "#[derive(serde::Serialize, serde::Deserialize, deepsize::DeepSizeOf)]",
+            "#[derive(Eq, serde::Serialize, serde::Deserialize, deepsize::DeepSizeOf)]",
         )
         .type_attribute(
             "TxnDeleteByPrefixRequest",
-            "#[derive(PartialOrd, Ord, serde::Serialize, serde::Deserialize, deepsize::DeepSizeOf)]",
+            "#[derive(Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize, deepsize::DeepSizeOf)]",
         )
         .type_attribute(
             "TxnCondition.ConditionResult",
@@ -72,15 +72,15 @@ fn build_proto() {
         )
         .type_attribute(
             "TxnCondition.target",
-            "#[derive(serde::Serialize, serde::Deserialize, deepsize::DeepSizeOf)]",
+            "#[derive(Eq,serde::Serialize, serde::Deserialize, deepsize::DeepSizeOf)]",
         )
         .type_attribute(
             "TxnOp.request",
-            "#[derive(serde::Serialize, serde::Deserialize, deepsize::DeepSizeOf)]",
+            "#[derive(Eq,serde::Serialize, serde::Deserialize, deepsize::DeepSizeOf)]",
         )
         .type_attribute(
             "TxnCondition",
-            "#[derive(serde::Serialize, serde::Deserialize, deepsize::DeepSizeOf)]",
+            "#[derive(Eq, serde::Serialize, serde::Deserialize, deepsize::DeepSizeOf)]",
         )
         .type_attribute(
             "ConditionalOperation",
@@ -96,7 +96,7 @@ fn build_proto() {
         )
         .type_attribute(
             "TxnOp",
-            "#[derive(serde::Serialize, serde::Deserialize, deepsize::DeepSizeOf)]",
+            "#[derive(Eq, serde::Serialize, serde::Deserialize, deepsize::DeepSizeOf)]",
         )
         .type_attribute(
             "TxnRequest",
@@ -104,27 +104,27 @@ fn build_proto() {
         )
         .type_attribute(
             "TxnGetResponse",
-            "#[derive(serde::Serialize, serde::Deserialize, deepsize::DeepSizeOf)]",
+            "#[derive(Eq, serde::Serialize, serde::Deserialize, deepsize::DeepSizeOf)]",
         )
         .type_attribute(
             "TxnPutResponse",
-            "#[derive(serde::Serialize, serde::Deserialize, deepsize::DeepSizeOf)]",
+            "#[derive(Eq, serde::Serialize, serde::Deserialize, deepsize::DeepSizeOf)]",
         )
         .type_attribute(
             "TxnDeleteResponse",
-            "#[derive(serde::Serialize, serde::Deserialize, deepsize::DeepSizeOf)]",
+            "#[derive(Eq, serde::Serialize, serde::Deserialize, deepsize::DeepSizeOf)]",
         )
         .type_attribute(
             "TxnDeleteByPrefixResponse",
-            "#[derive(serde::Serialize, serde::Deserialize, deepsize::DeepSizeOf)]",
+            "#[derive(Eq, serde::Serialize, serde::Deserialize, deepsize::DeepSizeOf)]",
         )
         .type_attribute(
             "TxnOpResponse.response",
-            "#[derive(serde::Serialize, serde::Deserialize, derive_more::TryInto, derive_more::From, deepsize::DeepSizeOf)]",
+            "#[derive(Eq, serde::Serialize, serde::Deserialize, derive_more::TryInto, derive_more::From, deepsize::DeepSizeOf)]",
         )
         .type_attribute(
             "TxnOpResponse",
-            "#[derive(serde::Serialize, serde::Deserialize, deepsize::DeepSizeOf)]",
+            "#[derive(Eq, serde::Serialize, serde::Deserialize, deepsize::DeepSizeOf)]",
         )
         .type_attribute(
             "TxnReply",
@@ -132,19 +132,19 @@ fn build_proto() {
         )
         .type_attribute(
             "WatchRequest",
-            "#[derive(deepsize::DeepSizeOf)]",
+            "#[derive(Eq, deepsize::DeepSizeOf)]",
         )
         .type_attribute(
             "WatchResponse",
-            "#[derive(deepsize::DeepSizeOf)]",
+            "#[derive(Eq, deepsize::DeepSizeOf)]",
         )
         .type_attribute(
             "Event",
-            "#[derive(deepsize::DeepSizeOf)]",
+            "#[derive(Eq, deepsize::DeepSizeOf)]",
         )
         .type_attribute(
             "KVMeta",
-            "#[derive(serde::Serialize, serde::Deserialize, deepsize::DeepSizeOf)]",
+            "#[derive(Eq, serde::Serialize, serde::Deserialize, deepsize::DeepSizeOf)]",
         )
         .field_attribute(
             "TxnPutRequest.ttl_ms",
@@ -156,16 +156,16 @@ fn build_proto() {
         )
         .type_attribute(
             "FetchIncreaseU64",
-            "#[derive(serde::Serialize, serde::Deserialize, deepsize::DeepSizeOf)]",
+            "#[derive(Eq, serde::Serialize, serde::Deserialize, deepsize::DeepSizeOf)]",
         )
         .type_attribute(
             "FetchIncreaseU64Response",
-            "#[derive(serde::Serialize, serde::Deserialize, deepsize::DeepSizeOf)]",
+            "#[derive(Eq, serde::Serialize, serde::Deserialize, deepsize::DeepSizeOf)]",
         )
         .type_attribute(
             "PutSequential",
-            "#[derive(serde::Serialize, serde::Deserialize, deepsize::DeepSizeOf)]",
+            "#[derive(Eq, serde::Serialize, serde::Deserialize, deepsize::DeepSizeOf)]",
         )
-        .compile_with_config(config, &protos, &[&proto_dir])
+        .compile_protos_with_config(config, &protos, &[&proto_dir])
         .unwrap();
 }
