@@ -27,9 +27,8 @@ use super::utils::decode_decimal256_from_bytes;
 
 /// according to https://github.com/apache/parquet-format/blob/master/LogicalTypes.md
 pub fn convert_column_statistics(s: &Statistics, typ: &TableDataType) -> Option<ColumnStatistics> {
-
     if s.is_min_max_deprecated() {
-       return None;
+        return None;
     }
     let has_min_max_set = {
         match s {
@@ -46,7 +45,10 @@ pub fn convert_column_statistics(s: &Statistics, typ: &TableDataType) -> Option<
 
     let (max, min) = if has_min_max_set {
         match s {
-            Statistics::Boolean(s) => (Scalar::Boolean(*s.max_opt().unwrap()), Scalar::Boolean(*s.min_opt().unwrap())),
+            Statistics::Boolean(s) => (
+                Scalar::Boolean(*s.max_opt().unwrap()),
+                Scalar::Boolean(*s.min_opt().unwrap()),
+            ),
             Statistics::Int32(s) => {
                 let (max, min) = (*s.max_opt().unwrap(), *s.min_opt().unwrap());
                 match typ {
@@ -115,14 +117,20 @@ pub fn convert_column_statistics(s: &Statistics, typ: &TableDataType) -> Option<
                 }
             }
             Statistics::Int96(s) => {
-                let (max, min) = (s.max_opt().unwrap().to_micros(), s.min_opt().unwrap().to_micros());
-                (
-                    Scalar::Timestamp(max),
-                    Scalar::Timestamp(min),
-                )
+                let (max, min) = (
+                    s.max_opt().unwrap().to_micros(),
+                    s.min_opt().unwrap().to_micros(),
+                );
+                (Scalar::Timestamp(max), Scalar::Timestamp(min))
             }
-            Statistics::Float(s) => (Scalar::from(*s.max_opt().unwrap()), Scalar::from(*s.min_opt().unwrap())),
-            Statistics::Double(s) => (Scalar::from(*s.max_opt().unwrap()), Scalar::from(*s.min_opt().unwrap())),
+            Statistics::Float(s) => (
+                Scalar::from(*s.max_opt().unwrap()),
+                Scalar::from(*s.min_opt().unwrap()),
+            ),
+            Statistics::Double(s) => (
+                Scalar::from(*s.max_opt().unwrap()),
+                Scalar::from(*s.min_opt().unwrap()),
+            ),
             Statistics::ByteArray(s) => (
                 Scalar::String(String::from_utf8(s.max_opt().unwrap().as_bytes().to_vec()).ok()?),
                 Scalar::String(String::from_utf8(s.min_opt().unwrap().as_bytes().to_vec()).ok()?),

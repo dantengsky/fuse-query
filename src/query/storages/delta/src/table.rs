@@ -59,6 +59,7 @@ use tokio::sync::OnceCell;
 use url::Url;
 
 use crate::partition::DeltaPartInfo;
+use crate::table::arrow_conversion::TryIntoValue;
 use crate::table_source::DeltaTableSource;
 
 pub const DELTA_ENGINE: &str = "DELTA";
@@ -140,7 +141,7 @@ impl DeltaTable {
         })?;
 
         // Build arrow schema from delta metadata.
-        let arrow_schema: ArrowSchema = delta_meta.try_into().map_err(|e| {
+        let arrow_schema: ArrowSchema = delta_meta.try_into_value().map_err(|e| {
             ErrorCode::ReadTableDataError(format!("Cannot convert table metadata: {e:?}"))
         })?;
 
@@ -436,44 +437,76 @@ pub fn get_partition_values(add: &Add, fields: &[TableField]) -> Result<Vec<Scal
     Ok(values)
 }
 
-
-mod convert {
-    use super::*;
-
-    //! Conversions from kernel types to arrow types
+// TODO refactor this
+mod arrow_conversion {
 
     use std::sync::Arc;
-    use deltalake::kernel::{ArrayType, DataType, MapType, MetadataValue, PrimitiveType, StructField, StructType};
-    use arrow_schema::{
-        DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema,
-        SchemaRef as ArrowSchemaRef, TimeUnit,
-    };
-    use arrow_schema::ArrowError;
-    use itertools::Itertools;
 
+    use arrow_schema::DataType as ArrowDataType;
+    use arrow_schema::Field as ArrowField;
+    use arrow_schema::Schema as ArrowSchema;
+    use arrow_schema::SchemaRef as ArrowSchemaRef;
+    use arrow_schema::TimeUnit;
     use deltalake::kernel::error::Error;
-    //use deltalake::kernel::models::{
-    //    ArrayType, DataType, MapType, MetadataValue, PrimitiveType, StructField, StructType,
-    //};
+    use deltalake::kernel::ArrayType;
+    use deltalake::kernel::DataType;
+    use deltalake::kernel::MapType;
+    use deltalake::kernel::MetadataValue;
+    use deltalake::kernel::PrimitiveType;
+    use deltalake::kernel::StructField;
+    use deltalake::kernel::StructType;
+    use itertools::Itertools;
 
     pub(crate) const LIST_ARRAY_ROOT: &str = "element";
     pub(crate) const MAP_ROOT_DEFAULT: &str = "key_value";
     pub(crate) const MAP_KEY_DEFAULT: &str = "key";
     pub(crate) const MAP_VALUE_DEFAULT: &str = "value";
 
-    impl TryFrom<&StructType> for ArrowSchema {
-        type Error = ArrowError;
+    pub trait TryFromValue<T>: Sized {
+        /// The type returned in the event of a conversion error.
+        type Error;
 
-        fn try_from(s: &StructType) -> Result<Self, ArrowError> {
-            let fields: Vec<ArrowField> = s.fields().map(TryInto::try_into).try_collect()?;
+        /// Performs the conversion.
+        fn try_from_value(value: T) -> std::result::Result<Self, Self::Error>;
+    }
+
+    pub trait TryIntoValue<T>: Sized {
+        /// The type returned in the event of a conversion error.
+        type Error;
+
+        /// Performs the conversion.
+        fn try_into_value(self) -> std::result::Result<T, Self::Error>;
+    }
+
+    impl<T, U> TryIntoValue<U> for T
+    where U: TryFromValue<T>
+    {
+        type Error = U::Error;
+
+        #[inline]
+        fn try_into_value(self) -> std::result::Result<U, U::Error> {
+            U::try_from_value(self)
+        }
+    }
+
+    impl TryFromValue<&StructType> for ArrowSchema {
+        type Error = deltalake::arrow::error::ArrowError;
+
+        fn try_from_value(
+            s: &StructType,
+        ) -> std::result::Result<Self, deltalake::arrow::error::ArrowError> {
+            let fields: Vec<ArrowField> =
+                s.fields().map(TryIntoValue::try_into_value).try_collect()?;
             Ok(ArrowSchema::new(fields))
         }
     }
 
-    impl TryFrom<&StructField> for ArrowField {
-        type Error = ArrowError;
+    impl TryFromValue<&StructField> for ArrowField {
+        type Error = deltalake::arrow::error::ArrowError;
 
-        fn try_from(f: &StructField) -> Result<Self, ArrowError> {
+        fn try_from_value(
+            f: &StructField,
+        ) -> std::result::Result<Self, deltalake::arrow::error::ArrowError> {
             let metadata = f
                 .metadata()
                 .iter()
@@ -481,62 +514,68 @@ mod convert {
                     &MetadataValue::String(val) => Ok((key.clone(), val.clone())),
                     _ => Ok((key.clone(), serde_json::to_string(val)?)),
                 })
-                .collect::<Result<_, serde_json::Error>>()
-                .map_err(|err| ArrowError::JsonError(err.to_string()))?;
+                .collect::<std::result::Result<_, serde_json::Error>>()
+                .map_err(|err| deltalake::arrow::error::ArrowError::JsonError(err.to_string()))?;
 
             let field = ArrowField::new(
                 f.name(),
-                ArrowDataType::try_from(f.data_type())?,
+                ArrowDataType::try_from_value(f.data_type())?,
                 f.is_nullable(),
             )
-                .with_metadata(metadata);
+            .with_metadata(metadata);
 
             Ok(field)
         }
     }
 
-    impl TryFrom<&ArrayType> for ArrowField {
-        type Error = ArrowError;
+    impl TryFromValue<&ArrayType> for ArrowField {
+        type Error = deltalake::arrow::error::ArrowError;
 
-        fn try_from(a: &ArrayType) -> Result<Self, ArrowError> {
+        fn try_from_value(
+            a: &ArrayType,
+        ) -> std::result::Result<Self, deltalake::arrow::error::ArrowError> {
             Ok(ArrowField::new(
                 LIST_ARRAY_ROOT,
-                ArrowDataType::try_from(a.element_type())?,
+                ArrowDataType::try_from_value(a.element_type())?,
                 a.contains_null(),
             ))
         }
     }
 
-    impl TryFrom<&MapType> for ArrowField {
-        type Error = ArrowError;
+    impl TryFromValue<&MapType> for ArrowField {
+        type Error = deltalake::arrow::error::ArrowError;
 
-        fn try_from(a: &MapType) -> Result<Self, ArrowError> {
+        fn try_from_value(
+            a: &MapType,
+        ) -> std::result::Result<Self, deltalake::arrow::error::ArrowError> {
             Ok(ArrowField::new(
                 MAP_ROOT_DEFAULT,
                 ArrowDataType::Struct(
                     vec![
                         ArrowField::new(
                             MAP_KEY_DEFAULT,
-                            ArrowDataType::try_from(a.key_type())?,
+                            ArrowDataType::try_from_value(a.key_type())?,
                             false,
                         ),
                         ArrowField::new(
                             MAP_VALUE_DEFAULT,
-                            ArrowDataType::try_from(a.value_type())?,
+                            ArrowDataType::try_from_value(a.value_type())?,
                             a.value_contains_null(),
                         ),
                     ]
-                        .into(),
+                    .into(),
                 ),
                 false, // always non-null
             ))
         }
     }
 
-    impl TryFrom<&DataType> for ArrowDataType {
-        type Error = ArrowError;
+    impl TryFromValue<&DataType> for ArrowDataType {
+        type Error = deltalake::arrow::error::ArrowError;
 
-        fn try_from(t: &DataType) -> Result<Self, ArrowError> {
+        fn try_from_value(
+            t: &DataType,
+        ) -> std::result::Result<Self, deltalake::arrow::error::ArrowError> {
             match t {
                 DataType::Primitive(p) => {
                     match p {
@@ -568,56 +607,74 @@ mod convert {
                         }
                     }
                 }
-                DataType::Struct(s) => Ok(ArrowDataType::Struct(
-                    s.fields()
-                        .map(TryInto::try_into)
-                        .collect::<Result<Vec<ArrowField>, ArrowError>>()?
-                        .into(),
+                DataType::Struct(s) => {
+                    Ok(ArrowDataType::Struct(
+                        s.fields()
+                            .map(TryIntoValue::try_into_value)
+                            .collect::<std::result::Result<
+                                Vec<ArrowField>,
+                                deltalake::arrow::error::ArrowError,
+                            >>()?
+                            .into(),
+                    ))
+                }
+                DataType::Array(a) => {
+                    Ok(ArrowDataType::List(Arc::new(a.as_ref().try_into_value()?)))
+                }
+                DataType::Map(m) => Ok(ArrowDataType::Map(
+                    Arc::new(m.as_ref().try_into_value()?),
+                    false,
                 )),
-                DataType::Array(a) => Ok(ArrowDataType::List(Arc::new(a.as_ref().try_into()?))),
-                DataType::Map(m) => Ok(ArrowDataType::Map(Arc::new(m.as_ref().try_into()?), false)),
             }
         }
     }
 
-    impl TryFrom<&ArrowSchema> for StructType {
-        type Error = ArrowError;
+    impl TryFromValue<&ArrowSchema> for StructType {
+        type Error = deltalake::arrow::error::ArrowError;
 
-        fn try_from(arrow_schema: &ArrowSchema) -> Result<Self, ArrowError> {
+        fn try_from_value(
+            arrow_schema: &ArrowSchema,
+        ) -> std::result::Result<Self, deltalake::arrow::error::ArrowError> {
             StructType::try_new(
                 arrow_schema
                     .fields()
                     .iter()
-                    .map(|field| field.as_ref().try_into()),
+                    .map(|field| field.as_ref().try_into_value()),
             )
         }
     }
 
-    impl TryFrom<ArrowSchemaRef> for StructType {
-        type Error = ArrowError;
+    impl TryFromValue<ArrowSchemaRef> for StructType {
+        type Error = deltalake::arrow::error::ArrowError;
 
-        fn try_from(arrow_schema: ArrowSchemaRef) -> Result<Self, ArrowError> {
-            arrow_schema.as_ref().try_into()
+        fn try_from_value(
+            arrow_schema: ArrowSchemaRef,
+        ) -> std::result::Result<Self, deltalake::arrow::error::ArrowError> {
+            arrow_schema.as_ref().try_into_value()
         }
     }
 
-    impl TryFrom<&ArrowField> for StructField {
-        type Error = ArrowError;
+    impl TryFromValue<&ArrowField> for StructField {
+        type Error = deltalake::arrow::error::ArrowError;
 
-        fn try_from(arrow_field: &ArrowField) -> Result<Self, ArrowError> {
+        fn try_from_value(
+            arrow_field: &ArrowField,
+        ) -> std::result::Result<Self, deltalake::arrow::error::ArrowError> {
             Ok(StructField::new(
                 arrow_field.name().clone(),
-                DataType::try_from(arrow_field.data_type())?,
+                DataType::try_from_value(arrow_field.data_type())?,
                 arrow_field.is_nullable(),
             )
-                .with_metadata(arrow_field.metadata().iter().map(|(k, v)| (k.clone(), v))))
+            .with_metadata(arrow_field.metadata().iter().map(|(k, v)| (k.clone(), v))))
         }
     }
 
-    impl TryFrom<&ArrowDataType> for DataType {
-        type Error = ArrowError;
+    impl TryFromValue<&ArrowDataType> for DataType {
+        type Error = deltalake::arrow::error::ArrowError;
 
-        fn try_from(arrow_datatype: &ArrowDataType) -> std::result::Result<Self, ArrowError> {
+        fn try_from_value(
+            arrow_datatype: &ArrowDataType,
+        ) -> std::result::Result<Self, deltalake::arrow::error::ArrowError> {
             match arrow_datatype {
                 ArrowDataType::Utf8 => Ok(DataType::STRING),
                 ArrowDataType::LargeUtf8 => Ok(DataType::STRING),
@@ -639,43 +696,59 @@ mod convert {
                 ArrowDataType::BinaryView => Ok(DataType::BINARY),
                 ArrowDataType::Decimal128(p, s) => {
                     if *s < 0 {
-                        return Err(ArrowError::from_external_error(
-                            Error::invalid_decimal("Negative scales are not supported in Delta").into(),
+                        return Err(deltalake::arrow::error::ArrowError::from_external_error(
+                            // TODO
+                            // Error::invalid_decimal("Negative scales are not supported in Delta").into(),
+                            Error::Generic("Negative scales are not supported in Delta".to_owned())
+                                .into(),
                         ));
                     };
-                    DataType::decimal(*p, *s as u8)
-                        .map_err(|e| ArrowError::from_external_error(e.into()))
+                    DataType::decimal(*p, *s as u8).map_err(|e| {
+                        deltalake::arrow::error::ArrowError::from_external_error(e.into())
+                    })
                 }
                 ArrowDataType::Date32 => Ok(DataType::DATE),
                 ArrowDataType::Date64 => Ok(DataType::DATE),
-                ArrowDataType::Timestamp(TimeUnit::Microsecond, None) => Ok(DataType::TIMESTAMP_NTZ),
+                ArrowDataType::Timestamp(TimeUnit::Microsecond, None) => {
+                    Ok(DataType::TIMESTAMP_NTZ)
+                }
                 ArrowDataType::Timestamp(TimeUnit::Microsecond, Some(tz))
-                if tz.eq_ignore_ascii_case("utc") =>
-                    {
-                        Ok(DataType::TIMESTAMP)
-                    }
-                ArrowDataType::Struct(fields) => {
-                    DataType::try_struct_type(fields.iter().map(|field| field.as_ref().try_into()))
+                    if tz.eq_ignore_ascii_case("utc") =>
+                {
+                    Ok(DataType::TIMESTAMP)
                 }
-                ArrowDataType::List(field) => {
-                    Ok(ArrayType::new((*field).data_type().try_into()?, (*field).is_nullable()).into())
-                }
-                ArrowDataType::ListView(field) => {
-                    Ok(ArrayType::new((*field).data_type().try_into()?, (*field).is_nullable()).into())
-                }
-                ArrowDataType::LargeList(field) => {
-                    Ok(ArrayType::new((*field).data_type().try_into()?, (*field).is_nullable()).into())
-                }
-                ArrowDataType::LargeListView(field) => {
-                    Ok(ArrayType::new((*field).data_type().try_into()?, (*field).is_nullable()).into())
-                }
-                ArrowDataType::FixedSizeList(field, _) => {
-                    Ok(ArrayType::new((*field).data_type().try_into()?, (*field).is_nullable()).into())
-                }
+                ArrowDataType::Struct(fields) => DataType::try_struct_type(
+                    fields.iter().map(|field| field.as_ref().try_into_value()),
+                ),
+                ArrowDataType::List(field) => Ok(ArrayType::new(
+                    (*field).data_type().try_into_value()?,
+                    (*field).is_nullable(),
+                )
+                .into()),
+                ArrowDataType::ListView(field) => Ok(ArrayType::new(
+                    (*field).data_type().try_into_value()?,
+                    (*field).is_nullable(),
+                )
+                .into()),
+                ArrowDataType::LargeList(field) => Ok(ArrayType::new(
+                    (*field).data_type().try_into_value()?,
+                    (*field).is_nullable(),
+                )
+                .into()),
+                ArrowDataType::LargeListView(field) => Ok(ArrayType::new(
+                    (*field).data_type().try_into_value()?,
+                    (*field).is_nullable(),
+                )
+                .into()),
+                ArrowDataType::FixedSizeList(field, _) => Ok(ArrayType::new(
+                    (*field).data_type().try_into_value()?,
+                    (*field).is_nullable(),
+                )
+                .into()),
                 ArrowDataType::Map(field, _) => {
                     if let ArrowDataType::Struct(struct_fields) = field.data_type() {
-                        let key_type = DataType::try_from(struct_fields[0].data_type())?;
-                        let value_type = DataType::try_from(struct_fields[1].data_type())?;
+                        let key_type = DataType::try_from_value(struct_fields[0].data_type())?;
+                        let value_type = DataType::try_from_value(struct_fields[1].data_type())?;
                         let value_type_nullable = struct_fields[1].is_nullable();
                         Ok(MapType::new(key_type, value_type, value_type_nullable).into())
                     } else {
@@ -684,8 +757,10 @@ mod convert {
                 }
                 // Dictionary types are just an optimized in-memory representation of an array.
                 // Schema-wise, they are the same as the value type.
-                ArrowDataType::Dictionary(_, value_type) => Ok(value_type.as_ref().try_into()?),
-                s => Err(ArrowError::SchemaError(format!(
+                ArrowDataType::Dictionary(_, value_type) => {
+                    Ok(value_type.as_ref().try_into_value()?)
+                }
+                s => Err(deltalake::arrow::error::ArrowError::SchemaError(format!(
                     "Invalid data type for Delta Lake: {s}"
                 ))),
             }
