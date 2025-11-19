@@ -16,6 +16,9 @@ use std::sync::Arc;
 
 use databend_common_catalog::table::Table;
 use databend_common_exception::Result;
+use databend_common_expression::types::DecimalDataType;
+use databend_common_expression::TableDataType;
+use databend_common_expression::TableField;
 use databend_common_meta_api::SecurityApi;
 use databend_common_meta_api::TableApi;
 use databend_common_meta_app::app_error::AppError;
@@ -134,14 +137,45 @@ impl Database for DefaultDatabase {
 
         let (_name, id, seq_meta) = table_niv.unpack();
 
+        // TODO shall we intercept here?
+
+        let table_meta_seq = seq_meta.seq;
+        let mut table_meta = seq_meta.data;
+
+        let mut new_schema = table_meta.schema.as_ref().clone();
+        let new_fields = new_schema
+            .fields
+            .into_iter()
+            .map(|f| match f.data_type() {
+                TableDataType::Decimal(DecimalDataType::Decimal128(size)) => {
+                    if size.precision() == 15 && size.scale() == 2 {
+                        TableField {
+                            data_type: TableDataType::Decimal(DecimalDataType::Decimal64(
+                                *size,
+                            )),
+                            ..f
+                        }
+                    } else {
+                        f
+                    }
+                }
+                _ => f,
+            })
+            .collect();
+
+        new_schema.fields = new_fields;
+        table_meta.schema = Arc::new(new_schema);
+
         let table_info = TableInfo {
             ident: TableIdent {
                 table_id: id.table_id,
-                seq: seq_meta.seq,
+                // seq: seq_meta.seq,
+                seq: table_meta_seq,
             },
             desc: format!("'{}'.'{}'", self.get_db_name(), table_name),
             name: table_name.to_string(),
-            meta: seq_meta.data,
+            // meta: seq_meta.data,
+            meta: table_meta,
             db_type: DatabaseType::NormalDB,
             catalog_info: Default::default(),
         };
