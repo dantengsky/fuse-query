@@ -456,7 +456,12 @@ impl FromToProto for ex::types::DecimalDataType {
 
         let x = match num {
             pb::decimal::Decimal::Decimal128(x) => {
-                ex::types::DecimalDataType::Decimal128(ex::types::decimal::DecimalSize::from_pb(x)?)
+                let size = ex::types::decimal::DecimalSize::from_pb(x)?;
+                if size.can_carried_by_64() {
+                    ex::types::DecimalDataType::Decimal64(size)
+                } else {
+                    ex::types::DecimalDataType::Decimal128(size)
+                }
             }
             pb::decimal::Decimal::Decimal256(x) => {
                 ex::types::DecimalDataType::Decimal256(ex::types::decimal::DecimalSize::from_pb(x)?)
