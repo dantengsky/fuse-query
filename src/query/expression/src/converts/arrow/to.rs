@@ -129,7 +129,11 @@ impl From<&TableField> for Field {
                 ArrowDataType::Decimal64(size.precision(), size.scale() as i8)
             }
             TableDataType::Decimal(DecimalDataType::Decimal128(size)) => {
-                ArrowDataType::Decimal128(size.precision(), size.scale() as i8)
+                if size.can_carried_by_64() {
+                    ArrowDataType::Decimal64(size.precision(), size.scale() as i8)
+                } else {
+                    ArrowDataType::Decimal128(size.precision(), size.scale() as i8)
+                }
             }
             TableDataType::Decimal(DecimalDataType::Decimal256(size)) => {
                 ArrowDataType::Decimal256(size.precision(), size.scale() as i8)

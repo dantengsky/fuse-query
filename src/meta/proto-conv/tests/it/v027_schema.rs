@@ -64,7 +64,7 @@ fn test_decode_v27_schema() -> anyhow::Result<()> {
         TableField::new("c", TableDataType::Number(NumberDataType::UInt64)),
         TableField::new(
             "decimal128",
-            TableDataType::Decimal(DecimalDataType::Decimal64(DecimalSize::new_unchecked(
+            TableDataType::Decimal(DecimalDataType::Decimal128(DecimalSize::new_unchecked(
                 18, 3,
             ))),
         ),
