@@ -20,10 +20,14 @@ jemalloc = ["databend-common-base/jemalloc", "databend-query/jemalloc"]
 [dependencies]
 clap = { workspace = true }
 databend-common-base = { workspace = true }
+databend-common-catalog = { workspace = true }
 databend-common-config = { workspace = true }
 databend-common-exception = { workspace = true }
+databend-common-expression = { workspace = true }
 databend-common-license = { workspace = true }
+databend-common-meta-app = { workspace = true }
 databend-common-metrics = { workspace = true }
+databend-common-sql = { workspace = true }
 databend-common-storage = { workspace = true }
 databend-common-tracing = { workspace = true }
 databend-common-version = { workspace = true }
@@ -54,6 +58,12 @@ test = false
 [[bin]]
 name = "table-meta-inspector"
 path = "tool/table_meta_inspector.rs"
+doctest = false
+test = false
+
+[[bin]]
+name = "databend-decimal-sum-filter"
+path = "tool/decimal_sum_filter.rs"
 doctest = false
 test = false
 
