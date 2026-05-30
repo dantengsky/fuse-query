@@ -25,6 +25,7 @@ use databend_enterprise_query::test_kits::context::EESetup;
 use databend_query::sessions::QueryContext;
 use databend_query::sessions::TableContextTableAccess;
 use databend_query::test_kits::TestFixture;
+use databend_storages_common_io::dedup_file_locations;
 use databend_storages_common_table_meta::meta::CompactSegmentInfo;
 use futures::TryStreamExt;
 
@@ -250,4 +251,45 @@ async fn test_vacuum2_protected_segments_span_multiple_chunks() -> anyhow::Resul
     assert_eq!(scanned_rows, SEGMENT_COUNT + 1);
 
     Ok(())
+}
+
+/// Verifies that duplicate object paths are removed before invoking OpenDAL's deleter.
+#[test]
+fn test_dedup_file_locations() {
+    let mut locations = vec![
+        "548052/604310/_i_b_v2/019bdabd0292702a96f51f3b3ea64335_v4.parquet".to_string(),
+        "548052/604310/_i_b_v2/019bdabd02927061af2ed18c2562b79e_v4.parquet".to_string(),
+        "548052/604310/_i_b_v2/019c0df29e8a7016a6a1be466e094ec3_v4.parquet".to_string(),
+        "548052/604310/_i_b_v2/019bdabd0292702a96f51f3b3ea64335_v4.parquet".to_string(),
+        "548052/604310/_i_b_v2/019bdabd02927061af2ed18c2562b79e_v4.parquet".to_string(),
+    ];
+
+    let (duplicates, samples) = dedup_file_locations(&mut locations);
+
+    assert_eq!(duplicates, 2);
+    assert_eq!(locations.len(), 3);
+    assert_eq!(samples.len(), 2);
+    assert_eq!(
+        samples[0],
+        "548052/604310/_i_b_v2/019bdabd0292702a96f51f3b3ea64335_v4.parquet"
+    );
+    assert_eq!(
+        samples[1],
+        "548052/604310/_i_b_v2/019bdabd02927061af2ed18c2562b79e_v4.parquet"
+    );
+}
+
+#[test]
+fn test_dedup_file_locations_no_duplicates() {
+    let mut locations = vec![
+        "a/b/file1.parquet".to_string(),
+        "a/b/file2.parquet".to_string(),
+        "a/b/file3.parquet".to_string(),
+    ];
+
+    let (duplicates, samples) = dedup_file_locations(&mut locations);
+
+    assert_eq!(duplicates, 0);
+    assert_eq!(locations.len(), 3);
+    assert!(samples.is_empty());
 }
