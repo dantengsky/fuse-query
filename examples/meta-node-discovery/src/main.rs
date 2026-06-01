@@ -18,8 +18,8 @@
 //! `databend-query` v1.2.911-nightly nodes of a tenant, reading the raft KV
 //! store directly over gRPC.
 //!
-//! Unlike the in-tree `databend-common-management` example, this binary depends
-//! only on the public `databend-meta-client` crate (which bundles its own tokio
+//! This binary depends only on the public `databend-meta-client` crate (which
+//! bundles its own tokio
 //! runtime), so it is a faithful, copy-pastable reference for an external tool.
 
 use std::collections::BTreeMap;

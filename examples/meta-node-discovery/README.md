@@ -32,24 +32,35 @@ TENANT=test_tenant \
 
 ## What it reads
 
-Query nodes >= v1.2.770 (system-managed cluster, PR #17051) register under the
-"v6" warehouse layout:
+Query nodes >= v1.2.770 (system-managed cluster, PR #17051 — includes the
+v1.2.911 nodes targeted here) register under the "v6" warehouse layout:
 
 ```text
-__fd_clusters_v6/<tenant>/online_nodes/<escaped_node_id> -> NodeInfo (json)
+__fd_clusters_v6/<tenant>/online_nodes/<escaped_node_id>                   -> NodeInfo (json)
+__fd_clusters_v6/<tenant>/online_clusters/<warehouse>/<cluster>/<node_id>  -> NodeInfo (json)
 ```
 
 `online_nodes` is the authoritative list of every live node of a tenant, so the
 app lists that prefix and groups the results by warehouse -> cluster.
 
-## Why a separate crate (not a `--example` of the workspace)
+Older query nodes (up to ~v1.2.636) used a different "v3" layout
+(`__fd_clusters_v3/<tenant>/<cluster_id>/databend_query/<node_id>`); this app
+targets the v6 layout and will not discover v3-era nodes.
 
-The in-tree variant at `src/query/management/examples/node_discovery.rs` reuses
-internal databend crates (`databend-common-meta-store`, `databend-meta-runtime`,
-`databend-common-base`). This standalone version instead:
+## Version compatibility note
+
+The `databend-meta-client` used here requires the meta-server to be at least
+`MIN_SERVER_VERSION = 1.2.770` during the gRPC handshake; v1.2.879 satisfies
+that, so the connection succeeds.
+
+## Why a standalone crate
+
+To stay a faithful, copy-pastable reference for an external tool, this crate
+depends only on the public `databend-meta-client` and avoids any internal
+databend crate. Concretely it:
 
 - depends only on `databend-meta-client` (pinned to the same git tag the
-  workspace uses),
+  databend workspace uses),
 - builds the gRPC client with the client crate's own `TokioRuntime`
   (`databend_meta_client::runtime_api::TokioRuntime`) instead of databend's
   internal runtime,
