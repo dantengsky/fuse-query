@@ -1,0 +1,36 @@
+[package]
+name = "meta-node-discovery"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "Apache-2.0"
+description = "Standalone example: discover Databend query nodes via the meta-service gRPC KV store"
+
+# Detach from the parent `databend` workspace so this crate builds on its own.
+[workspace]
+
+[[bin]]
+name = "meta-node-discovery"
+path = "src/main.rs"
+
+[dependencies]
+# The ONLY databend dependency: the public meta-client.
+# Pinned to the same git tag the databend workspace uses for v1.2.879+/v1.2.911+.
+# It re-exports `types`, `kvapi`, and `runtime_api` (incl. `TokioRuntime`), so no
+# other databend crate is required.
+databend-meta-client = { git = "https://github.com/databendlabs/databend-meta", tag = "v260205.6.0" }
+
+anyhow = "1"
+futures = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+# `databend-meta-client` depends on a few crates that are published on crates.io
+# only as placeholders and must be redirected to their git sources. These mirror
+# the `[patch.crates-io]` entries in the databend-meta repo for tag v260205.6.0.
+[patch.crates-io]
+async-backtrace = { git = "https://github.com/datafuse-extras/async-backtrace.git", rev = "dea4553" }
+databend-base = { git = "https://github.com/databendlabs/databend-base", tag = "v0.4.0" }
+map-api = { git = "https://github.com/databendlabs/map-api", tag = "v0.4.2" }
+state-machine-api = { git = "https://github.com/databendlabs/state-machine-api.git", tag = "v0.3.4" }
