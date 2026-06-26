@@ -25,6 +25,7 @@ use databend_common_catalog::runtime_filter_info::RuntimeBloomFilter;
 use databend_common_catalog::runtime_filter_info::RuntimeFilterStats;
 use databend_common_catalog::table_context::TableContext;
 use databend_common_exception::Result;
+use databend_common_expression::Column;
 use databend_common_expression::ColumnId;
 use databend_common_expression::DataBlock;
 use databend_common_expression::DataSchema;
@@ -47,6 +48,7 @@ use crate::pruning::ExprBloomFilter;
 #[derive(Clone)]
 pub struct BloomRuntimeFilterRef {
     pub column_index: FieldIndex,
+    pub column_name: String,
     pub filter: RuntimeBloomFilter,
     pub stats: Arc<RuntimeFilterStats>,
 }
@@ -119,6 +121,7 @@ impl ReadState {
                 let column_index = prewhere_schema.index_of(bloom.column_name.as_str()).ok()?;
                 Some(BloomRuntimeFilterRef {
                     column_index,
+                    column_name: bloom.column_name,
                     filter: bloom.filter,
                     stats: entry.stats,
                 })
@@ -172,7 +175,19 @@ impl ReadState {
         let mut bitmaps = vec![];
         for runtime_filter in &self.runtime_filters {
             let probe_column = block.get_by_offset(runtime_filter.column_index).to_column();
-            let bitmap = ExprBloomFilter::new(&runtime_filter.filter).apply(probe_column)?;
+            let filter_start = Instant::now();
+            let bitmap =
+                ExprBloomFilter::new(&runtime_filter.filter).apply(probe_column.clone())?;
+            let rows_filtered = count_bitmap_false(&bitmap);
+            runtime_filter
+                .stats
+                .record_bloom(filter_start.elapsed().as_nanos() as u64, rows_filtered);
+            record_bloom_watch(
+                runtime_filter.stats.as_ref(),
+                &runtime_filter.column_name,
+                probe_column,
+                &bitmap,
+            );
             bitmaps.push(bitmap);
         }
 
@@ -274,6 +289,83 @@ fn should_push_down_row_selection(row_selection: &RowSelection, threshold: u64) 
     }
 
     (row_selection.selected_rows as u128) * 100 < (total_rows as u128) * (threshold as u128)
+}
+
+fn count_bitmap_false(bitmap: &MutableBitmap) -> u64 {
+    let mut false_count = 0;
+    for row in 0..bitmap.len() {
+        if !bitmap.get(row) {
+            false_count += 1;
+        }
+    }
+    false_count
+}
+
+fn record_bloom_watch(
+    stats: &RuntimeFilterStats,
+    column_name: &str,
+    column: Column,
+    bitmap: &MutableBitmap,
+) {
+    let Some(watch_values) = runtime_filter_watch_values(column_name) else {
+        return;
+    };
+
+    let column = column.remove_nullable();
+    let Column::String(column) = column else {
+        return;
+    };
+
+    let mut seen_rows = 0;
+    let mut rejected_rows = 0;
+    let mut seen_mask = 0;
+    let mut rejected_mask = 0;
+    let num_rows = column.len().min(bitmap.len());
+
+    for row in 0..num_rows {
+        let value = unsafe { column.index_unchecked(row) };
+        let Some(value_index) = watch_values.iter().position(|watch| *watch == value) else {
+            continue;
+        };
+
+        let value_mask = 1_u64 << value_index;
+        seen_rows += 1;
+        seen_mask |= value_mask;
+        if !bitmap.get(row) {
+            rejected_rows += 1;
+            rejected_mask |= value_mask;
+        }
+    }
+
+    if seen_rows > 0 || rejected_rows > 0 {
+        stats.record_bloom_watch(seen_rows, rejected_rows, seen_mask, rejected_mask);
+    }
+}
+
+fn runtime_filter_watch_values(column_name: &str) -> Option<&'static [&'static str]> {
+    match column_name {
+        "symbol" => Some(&[
+            "ASTERUSDT",
+            "AVAXUSDC",
+            "BTCUSDC",
+            "ETHUSDC",
+            "FETUSDC",
+            "KITEUSDC",
+            "PEPEUSDC",
+            "RAYUSDC",
+            "SOLUSDC",
+            "TAOUSDC",
+            "TRUMPUSDC",
+            "WLDUSDC",
+            "XLMUSDC",
+            "XRPUSDC",
+        ]),
+        "base_asset" => Some(&[
+            "ASTER", "AVAX", "BTC", "ETH", "FET", "KITE", "PEPE", "RAY", "SOL", "TAO", "TRUMP",
+            "WLD", "XLM", "XRP",
+        ]),
+        _ => None,
+    }
 }
 
 #[cfg(test)]

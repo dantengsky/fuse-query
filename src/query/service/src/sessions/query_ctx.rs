@@ -89,6 +89,7 @@ use databend_common_exception::ErrorCode;
 use databend_common_exception::Result;
 use databend_common_expression::DataBlock;
 use databend_common_expression::Expr;
+use databend_common_expression::FromData;
 use databend_common_expression::FunctionContext;
 use databend_common_expression::Scalar;
 #[cfg(feature = "storage-stage")]
@@ -96,6 +97,9 @@ use databend_common_expression::TableDataType;
 #[cfg(feature = "storage-stage")]
 use databend_common_expression::TableField;
 use databend_common_expression::TableSchema;
+use databend_common_expression::hash_util::hash_by_method_for_bloom;
+use databend_common_expression::types::DataType;
+use databend_common_expression::types::StringType;
 use databend_common_io::prelude::InputFormatSettings;
 use databend_common_io::prelude::OutputFormatSettings;
 use databend_common_license::license::Feature;
@@ -182,6 +186,75 @@ use crate::storages::Table;
 
 const MYSQL_VERSION: &str = "8.0.90";
 const COPIED_FILES_FILTER_BATCH_SIZE: usize = 1000;
+
+fn runtime_filter_watch_values(column_name: &str) -> Option<&'static [&'static str]> {
+    match column_name {
+        "symbol" => Some(&[
+            "ASTERUSDT",
+            "AVAXUSDC",
+            "BTCUSDC",
+            "ETHUSDC",
+            "FETUSDC",
+            "KITEUSDC",
+            "PEPEUSDC",
+            "RAYUSDC",
+            "SOLUSDC",
+            "TAOUSDC",
+            "TRUMPUSDC",
+            "WLDUSDC",
+            "XLMUSDC",
+            "XRPUSDC",
+        ]),
+        "base_asset" => Some(&[
+            "ASTER", "AVAX", "BTC", "ETH", "FET", "KITE", "PEPE", "RAY", "SOL", "TAO", "TRUMP",
+            "WLD", "XLM", "XRP",
+        ]),
+        _ => None,
+    }
+}
+
+fn runtime_filter_watch_build_diag(
+    column_name: &str,
+    filter: &RuntimeBloomFilter,
+) -> Option<String> {
+    let values = runtime_filter_watch_values(column_name)?;
+    Some(match runtime_filter_watch_missing_values(values, filter) {
+        Ok(missing) => format!(
+            "checked {}, missing values [{}]",
+            values.len(),
+            missing.join(",")
+        ),
+        Err(err) => format!("failed to hash watch values: {}", err),
+    })
+}
+
+fn runtime_filter_watch_missing_values(
+    values: &'static [&'static str],
+    filter: &RuntimeBloomFilter,
+) -> Result<Vec<&'static str>> {
+    let column = StringType::from_data(values.to_vec());
+    let method = DataBlock::choose_hash_method_with_types(&[DataType::String])?;
+    let num_rows = column.len();
+    let entries = &[column.into()];
+    let group_columns = entries.into();
+    let mut hashes = Vec::with_capacity(num_rows);
+    hash_by_method_for_bloom(&method, group_columns, num_rows, &mut hashes)?;
+
+    Ok(values
+        .iter()
+        .zip(hashes)
+        .filter_map(|(value, hash)| (!filter.check_hash(hash)).then_some(*value))
+        .collect())
+}
+
+fn runtime_filter_watch_mask_values(values: &[&str], mask: u64) -> String {
+    values
+        .iter()
+        .enumerate()
+        .filter_map(|(index, value)| ((mask & (1_u64 << index)) != 0).then_some(*value))
+        .collect::<Vec<_>>()
+        .join(",")
+}
 
 pub struct QueryContext {
     version: String,
@@ -679,6 +752,7 @@ impl QueryContext {
             filter_id: usize,
             probe_expr: String,
             bloom_column: Option<String>,
+            bloom_filter: Option<RuntimeBloomFilter>,
             has_bloom: bool,
             has_inlist: bool,
             has_min_max: bool,
@@ -705,6 +779,7 @@ impl QueryContext {
                     filter_id: entry.id,
                     probe_expr: entry.probe_expr.sql_display(),
                     bloom_column: entry.bloom.as_ref().map(|bloom| bloom.column_name.clone()),
+                    bloom_filter: entry.bloom.as_ref().map(|bloom| bloom.filter.clone()),
                     has_bloom: entry.bloom.is_some(),
                     has_inlist: entry.inlist.is_some(),
                     has_min_max: entry.min_max.is_some(),
@@ -738,6 +813,7 @@ impl QueryContext {
                     filter_id,
                     probe_expr,
                     bloom_column,
+                    bloom_filter,
                     has_bloom,
                     has_inlist,
                     has_min_max,
@@ -780,8 +856,16 @@ impl QueryContext {
                     )),
                 ];
 
-                if let Some(column) = bloom_column {
+                if let Some(column) = bloom_column.as_ref() {
                     detail_children.push(FormatTreeNode::new(format!("bloom column: {}", column)));
+                    if let Some(filter) = bloom_filter.as_ref() {
+                        if let Some(diag) = runtime_filter_watch_build_diag(column, filter) {
+                            detail_children.push(FormatTreeNode::new(format!(
+                                "RF-DIAG build watch: {}",
+                                diag
+                            )));
+                        }
+                    }
                 }
 
                 if has_bloom {
@@ -793,6 +877,23 @@ impl QueryContext {
                         "bloom time: {:?}",
                         Duration::from_nanos(stats.bloom_time_ns)
                     )));
+                    if let Some(column) = bloom_column.as_ref() {
+                        if let Some(watch_values) = runtime_filter_watch_values(column) {
+                            detail_children.push(FormatTreeNode::new(format!(
+                                "RF-DIAG scan watch: seen rows {}, rejected rows {}, seen values [{}], rejected values [{}]",
+                                stats.bloom_watch_seen_rows,
+                                stats.bloom_watch_rejected_rows,
+                                runtime_filter_watch_mask_values(
+                                    watch_values,
+                                    stats.bloom_watch_seen_mask
+                                ),
+                                runtime_filter_watch_mask_values(
+                                    watch_values,
+                                    stats.bloom_watch_rejected_mask
+                                )
+                            )));
+                        }
+                    }
                 }
 
                 if has_inlist || has_min_max {

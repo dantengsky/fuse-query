@@ -90,6 +90,10 @@ pub struct RuntimeFilterSpatial {
 pub struct RuntimeFilterStats {
     bloom_time_ns: AtomicU64,
     bloom_rows_filtered: AtomicU64,
+    bloom_watch_seen_rows: AtomicU64,
+    bloom_watch_rejected_rows: AtomicU64,
+    bloom_watch_seen_mask: AtomicU64,
+    bloom_watch_rejected_mask: AtomicU64,
     inlist_min_max_time_ns: AtomicU64,
     min_max_rows_filtered: AtomicU64,
     min_max_partitions_pruned: AtomicU64,
@@ -107,6 +111,23 @@ impl RuntimeFilterStats {
         self.bloom_time_ns.fetch_add(time_ns, Ordering::Relaxed);
         self.bloom_rows_filtered
             .fetch_add(rows_filtered, Ordering::Relaxed);
+    }
+
+    pub fn record_bloom_watch(
+        &self,
+        seen_rows: u64,
+        rejected_rows: u64,
+        seen_mask: u64,
+        rejected_mask: u64,
+    ) {
+        self.bloom_watch_seen_rows
+            .fetch_add(seen_rows, Ordering::Relaxed);
+        self.bloom_watch_rejected_rows
+            .fetch_add(rejected_rows, Ordering::Relaxed);
+        self.bloom_watch_seen_mask
+            .fetch_or(seen_mask, Ordering::Relaxed);
+        self.bloom_watch_rejected_mask
+            .fetch_or(rejected_mask, Ordering::Relaxed);
     }
 
     pub fn record_inlist_min_max(&self, time_ns: u64, rows_filtered: u64, partitions_pruned: u64) {
@@ -130,6 +151,10 @@ impl RuntimeFilterStats {
         RuntimeFilterStatsSnapshot {
             bloom_time_ns: self.bloom_time_ns.load(Ordering::Relaxed),
             bloom_rows_filtered: self.bloom_rows_filtered.load(Ordering::Relaxed),
+            bloom_watch_seen_rows: self.bloom_watch_seen_rows.load(Ordering::Relaxed),
+            bloom_watch_rejected_rows: self.bloom_watch_rejected_rows.load(Ordering::Relaxed),
+            bloom_watch_seen_mask: self.bloom_watch_seen_mask.load(Ordering::Relaxed),
+            bloom_watch_rejected_mask: self.bloom_watch_rejected_mask.load(Ordering::Relaxed),
             inlist_min_max_time_ns: self.inlist_min_max_time_ns.load(Ordering::Relaxed),
             min_max_rows_filtered: self.min_max_rows_filtered.load(Ordering::Relaxed),
             min_max_partitions_pruned: self.min_max_partitions_pruned.load(Ordering::Relaxed),
@@ -144,6 +169,10 @@ impl RuntimeFilterStats {
 pub struct RuntimeFilterStatsSnapshot {
     pub bloom_time_ns: u64,
     pub bloom_rows_filtered: u64,
+    pub bloom_watch_seen_rows: u64,
+    pub bloom_watch_rejected_rows: u64,
+    pub bloom_watch_seen_mask: u64,
+    pub bloom_watch_rejected_mask: u64,
     pub inlist_min_max_time_ns: u64,
     pub min_max_rows_filtered: u64,
     pub min_max_partitions_pruned: u64,
