@@ -619,84 +619,120 @@ impl SelectivityVisitor<'_> {
     fn compute_comparison(&mut self, op: ComparisonOp, func: &ExprCall) -> Result<Selectivity> {
         let left = &func.args[0];
         let right = &func.args[1];
+
+        // Direct (ColumnRef, Constant) match
         match (left, right) {
             (Expr::ColumnRef(column_ref), Expr::Constant(constant))
             | (Expr::Constant(constant), Expr::ColumnRef(column_ref)) => {
-                let column_index = column_ref.id.index;
-                if !self.column_stats.contains_key(&column_index) {
-                    // The column is derived column, give a small selectivity currently.
-                    // Need to improve it later.
-                    // Another case: column is from system table, such as numbers. We shouldn't use numbers() table to test cardinality estimation.
-                    return Ok(Selectivity::LowerBound);
-                }
-                let column_stat = &self.column_stats[&column_index];
                 let op = if left.is_constant() { op.reverse() } else { op };
-
-                let can_apply_constant_constraint = {
-                    use DataType::*;
-                    matches!(
-                        (
-                            column_ref.data_type.remove_nullable(),
-                            constant.data_type.remove_nullable(),
-                        ),
-                        (Number(_), Number(_))
-                            | (Boolean, Boolean)
-                            | (String, String)
-                            | (Binary, Binary)
-                            | (Date, Date)
-                            | (Timestamp, Timestamp)
-                            | (Decimal(_), Decimal(_))
-                    )
-                };
-                if !can_apply_constant_constraint {
-                    return self.derive_function_selectivity(func);
-                }
-                let Some(const_datum) = constant.scalar.clone().to_datum() else {
-                    return self.derive_function_selectivity(func);
-                };
-
-                let distorted_range = matches!(
-                    op,
-                    ComparisonOp::GT | ComparisonOp::GTE | ComparisonOp::LT | ComparisonOp::LTE
-                ) && column_stat
-                    .histogram
-                    .as_ref()
-                    .is_some_and(|histogram| histogram.is_range_distorted());
-                if matches!(self.constraint_context, ConstraintContext::And) {
-                    self.constraints.add(
-                        self.column_stats,
-                        column_index,
-                        ValueConstraint::from_comparison(op, const_datum.clone()),
-                    )?;
-                    if let Some(selectivity) =
-                        self.derive_top_n_equality_selectivity(column_index, op, &constant.scalar)?
-                    {
-                        return Ok(selectivity);
-                    }
-                    if distorted_range {
-                        return Ok(Selectivity::LowerBound);
-                    }
-                    return match self.derive_function_selectivity(func)? {
-                        Selectivity::Unknown => self.derive_materialized_constraint_selectivity(
-                            &Expr::FunctionCall(func.clone()),
-                        ),
-                        selectivity => Ok(selectivity),
-                    };
-                }
-                return if distorted_range {
-                    Ok(Selectivity::LowerBound)
-                } else if let Some(selectivity) =
-                    self.derive_top_n_equality_selectivity(column_index, op, &constant.scalar)?
-                {
-                    Ok(selectivity)
-                } else {
-                    self.derive_function_selectivity(func)
-                };
+                return self.apply_column_constant_comparison(column_ref, constant, op, func);
             }
             _ => (),
         }
 
+        // Peel one Cast layer and retry — handles nullable CAST wrapping from
+        // outer-join type promotion (e.g. `CAST(col AS Timestamp NULL) >= const`).
+        let peeled_left = if let Expr::Cast(cast) = left {
+            &*cast.expr
+        } else {
+            left
+        };
+        let peeled_right = if let Expr::Cast(cast) = right {
+            &*cast.expr
+        } else {
+            right
+        };
+        if !std::ptr::eq(peeled_left, left) || !std::ptr::eq(peeled_right, right) {
+            match (peeled_left, peeled_right) {
+                (Expr::ColumnRef(column_ref), Expr::Constant(constant))
+                | (Expr::Constant(constant), Expr::ColumnRef(column_ref)) => {
+                    let op = if peeled_left.is_constant() {
+                        op.reverse()
+                    } else {
+                        op
+                    };
+                    return self.apply_column_constant_comparison(column_ref, constant, op, func);
+                }
+                _ => (),
+            }
+        }
+
         self.derive_function_selectivity(func)
+    }
+
+    fn apply_column_constant_comparison(
+        &mut self,
+        column_ref: &databend_common_expression::ColumnRef<ColumnBinding>,
+        constant: &databend_common_expression::Constant,
+        op: ComparisonOp,
+        func: &ExprCall,
+    ) -> Result<Selectivity> {
+        let column_index = column_ref.id.index;
+        if !self.column_stats.contains_key(&column_index) {
+            return Ok(Selectivity::LowerBound);
+        }
+        let column_stat = &self.column_stats[&column_index];
+
+        let can_apply_constant_constraint = {
+            use DataType::*;
+            matches!(
+                (
+                    column_ref.data_type.remove_nullable(),
+                    constant.data_type.remove_nullable(),
+                ),
+                (Number(_), Number(_))
+                    | (Boolean, Boolean)
+                    | (String, String)
+                    | (Binary, Binary)
+                    | (Date, Date)
+                    | (Timestamp, Timestamp)
+                    | (Decimal(_), Decimal(_))
+            )
+        };
+        if !can_apply_constant_constraint {
+            return self.derive_function_selectivity(func);
+        }
+        let Some(const_datum) = constant.scalar.clone().to_datum() else {
+            return self.derive_function_selectivity(func);
+        };
+
+        let distorted_range = matches!(
+            op,
+            ComparisonOp::GT | ComparisonOp::GTE | ComparisonOp::LT | ComparisonOp::LTE
+        ) && column_stat
+            .histogram
+            .as_ref()
+            .is_some_and(|histogram| histogram.is_range_distorted());
+        if matches!(self.constraint_context, ConstraintContext::And) {
+            self.constraints.add(
+                self.column_stats,
+                column_index,
+                ValueConstraint::from_comparison(op, const_datum.clone()),
+            )?;
+            if let Some(selectivity) =
+                self.derive_top_n_equality_selectivity(column_index, op, &constant.scalar)?
+            {
+                return Ok(selectivity);
+            }
+            if distorted_range {
+                return Ok(Selectivity::LowerBound);
+            }
+            return match self.derive_function_selectivity(func)? {
+                Selectivity::Unknown => self.derive_materialized_constraint_selectivity(
+                    &Expr::FunctionCall(func.clone()),
+                ),
+                selectivity => Ok(selectivity),
+            };
+        }
+        if distorted_range {
+            Ok(Selectivity::LowerBound)
+        } else if let Some(selectivity) =
+            self.derive_top_n_equality_selectivity(column_index, op, &constant.scalar)?
+        {
+            Ok(selectivity)
+        } else {
+            self.derive_function_selectivity(func)
+        }
     }
 
     fn derive_top_n_equality_selectivity(

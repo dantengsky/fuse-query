@@ -411,12 +411,32 @@ impl Operator for Scan {
                 column_stats = sb.into_column_stats();
                 cardinality
             }
-            (Some(precise_cardinality), None) => precise_cardinality as f64,
+            (Some(precise_cardinality), None) => {
+                if let Some(preds) = &self.push_down_predicates {
+                    if !preds.is_empty() {
+                        let mut sb = SelectivityEstimator::new(
+                            column_stats,
+                            StatCardinality::exact(precise_cardinality),
+                        )
+                        .with_top_n(std::mem::take(&mut output_top_n));
+                        let c = sb.apply(preds)?;
+                        column_stats = sb.into_column_stats();
+                        c
+                    } else {
+                        precise_cardinality as f64
+                    }
+                } else {
+                    precise_cardinality as f64
+                }
+            }
             (_, _) => 0.0,
         };
 
-        // If prewhere is not none, we can't get precise cardinality
-        let precise_cardinality = if self.prewhere.is_none() && self.sample.is_none() {
+        // If prewhere or push_down_predicates is applied, we can't get precise cardinality
+        let precise_cardinality = if self.prewhere.is_none()
+            && self.push_down_predicates.as_ref().map_or(true, |p| p.is_empty())
+            && self.sample.is_none()
+        {
             precise_cardinality
         } else {
             None
