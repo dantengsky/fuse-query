@@ -484,6 +484,23 @@ impl ScalarExpr {
         has_subquery.has_subquery
     }
 
+    pub fn has_cast_expr(&self) -> bool {
+        struct HasCastVisitor {
+            has_cast: bool,
+        }
+
+        impl<'a> Visitor<'a> for HasCastVisitor {
+            fn visit_cast(&mut self, _: &'a CastExpr) -> Result<()> {
+                self.has_cast = true;
+                Ok(())
+            }
+        }
+
+        let mut visitor = HasCastVisitor { has_cast: false };
+        visitor.visit(self).unwrap();
+        visitor.has_cast
+    }
+
     pub fn has_set_returning_function(&self) -> bool {
         struct HasSetReturningFunctionVisitor {
             has_set_returning_function: bool,

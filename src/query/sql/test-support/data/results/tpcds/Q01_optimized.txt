@@ -50,25 +50,21 @@ Limit
                     │       │       │                                       ├── probe keys: [store_returns.sr_returned_date_sk (#96)]
                     │       │       │                                       ├── other filters: []
                     │       │       │                                       ├── Exchange(Broadcast)
-                    │       │       │                                       │   └── Filter
+                    │       │       │                                       │   └── Scan
+                    │       │       │                                       │       ├── table: default.date_dim (#5)
                     │       │       │                                       │       ├── filters: [eq(date_dim.d_year (#122), 2001)]
-                    │       │       │                                       │       └── Scan
-                    │       │       │                                       │           ├── table: default.date_dim (#5)
-                    │       │       │                                       │           ├── filters: [eq(date_dim.d_year (#122), 2001)]
-                    │       │       │                                       │           ├── order by: []
-                    │       │       │                                       │           └── limit: NONE
+                    │       │       │                                       │       ├── order by: []
+                    │       │       │                                       │       └── limit: NONE
                     │       │       │                                       └── Scan
                     │       │       │                                           ├── table: default.store_returns (#4)
                     │       │       │                                           ├── filters: []
                     │       │       │                                           ├── order by: []
                     │       │       │                                           └── limit: NONE
-                    │       │       └── Filter
+                    │       │       └── Scan
+                    │       │           ├── table: default.store (#2)
                     │       │           ├── filters: [eq(store.s_state (#73), 'TN')]
-                    │       │           └── Scan
-                    │       │               ├── table: default.store (#2)
-                    │       │               ├── filters: [eq(store.s_state (#73), 'TN')]
-                    │       │               ├── order by: []
-                    │       │               └── limit: NONE
+                    │       │           ├── order by: []
+                    │       │           └── limit: NONE
                     │       └── Aggregate(Final)
                     │           ├── group items: [store_returns.sr_customer_sk (#3) AS (#3), store_returns.sr_store_sk (#7) AS (#7)]
                     │           ├── aggregate functions: [sum(store_returns.sr_return_amt (#11)) AS (#48)]
@@ -84,13 +80,11 @@ Limit
                     │                           ├── probe keys: [store_returns.sr_returned_date_sk (#0)]
                     │                           ├── other filters: []
                     │                           ├── Exchange(Broadcast)
-                    │                           │   └── Filter
+                    │                           │   └── Scan
+                    │                           │       ├── table: default.date_dim (#1)
                     │                           │       ├── filters: [eq(date_dim.d_year (#26), 2001)]
-                    │                           │       └── Scan
-                    │                           │           ├── table: default.date_dim (#1)
-                    │                           │           ├── filters: [eq(date_dim.d_year (#26), 2001)]
-                    │                           │           ├── order by: []
-                    │                           │           └── limit: NONE
+                    │                           │       ├── order by: []
+                    │                           │       └── limit: NONE
                     │                           └── Scan
                     │                               ├── table: default.store_returns (#0)
                     │                               ├── filters: []

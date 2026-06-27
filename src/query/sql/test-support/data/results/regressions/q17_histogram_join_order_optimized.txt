@@ -32,13 +32,11 @@ Aggregate(Final)
                 │       │                       ├── filters: []
                 │       │                       ├── order by: []
                 │       │                       └── limit: NONE
-                │       └── Filter
+                │       └── Scan
+                │           ├── table: default.part (#1)
                 │           ├── filters: [eq(part.p_brand (#4), 'Brand#23'), eq(part.p_container (#5), 'MED BOX')]
-                │           └── Scan
-                │               ├── table: default.part (#1)
-                │               ├── filters: [eq(part.p_brand (#4), 'Brand#23'), eq(part.p_container (#5), 'MED BOX')]
-                │               ├── order by: []
-                │               └── limit: NONE
+                │           ├── order by: []
+                │           └── limit: NONE
                 └── Scan
                     ├── table: default.lineitem (#0)
                     ├── filters: []

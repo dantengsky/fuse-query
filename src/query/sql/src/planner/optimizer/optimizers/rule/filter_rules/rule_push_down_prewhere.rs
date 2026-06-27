@@ -266,6 +266,14 @@ impl RulePushDownPrewhere {
 
         // filter.predicates are already split by AND
         for pred in filter.predicates.iter() {
+            // Predicates containing CASTs (e.g., from outer-join nullable type
+            // promotion) should not go to prewhere — the two-phase column read
+            // with per-row CAST evaluation is significantly slower than a simple
+            // post-read filter. Keep them in the Filter node.
+            if pred.has_cast_expr() {
+                remaining_pred.push(pred.clone());
+                continue;
+            }
             match Self::collect_prewhere_columns(&metadata, scan.table_index, &table.schema(), pred)
             {
                 PrewherePredicateColumns::Supported(columns) => {
@@ -297,25 +305,19 @@ impl RulePushDownPrewhere {
 
         let scan_expr = SExpr::create_leaf(Arc::new(scan.into()));
 
-        // Always keep the Filter node above the scan. Prewhere provides early
-        // block-level filtering in the storage layer, but the physical Filter
-        // guarantees rows are filtered before reaching downstream operators
-        // (join, aggregate) even if the storage-level evaluation is incomplete
-        // (e.g., CAST-wrapped predicates from outer-join type promotion).
-        let all_predicates = if remaining_pred.is_empty() {
-            filter.predicates
+        if remaining_pred.is_empty() {
+            Ok(scan_expr)
         } else {
-            remaining_pred
-        };
-        Ok(SExpr::create_unary(
-            Arc::new(
-                Filter {
-                    predicates: all_predicates,
-                }
-                .into(),
-            ),
-            Arc::new(scan_expr),
-        ))
+            Ok(SExpr::create_unary(
+                Arc::new(
+                    Filter {
+                        predicates: remaining_pred,
+                    }
+                    .into(),
+                ),
+                Arc::new(scan_expr),
+            ))
+        }
     }
 }
 

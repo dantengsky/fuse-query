@@ -20,32 +20,26 @@ Sort
                             ├── probe keys: [orders.o_orderkey (#0)]
                             ├── other filters: []
                             ├── Exchange(Broadcast)
-                            │   └── Filter
+                            │   └── Scan
+                            │       ├── table: default.lineitem (#2)
                             │       ├── filters: [gt(lineitem.l_shipdate (#27), '1995-03-15')]
-                            │       └── Scan
-                            │           ├── table: default.lineitem (#2)
-                            │           ├── filters: [gt(lineitem.l_shipdate (#27), '1995-03-15')]
-                            │           ├── order by: []
-                            │           └── limit: NONE
+                            │       ├── order by: []
+                            │       └── limit: NONE
                             └── Join(Inner)
                                 ├── build keys: [customer.c_custkey (#9)]
                                 ├── probe keys: [orders.o_custkey (#1)]
                                 ├── other filters: []
                                 ├── Exchange(Broadcast)
-                                │   └── Filter
+                                │   └── Scan
+                                │       ├── table: default.customer (#1)
                                 │       ├── filters: [eq(customer.c_mktsegment (#15), 'BUILDING')]
-                                │       └── Scan
-                                │           ├── table: default.customer (#1)
-                                │           ├── filters: [eq(customer.c_mktsegment (#15), 'BUILDING')]
-                                │           ├── order by: []
-                                │           └── limit: NONE
+                                │       ├── order by: []
+                                │       └── limit: NONE
                                 └── Exchange(Hash)
                                     ├── Exchange(Hash): keys: [orders.o_custkey (#1)]
-                                    └── Filter
+                                    └── Scan
+                                        ├── table: default.orders (#0)
                                         ├── filters: [lt(orders.o_orderdate (#4), '1995-03-15')]
-                                        └── Scan
-                                            ├── table: default.orders (#0)
-                                            ├── filters: [lt(orders.o_orderdate (#4), '1995-03-15')]
-                                            ├── order by: []
-                                            └── limit: NONE
+                                        ├── order by: []
+                                        └── limit: NONE
 
