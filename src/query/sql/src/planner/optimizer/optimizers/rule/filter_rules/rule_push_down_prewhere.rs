@@ -245,6 +245,13 @@ impl RulePushDownPrewhere {
         if scan.update_stream_columns {
             return Ok(s_expr.clone());
         }
+
+        // If prewhere is already set, don't re-process (avoids infinite loop
+        // when the Filter is retained above the scan).
+        if scan.prewhere.is_some() {
+            return Ok(s_expr.clone());
+        }
+
         let metadata = self.metadata.read().clone();
 
         let table = metadata.table(scan.table_index).table();
@@ -290,19 +297,25 @@ impl RulePushDownPrewhere {
 
         let scan_expr = SExpr::create_leaf(Arc::new(scan.into()));
 
-        if remaining_pred.is_empty() {
-            Ok(scan_expr)
+        // Always keep the Filter node above the scan. Prewhere provides early
+        // block-level filtering in the storage layer, but the physical Filter
+        // guarantees rows are filtered before reaching downstream operators
+        // (join, aggregate) even if the storage-level evaluation is incomplete
+        // (e.g., CAST-wrapped predicates from outer-join type promotion).
+        let all_predicates = if remaining_pred.is_empty() {
+            filter.predicates
         } else {
-            Ok(SExpr::create_unary(
-                Arc::new(
-                    Filter {
-                        predicates: remaining_pred,
-                    }
-                    .into(),
-                ),
-                Arc::new(scan_expr),
-            ))
-        }
+            remaining_pred
+        };
+        Ok(SExpr::create_unary(
+            Arc::new(
+                Filter {
+                    predicates: all_predicates,
+                }
+                .into(),
+            ),
+            Arc::new(scan_expr),
+        ))
     }
 }
 

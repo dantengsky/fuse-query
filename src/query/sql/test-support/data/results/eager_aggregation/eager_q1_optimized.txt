@@ -19,9 +19,11 @@ Exchange(Merge)
                     │       ├── filters: []
                     │       ├── order by: []
                     │       └── limit: NONE
-                    └── Scan
-                        ├── table: default.lineitem (#0)
+                    └── Filter
                         ├── filters: [eq(lineitem.l_returnflag (#8), 'R')]
-                        ├── order by: []
-                        └── limit: NONE
+                        └── Scan
+                            ├── table: default.lineitem (#0)
+                            ├── filters: [eq(lineitem.l_returnflag (#8), 'R')]
+                            ├── order by: []
+                            └── limit: NONE
 
