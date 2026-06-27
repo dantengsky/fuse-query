@@ -126,6 +126,35 @@ impl Operator for EvalScalar {
     }
 
     fn derive_stats(&self, rel_expr: &RelExpr) -> Result<Arc<StatInfo>> {
-        rel_expr.derive_cardinality_child(0)
+        let stat_info = rel_expr.derive_cardinality_child(0)?;
+
+        // For simple CAST expressions (e.g. CAST(col AS Type NULL) from outer-join
+        // type promotion), propagate the source column's statistics to the derived
+        // column. This preserves NDV/min/max for join cardinality estimation.
+        let column_stats = &stat_info.statistics.column_stats;
+        let mut extra_stats = Vec::new();
+        for item in &self.items {
+            if let ScalarExpr::CastExpr(cast) = &item.scalar {
+                if let ScalarExpr::BoundColumnRef(col_ref) = cast.argument.as_ref() {
+                    let src_index = col_ref.column.index;
+                    if let Some(src_stat) = column_stats.get(&src_index) {
+                        extra_stats.push((item.index, src_stat.clone()));
+                    }
+                }
+            }
+        }
+
+        if extra_stats.is_empty() {
+            return Ok(stat_info);
+        }
+
+        let mut new_stats = stat_info.statistics.clone();
+        for (index, stat) in extra_stats {
+            new_stats.column_stats.entry(index).or_insert(stat);
+        }
+        Ok(Arc::new(StatInfo {
+            cardinality: stat_info.cardinality,
+            statistics: new_stats,
+        }))
     }
 }
