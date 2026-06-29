@@ -31,6 +31,26 @@ fn is_single_row(stat_info: &databend_common_sql::optimizer::ir::StatInfo) -> bo
     matches!(stat_info.statistics.precise_cardinality, Some(1)) || stat_info.cardinality == 1.0
 }
 
+fn is_precise_single_row(stat_info: &databend_common_sql::optimizer::ir::StatInfo) -> bool {
+    matches!(stat_info.statistics.precise_cardinality, Some(1))
+}
+
+fn single_join_scalar_side_is_precise_single_row(join: &Join, s_expr: &SExpr) -> Result<bool> {
+    match join.single_to_inner {
+        Some(JoinType::LeftSingle) => {
+            let right_rel_expr = RelExpr::with_s_expr(s_expr.right_child());
+            let right_stat_info = right_rel_expr.derive_cardinality()?;
+            Ok(is_precise_single_row(&right_stat_info))
+        }
+        Some(JoinType::RightSingle) => {
+            let left_rel_expr = RelExpr::with_s_expr(s_expr.left_child());
+            let left_stat_info = left_rel_expr.derive_cardinality()?;
+            Ok(is_precise_single_row(&left_stat_info))
+        }
+        _ => Ok(false),
+    }
+}
+
 enum PhysicalJoinType {
     Hash,
     // The first arg is range conditions, the second arg is other conditions
@@ -231,15 +251,14 @@ impl PhysicalPlanBuilder {
                 PhysicalJoinType::Hash => {
                     // When a LeftSingle/RightSingle join (scalar subquery) has no
                     // equi-conditions, the hash join executes as a cross join + filter.
-                    // The FROM_LEFT_SINGLE runtime check ("at most 1 build row per probe
-                    // row") fires during the cross-product matching phase — before the
-                    // filter is applied — and false-positives because in a cross join
-                    // every probe row matches all build rows. Clear single_to_inner so
-                    // the runtime doesn't enforce it in this context; the scalar guarantee
-                    // is already satisfied by construction (the aggregate always produces
-                    // exactly one row).
+                    // The single-join runtime check can fire during the cross-product
+                    // matching phase before the filter is applied. It is only safe to
+                    // clear that marker when the scalar side itself is proven to produce
+                    // exactly one row; an exact one-row outer/probe side says nothing
+                    // about the scalar subquery's cardinality.
                     let join = if join.equi_conditions.is_empty()
                         && join.single_to_inner.is_some()
+                        && single_join_scalar_side_is_precise_single_row(join, s_expr)?
                     {
                         let mut j = join.clone();
                         j.single_to_inner = None;
