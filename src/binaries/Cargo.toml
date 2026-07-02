@@ -25,7 +25,9 @@ clap = { workspace = true }
 databend-common-base = { workspace = true }
 databend-common-config = { workspace = true }
 databend-common-exception = { workspace = true }
+databend-common-expression = { workspace = true }
 databend-common-license = { workspace = true }
+databend-common-meta-app = { workspace = true }
 databend-common-meta-client = { workspace = true }
 databend-common-metrics = { workspace = true }
 databend-common-storage = { workspace = true }
@@ -57,6 +59,12 @@ test = false
 [[bin]]
 name = "table-meta-inspector"
 path = "tool/table_meta_inspector.rs"
+doctest = false
+test = false
+
+[[bin]]
+name = "coalesce-risk-analyzer-636"
+path = "tool/coalesce_risk_analyzer_636.rs"
 doctest = false
 test = false
 
