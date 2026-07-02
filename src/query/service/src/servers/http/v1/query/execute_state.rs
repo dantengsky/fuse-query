@@ -335,6 +335,7 @@ impl Executor {
                         SystemTime::now(),
                         Some(e.clone()),
                         false,
+                        &[],
                     )
                     .unwrap_or_else(|e| error!("Failed to write query_log: {:?}", e));
                 }

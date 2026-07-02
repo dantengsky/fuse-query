@@ -230,6 +230,9 @@ impl<W: AsyncWrite + Send + Sync + Unpin> AsyncMysqlShim<W> for InteractiveWorke
 
         let mut tracking_payload = ThreadTracker::new_tracking_payload();
         tracking_payload.query_id = Some(query_id_str.clone());
+        tracking_payload.io_stats = Some(std::sync::Arc::new(
+            databend_common_base::runtime::IoStats::default(),
+        ));
         tracking_payload.mem_stat = Some(MemStat::create(query_id_str.to_string()));
 
         tracking_payload
@@ -509,6 +512,9 @@ impl InteractiveWorkerBase {
 
         let mut tracking_payload = ThreadTracker::new_tracking_payload();
         tracking_payload.query_id = Some(query_id.clone());
+        tracking_payload.io_stats = Some(std::sync::Arc::new(
+            databend_common_base::runtime::IoStats::default(),
+        ));
         tracking_payload.mem_stat = Some(MemStat::create(query_id.clone()));
 
         let do_query = tracking_payload
