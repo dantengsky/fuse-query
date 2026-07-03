@@ -169,6 +169,13 @@ async fn run() -> Result<()> {
             current_user = record.sql_user.clone();
         }
 
+        if should_report_progress(summary.records, tool_args.progress_every) {
+            eprintln!(
+                "[planning] record={}, line_no={}",
+                summary.records, record.line_no
+            );
+        }
+
         match plan_record(&session, &record, tool_args.plan_timeout_ms).await {
             Ok(plan) => {
                 summary.planned += 1;
@@ -225,6 +232,10 @@ async fn run() -> Result<()> {
     writer.flush()?;
     print_summary(&summary);
     Ok(())
+}
+
+fn should_report_progress(records: usize, progress_every: usize) -> bool {
+    progress_every > 0 && (records == 1 || records % progress_every == 0)
 }
 
 fn split_args() -> Result<(ToolArgs, Vec<String>)> {
@@ -304,6 +315,7 @@ fn print_help() {
     );
     println!("  -o, --output <PATH>            JSONL findings output, omitted for stdout");
     println!("      --progress-every <N>       stderr progress interval, default 100, 0 disables");
+    println!("                                  prints the current record before planning it");
     println!("      --plan-timeout-ms <N>      per-query planner timeout, default 30000");
     println!("      --report-plan-failures     also emit PLAN_FAILED JSONL rows");
     println!();
@@ -435,11 +447,16 @@ async fn plan_record(
         let (plan, _) = planner.plan_sql(&sql).await?;
         Ok::<_, ErrorCode>(plan)
     };
+    let mut handle = tokio::spawn(future);
 
-    match timeout(Duration::from_millis(plan_timeout_ms), future).await {
-        Ok(Ok(plan)) => Ok(plan),
-        Ok(Err(cause)) => Err(cause.to_string()),
-        Err(_) => Err(format!("planner timed out after {plan_timeout_ms}ms")),
+    match timeout(Duration::from_millis(plan_timeout_ms), &mut handle).await {
+        Ok(Ok(Ok(plan))) => Ok(plan),
+        Ok(Ok(Err(cause))) => Err(cause.to_string()),
+        Ok(Err(cause)) => Err(format!("planner task failed: {cause}")),
+        Err(_) => {
+            handle.abort();
+            Err(format!("planner timed out after {plan_timeout_ms}ms"))
+        }
     }
 }
 
