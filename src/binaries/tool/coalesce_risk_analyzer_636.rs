@@ -20,10 +20,23 @@ use std::io::BufRead;
 use std::io::BufReader;
 use std::io::BufWriter;
 use std::io::Write;
+use std::sync::Arc;
 use std::time::Duration;
 
 use clap::Parser;
+use databend_common_ast::ast::Expr;
+use databend_common_ast::ast::Literal;
+use databend_common_ast::ast::Statement;
+use databend_common_ast::parser::parse_raw_insert_stmt;
+use databend_common_ast::parser::parse_raw_replace_stmt;
+use databend_common_ast::parser::parse_sql;
+use databend_common_ast::parser::token::Token;
+use databend_common_ast::parser::token::TokenKind;
+use databend_common_ast::parser::token::Tokenizer;
+use databend_common_ast::parser::Dialect;
 use databend_common_base::base::GlobalUniqName;
+use databend_common_catalog::catalog::CatalogManager;
+use databend_common_catalog::table_context::TableContext;
 use databend_common_config::Commands;
 use databend_common_config::Config;
 use databend_common_config::InnerConfig;
@@ -39,10 +52,12 @@ use databend_common_license::license_manager::OssLicenseManager;
 use databend_common_meta_app::principal::GrantObject;
 use databend_common_meta_app::principal::UserInfo;
 use databend_common_meta_app::principal::UserPrivilegeSet;
+use databend_query::sessions::QueryContext;
 use databend_query::sessions::Session;
 use databend_query::sessions::SessionManager;
 use databend_query::sessions::SessionType;
 use databend_query::sql::format_scalar;
+use databend_query::sql::get_query_kind;
 use databend_query::sql::optimizer::SExpr;
 use databend_query::sql::plans::Exchange;
 use databend_query::sql::plans::InsertInputSource;
@@ -50,8 +65,17 @@ use databend_query::sql::plans::Plan;
 use databend_query::sql::plans::RelOperator;
 use databend_query::sql::plans::ScalarExpr;
 use databend_query::sql::plans::WindowFuncType;
+use databend_query::sql::AggregateRewriter;
+use databend_query::sql::Binder;
+use databend_query::sql::CountSetOps;
+use databend_query::sql::DistinctToGroupBy;
+use databend_query::sql::Metadata;
+use databend_query::sql::NameResolutionContext;
 use databend_query::sql::Planner;
+use databend_query::sql::VariableNormalizer;
 use databend_query::GlobalServices;
+use derive_visitor::DriveMut;
+use parking_lot::RwLock;
 use serde::Serialize;
 use serde_json::json;
 use serde_json::Map;
@@ -71,6 +95,8 @@ const QUERY_INFO_FIELDS: &[&str] = &[
     "query_duration_ms",
     "query_parameterized_hash",
 ];
+const PROBE_INSERT_INITIAL_TOKENS: usize = 128;
+const PROBE_INSERT_MAX_TOKENS: usize = 128 * 8;
 
 #[derive(Debug)]
 struct ToolArgs {
@@ -79,6 +105,7 @@ struct ToolArgs {
     progress_every: usize,
     plan_timeout_ms: u64,
     report_plan_failures: bool,
+    optimized_plan: bool,
 }
 
 impl Default for ToolArgs {
@@ -89,6 +116,7 @@ impl Default for ToolArgs {
             progress_every: 100,
             plan_timeout_ms: 30_000,
             report_plan_failures: false,
+            optimized_plan: false,
         }
     }
 }
@@ -176,7 +204,14 @@ async fn run() -> Result<()> {
             );
         }
 
-        match plan_record(&session, &record, tool_args.plan_timeout_ms).await {
+        match plan_record(
+            &session,
+            &record,
+            tool_args.plan_timeout_ms,
+            tool_args.optimized_plan,
+        )
+        .await
+        {
             Ok(plan) => {
                 summary.planned += 1;
                 let mut evidence = Vec::new();
@@ -274,6 +309,9 @@ fn split_args() -> Result<(ToolArgs, Vec<String>)> {
             "--report-plan-failures" => {
                 tool_args.report_plan_failures = true;
             }
+            "--optimized-plan" => {
+                tool_args.optimized_plan = true;
+            }
             _ if arg.starts_with("--input=") => {
                 tool_args.input = Some(arg["--input=".len()..].to_string());
             }
@@ -318,6 +356,9 @@ fn print_help() {
     println!("                                  prints the current record before planning it");
     println!("      --plan-timeout-ms <N>      per-query planner timeout, default 30000");
     println!("      --report-plan-failures     also emit PLAN_FAILED JSONL rows");
+    println!(
+        "      --optimized-plan           run optimizer before analysis; default is bind-only"
+    );
     println!();
     println!("Databend query options are passed through, for example:");
     println!(
@@ -434,6 +475,7 @@ async fn plan_record(
     session: &std::sync::Arc<Session>,
     record: &QueryRecord,
     plan_timeout_ms: u64,
+    optimized_plan: bool,
 ) -> std::result::Result<Plan, String> {
     session.set_current_database(record.database.clone());
     let sql = record.sql.clone();
@@ -443,9 +485,13 @@ async fn plan_record(
     let future = async move {
         let context = session.create_query_context().await?;
         context.set_current_database(database).await?;
-        let mut planner = Planner::new(context);
-        let (plan, _) = planner.plan_sql(&sql).await?;
-        Ok::<_, ErrorCode>(plan)
+        if optimized_plan {
+            let mut planner = Planner::new(context);
+            let (plan, _) = planner.plan_sql(&sql).await?;
+            Ok::<_, ErrorCode>(plan)
+        } else {
+            bind_sql(context, &sql).await
+        }
     };
     let mut handle = tokio::spawn(future);
 
@@ -458,6 +504,162 @@ async fn plan_record(
             Err(format!("planner timed out after {plan_timeout_ms}ms"))
         }
     }
+}
+
+async fn bind_sql(ctx: Arc<QueryContext>, sql: &str) -> Result<Plan> {
+    let settings = ctx.get_settings();
+    let sql_dialect = settings.get_sql_dialect()?;
+    if sql_dialect == Dialect::PRQL {
+        let mut planner = Planner::new(ctx);
+        let (plan, _) = planner.plan_sql(sql).await?;
+        return Ok(plan);
+    }
+
+    let mut tokenizer = Tokenizer::new(sql).peekable();
+    let first_token = tokenizer
+        .peek()
+        .and_then(|token| Some(token.as_ref().ok()?.kind));
+    let is_insert_stmt = matches!(first_token, Some(TokenKind::INSERT)) && {
+        let mut probe = Tokenizer::new(sql);
+        let mut has_all_or_first = false;
+        for _ in 0..3 {
+            match probe.next() {
+                Some(Ok(token)) if matches!(token.kind, TokenKind::ALL | TokenKind::FIRST) => {
+                    has_all_or_first = true;
+                    break;
+                }
+                Some(Ok(_)) => {}
+                _ => break,
+            }
+        }
+        !has_all_or_first
+    };
+    let is_replace_stmt = matches!(first_token, Some(TokenKind::REPLACE));
+    let is_insert_or_replace_stmt = is_insert_stmt || is_replace_stmt;
+    let mut tokens: Vec<Token> = if is_insert_or_replace_stmt {
+        (&mut tokenizer)
+            .take(PROBE_INSERT_INITIAL_TOKENS)
+            .take_while(|token| token.is_ok())
+            .chain(std::iter::once(Ok(Token::new_eoi(sql))))
+            .collect::<databend_common_ast::Result<_>>()
+            .unwrap()
+    } else {
+        (&mut tokenizer).collect::<databend_common_ast::Result<_>>()?
+    };
+
+    loop {
+        let res = bind_tokens(
+            ctx.clone(),
+            &tokens,
+            sql_dialect,
+            is_insert_stmt,
+            is_replace_stmt,
+        )
+        .await;
+        let mut maybe_partial_insert = false;
+        if is_insert_or_replace_stmt && matches!(tokenizer.peek(), Some(Ok(_))) {
+            if let Ok(Plan::Insert(insert)) = &res {
+                if matches!(&insert.source, InsertInputSource::SelectPlan(_)) {
+                    maybe_partial_insert = true;
+                }
+            }
+        }
+
+        if maybe_partial_insert || (res.is_err() && matches!(tokenizer.peek(), Some(Ok(_)))) {
+            tokens.pop();
+            if tokens.len() < PROBE_INSERT_MAX_TOKENS {
+                let iter = (&mut tokenizer)
+                    .take(tokens.len() * 2)
+                    .take_while(|token| token.is_ok())
+                    .map(|token| token.unwrap())
+                    .chain(std::iter::once(Token::new_eoi(sql)));
+                tokens.extend(iter);
+            } else {
+                let iter = (&mut tokenizer)
+                    .take_while(|token| token.is_ok())
+                    .map(|token| token.unwrap())
+                    .chain(std::iter::once(Token::new_eoi(sql)));
+                tokens.extend(iter);
+            }
+        } else {
+            return res;
+        }
+    }
+}
+
+async fn bind_tokens(
+    ctx: Arc<QueryContext>,
+    tokens: &[Token<'_>],
+    sql_dialect: Dialect,
+    is_insert_stmt: bool,
+    is_replace_stmt: bool,
+) -> Result<Plan> {
+    let mut stmt = if is_insert_stmt {
+        parse_raw_insert_stmt(tokens, sql_dialect)?
+    } else if is_replace_stmt {
+        parse_raw_replace_stmt(tokens, sql_dialect)?
+    } else {
+        parse_sql(tokens, sql_dialect)?.0
+    };
+
+    rewrite_statement(&ctx, &mut stmt)?;
+
+    let settings = ctx.get_settings();
+    let name_resolution_ctx = NameResolutionContext::try_from(settings.as_ref())?;
+    let metadata = Arc::new(RwLock::new(Metadata::default()));
+    let binder = Binder::new(
+        ctx.clone(),
+        CatalogManager::instance(),
+        name_resolution_ctx,
+        metadata,
+    );
+
+    ctx.attach_query_str(get_query_kind(&stmt), stmt.to_mask_sql());
+    let plan = binder.bind(&stmt).await?;
+    ctx.attach_query_str(get_query_kind(&stmt), stmt.to_mask_sql());
+    Ok(plan)
+}
+
+fn rewrite_statement(ctx: &Arc<QueryContext>, stmt: &mut Statement) -> Result<()> {
+    let settings = ctx.get_settings();
+    let name_resolution_ctx = NameResolutionContext::try_from(settings.as_ref())?;
+
+    let mut variable_normalizer = VariableNormalizer::new(&name_resolution_ctx, ctx.clone());
+    stmt.drive_mut(&mut variable_normalizer);
+    variable_normalizer.render_error()?;
+
+    stmt.drive_mut(&mut DistinctToGroupBy::default());
+    stmt.drive_mut(&mut AggregateRewriter);
+
+    let mut set_ops_counter = CountSetOps::default();
+    stmt.drive_mut(&mut set_ops_counter);
+    let max_set_ops = settings.get_max_set_operator_count()?;
+    if max_set_ops < set_ops_counter.count as u64 {
+        return Err(ErrorCode::SyntaxException(format!(
+            "The number of set operations: {} exceeds the limit: {}",
+            set_ops_counter.count, max_set_ops
+        )));
+    }
+
+    add_max_rows_limit(ctx, stmt)?;
+    Ok(())
+}
+
+fn add_max_rows_limit(ctx: &Arc<QueryContext>, statement: &mut Statement) -> Result<()> {
+    let max_rows = ctx.get_settings().get_max_result_rows()?;
+    if max_rows == 0 {
+        return Ok(());
+    }
+
+    if let Statement::Query(query) = statement {
+        if query.limit.is_empty() {
+            query.limit = vec![Expr::Literal {
+                span: None,
+                value: Literal::UInt64(max_rows),
+            }];
+        }
+    }
+    Ok(())
 }
 
 fn analyze_plan(plan: &Plan, path: &str, findings: &mut Vec<Evidence>) {

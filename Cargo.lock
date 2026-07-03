@@ -3102,7 +3102,9 @@ name = "databend-binaries"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "databend-common-ast",
  "databend-common-base",
+ "databend-common-catalog",
  "databend-common-config",
  "databend-common-exception",
  "databend-common-expression",
@@ -3116,9 +3118,11 @@ dependencies = [
  "databend-enterprise-query",
  "databend-query",
  "databend-storages-common-table-meta",
+ "derive-visitor",
  "limits-rs",
  "log",
  "opendal",
+ "parking_lot 0.12.3",
  "serde",
  "serde_json",
  "serfig",
