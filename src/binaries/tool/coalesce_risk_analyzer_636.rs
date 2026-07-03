@@ -22,11 +22,13 @@ use std::io::BufWriter;
 use std::io::Write;
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
 
 use clap::Parser;
 use databend_common_ast::ast::Expr;
 use databend_common_ast::ast::Literal;
 use databend_common_ast::ast::Statement;
+use databend_common_ast::ast::UnaryOperator;
 use databend_common_ast::parser::parse_raw_insert_stmt;
 use databend_common_ast::parser::parse_raw_replace_stmt;
 use databend_common_ast::parser::parse_sql;
@@ -75,7 +77,9 @@ use databend_query::sql::NameResolutionContext;
 use databend_query::sql::Planner;
 use databend_query::sql::VariableNormalizer;
 use databend_query::GlobalServices;
+use derive_visitor::Drive;
 use derive_visitor::DriveMut;
+use derive_visitor::Visitor;
 use parking_lot::RwLock;
 use serde::Serialize;
 use serde_json::json;
@@ -106,8 +110,10 @@ struct ToolArgs {
     output: Option<String>,
     progress_every: usize,
     plan_timeout_ms: u64,
+    slow_record_ms: u64,
     report_plan_failures: bool,
     optimized_plan: bool,
+    ast_prefilter: bool,
 }
 
 impl Default for ToolArgs {
@@ -117,8 +123,10 @@ impl Default for ToolArgs {
             output: None,
             progress_every: 100,
             plan_timeout_ms: 30_000,
+            slow_record_ms: 1_000,
             report_plan_failures: false,
             optimized_plan: false,
+            ast_prefilter: true,
         }
     }
 }
@@ -152,6 +160,7 @@ struct Summary {
     skipped_bad_lines: usize,
     planned: usize,
     plan_failed: usize,
+    skipped_no_candidate: usize,
     findings: usize,
     high: usize,
     plan_failed_summary: BTreeMap<String, usize>,
@@ -232,15 +241,30 @@ async fn run() -> Result<()> {
             );
         }
 
-        match plan_record(
+        let plan_start = Instant::now();
+        let plan_result = plan_record(
             &session,
             &record,
             tool_args.plan_timeout_ms,
             tool_args.optimized_plan,
+            tool_args.ast_prefilter,
         )
-        .await
+        .await;
+        let plan_elapsed = plan_start.elapsed();
+        if tool_args.slow_record_ms > 0
+            && plan_elapsed >= Duration::from_millis(tool_args.slow_record_ms)
         {
-            Ok(plan) => {
+            eprintln!(
+                "[slow] record={}, line_no={}, elapsed_ms={}, mode={}",
+                summary.records,
+                record.line_no,
+                plan_elapsed.as_millis(),
+                plan_mode(&tool_args)
+            );
+        }
+
+        match plan_result {
+            Ok(Some(plan)) => {
                 summary.planned += 1;
                 let mut evidence = Vec::new();
                 analyze_plan(&plan, "plan", &mut evidence);
@@ -265,6 +289,9 @@ async fn run() -> Result<()> {
                     writer.write_all(b"\n")?;
                 }
             }
+            Ok(None) => {
+                summary.skipped_no_candidate += 1;
+            }
             Err(cause) => {
                 summary.plan_failed += 1;
                 *summary
@@ -282,8 +309,9 @@ async fn run() -> Result<()> {
 
         if tool_args.progress_every > 0 && summary.records % tool_args.progress_every == 0 {
             eprintln!(
-                "[progress] records={}, planned={}, findings={}, high={}, plan_failed={}",
+                "[progress] records={}, skipped_no_candidate={}, planned={}, findings={}, high={}, plan_failed={}",
                 summary.records,
+                summary.skipped_no_candidate,
                 summary.planned,
                 summary.findings,
                 summary.high,
@@ -299,6 +327,14 @@ async fn run() -> Result<()> {
 
 fn should_report_progress(records: usize, progress_every: usize) -> bool {
     progress_every > 0 && (records == 1 || records % progress_every == 0)
+}
+
+fn plan_mode(args: &ToolArgs) -> &'static str {
+    if args.optimized_plan {
+        "optimized-plan"
+    } else {
+        "bind-only"
+    }
 }
 
 fn split_args() -> Result<(ToolArgs, Vec<String>)> {
@@ -334,11 +370,20 @@ fn split_args() -> Result<(ToolArgs, Vec<String>)> {
                         ErrorCode::InvalidConfig(format!("invalid --plan-timeout-ms: {e}"))
                     })?;
             }
+            "--slow-record-ms" => {
+                tool_args.slow_record_ms =
+                    next_arg_value(&arg, &mut args)?.parse().map_err(|e| {
+                        ErrorCode::InvalidConfig(format!("invalid --slow-record-ms: {e}"))
+                    })?;
+            }
             "--report-plan-failures" => {
                 tool_args.report_plan_failures = true;
             }
             "--optimized-plan" => {
                 tool_args.optimized_plan = true;
+            }
+            "--no-ast-prefilter" => {
+                tool_args.ast_prefilter = false;
             }
             _ if arg.starts_with("--input=") => {
                 tool_args.input = Some(arg["--input=".len()..].to_string());
@@ -356,6 +401,12 @@ fn split_args() -> Result<(ToolArgs, Vec<String>)> {
                 tool_args.plan_timeout_ms =
                     arg["--plan-timeout-ms=".len()..].parse().map_err(|e| {
                         ErrorCode::InvalidConfig(format!("invalid --plan-timeout-ms: {e}"))
+                    })?;
+            }
+            _ if arg.starts_with("--slow-record-ms=") => {
+                tool_args.slow_record_ms =
+                    arg["--slow-record-ms=".len()..].parse().map_err(|e| {
+                        ErrorCode::InvalidConfig(format!("invalid --slow-record-ms: {e}"))
                     })?;
             }
             _ => databend_args.push(arg),
@@ -383,9 +434,15 @@ fn print_help() {
     println!("      --progress-every <N>       stderr progress interval, default 100, 0 disables");
     println!("                                  prints the current record before planning it");
     println!("      --plan-timeout-ms <N>      per-query planner timeout, default 30000");
+    println!(
+        "      --slow-record-ms <N>      print slow record timing to stderr, default 1000, 0 disables"
+    );
     println!("      --report-plan-failures     also emit PLAN_FAILED JSONL rows");
     println!(
         "      --optimized-plan           run optimizer before analysis; default is bind-only"
+    );
+    println!(
+        "      --no-ast-prefilter         bind every parsed SQL instead of only candidate coalesce calls"
     );
     println!();
     println!("Databend query options are passed through, for example:");
@@ -504,7 +561,8 @@ async fn plan_record(
     record: &QueryRecord,
     plan_timeout_ms: u64,
     optimized_plan: bool,
-) -> std::result::Result<Plan, String> {
+    ast_prefilter: bool,
+) -> std::result::Result<Option<Plan>, String> {
     session.set_current_database(record.database.clone());
     let sql = record.sql.clone();
     let database = record.database.clone();
@@ -516,9 +574,9 @@ async fn plan_record(
         if optimized_plan {
             let mut planner = Planner::new(context);
             let (plan, _) = planner.plan_sql(&sql).await?;
-            Ok::<_, ErrorCode>(plan)
+            Ok::<_, ErrorCode>(Some(plan))
         } else {
-            bind_sql(context, &sql).await
+            bind_sql(context, &sql, ast_prefilter).await
         }
     };
     let mut handle = tokio::spawn(future);
@@ -534,13 +592,13 @@ async fn plan_record(
     }
 }
 
-async fn bind_sql(ctx: Arc<QueryContext>, sql: &str) -> Result<Plan> {
+async fn bind_sql(ctx: Arc<QueryContext>, sql: &str, ast_prefilter: bool) -> Result<Option<Plan>> {
     let settings = ctx.get_settings();
     let sql_dialect = settings.get_sql_dialect()?;
     if sql_dialect == Dialect::PRQL {
         let mut planner = Planner::new(ctx);
         let (plan, _) = planner.plan_sql(sql).await?;
-        return Ok(plan);
+        return Ok(Some(plan));
     }
 
     let mut tokenizer = Tokenizer::new(sql).peekable();
@@ -582,11 +640,12 @@ async fn bind_sql(ctx: Arc<QueryContext>, sql: &str) -> Result<Plan> {
             sql_dialect,
             is_insert_stmt,
             is_replace_stmt,
+            ast_prefilter,
         )
         .await;
         let mut maybe_partial_insert = false;
         if is_insert_or_replace_stmt && matches!(tokenizer.peek(), Some(Ok(_))) {
-            if let Ok(Plan::Insert(insert)) = &res {
+            if let Ok(Some(Plan::Insert(insert))) = &res {
                 if matches!(&insert.source, InsertInputSource::SelectPlan(_)) {
                     maybe_partial_insert = true;
                 }
@@ -621,7 +680,8 @@ async fn bind_tokens(
     sql_dialect: Dialect,
     is_insert_stmt: bool,
     is_replace_stmt: bool,
-) -> Result<Plan> {
+    ast_prefilter: bool,
+) -> Result<Option<Plan>> {
     let mut stmt = if is_insert_stmt {
         parse_raw_insert_stmt(tokens, sql_dialect)?
     } else if is_replace_stmt {
@@ -629,6 +689,10 @@ async fn bind_tokens(
     } else {
         parse_sql(tokens, sql_dialect)?.0
     };
+
+    if ast_prefilter && !has_candidate_coalesce(&stmt) {
+        return Ok(None);
+    }
 
     rewrite_statement(&ctx, &mut stmt)?;
 
@@ -645,7 +709,54 @@ async fn bind_tokens(
     ctx.attach_query_str(get_query_kind(&stmt), stmt.to_mask_sql());
     let plan = binder.bind(&stmt).await?;
     ctx.attach_query_str(get_query_kind(&stmt), stmt.to_mask_sql());
-    Ok(plan)
+    Ok(Some(plan))
+}
+
+fn has_candidate_coalesce(stmt: &Statement) -> bool {
+    let mut visitor = CandidateCoalesceVisitor::default();
+    stmt.drive(&mut visitor);
+    visitor.found
+}
+
+#[derive(Default, Visitor)]
+#[visitor(Expr(enter))]
+struct CandidateCoalesceVisitor {
+    found: bool,
+}
+
+impl CandidateCoalesceVisitor {
+    fn enter_expr(&mut self, expr: &Expr) {
+        if self.found {
+            return;
+        }
+
+        let Expr::FunctionCall { func, .. } = expr else {
+            return;
+        };
+        if !func.name.name.eq_ignore_ascii_case("coalesce") {
+            return;
+        }
+
+        self.found = func.args.iter().skip(1).any(is_integer_literal_expr);
+    }
+}
+
+fn is_integer_literal_expr(expr: &Expr) -> bool {
+    match expr {
+        Expr::Literal {
+            value: Literal::UInt64(_),
+            ..
+        } => true,
+        Expr::UnaryOp { op, expr, .. }
+            if matches!(op, UnaryOperator::Plus | UnaryOperator::Minus) =>
+        {
+            matches!(expr.as_ref(), Expr::Literal {
+                value: Literal::UInt64(_),
+                ..
+            })
+        }
+        _ => false,
+    }
 }
 
 fn rewrite_statement(ctx: &Arc<QueryContext>, stmt: &mut Statement) -> Result<()> {
@@ -1385,9 +1496,10 @@ fn error_category(cause: &str) -> String {
 
 fn print_summary(summary: &Summary) {
     eprintln!(
-        "[summary] records={}, skipped_bad_lines={}, planned={}, findings={}, high={}, plan_failed={}",
+        "[summary] records={}, skipped_bad_lines={}, skipped_no_candidate={}, planned={}, findings={}, high={}, plan_failed={}",
         summary.records,
         summary.skipped_bad_lines,
+        summary.skipped_no_candidate,
         summary.planned,
         summary.findings,
         summary.high,
