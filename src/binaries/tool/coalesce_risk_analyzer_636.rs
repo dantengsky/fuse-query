@@ -287,14 +287,11 @@ async fn run() -> Result<()> {
                 analyze_plan(&plan, "plan", &mut evidence);
 
                 for item in evidence {
-                    let risk =
-                        if item.coalesce_like_rewrite && !item.decimal_context_exprs.is_empty() {
-                            "HIGH_636_STRING_TO_INTEGER_CAST"
-                        } else if item.coalesce_like_rewrite {
-                            "POSSIBLE_636_COALESCE_STRING_TO_INTEGER_CAST"
-                        } else {
-                            "POSSIBLE_STRING_TO_INTEGER_CAST_IN_DECIMAL_CONTEXT"
-                        };
+                    let risk = if item.coalesce_like_rewrite {
+                        "HIGH_636_STRING_TO_INTEGER_CAST"
+                    } else {
+                        "POSSIBLE_STRING_TO_INTEGER_CAST_IN_DECIMAL_CONTEXT"
+                    };
 
                     if risk.starts_with("HIGH_") {
                         summary.high += 1;
