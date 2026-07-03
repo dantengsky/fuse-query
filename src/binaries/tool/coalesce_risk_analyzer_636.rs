@@ -710,7 +710,7 @@ async fn bind_tokens(
         parse_sql(tokens, sql_dialect)?.0
     };
 
-    if ast_prefilter && !has_candidate_coalesce(&stmt) {
+    if ast_prefilter && !has_candidate_coalesce(&stmt) && !has_coalesce_family_token(tokens) {
         return Ok(None);
     }
 
@@ -753,7 +753,7 @@ impl CandidateCoalesceVisitor {
         let Expr::FunctionCall { func, .. } = expr else {
             return;
         };
-        if !func.name.name.eq_ignore_ascii_case("coalesce") {
+        if !is_coalesce_family_name(&func.name.name) {
             return;
         }
 
@@ -777,6 +777,18 @@ fn is_integer_literal_expr(expr: &Expr) -> bool {
         }
         _ => false,
     }
+}
+
+fn has_coalesce_family_token(tokens: &[Token<'_>]) -> bool {
+    tokens
+        .iter()
+        .any(|token| matches!(token.kind, TokenKind::COALESCE | TokenKind::IFNULL))
+}
+
+fn is_coalesce_family_name(name: &str) -> bool {
+    name.eq_ignore_ascii_case("coalesce")
+        || name.eq_ignore_ascii_case("ifnull")
+        || name.eq_ignore_ascii_case("nvl")
 }
 
 fn rewrite_statement(ctx: &Arc<QueryContext>, stmt: &mut Statement) -> Result<()> {
