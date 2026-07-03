@@ -114,6 +114,7 @@ struct ToolArgs {
     report_plan_failures: bool,
     optimized_plan: bool,
     ast_prefilter: bool,
+    context_cache: bool,
 }
 
 impl Default for ToolArgs {
@@ -127,6 +128,7 @@ impl Default for ToolArgs {
             report_plan_failures: false,
             optimized_plan: false,
             ast_prefilter: true,
+            context_cache: true,
         }
     }
 }
@@ -204,6 +206,7 @@ async fn run() -> Result<()> {
 
     let session = create_session("root").await?;
     let mut current_user = "root".to_string();
+    let mut cached_context: Option<Arc<QueryContext>> = None;
 
     let mut reader = open_input(&tool_args)?;
     let mut writer = open_output(&tool_args)?;
@@ -226,6 +229,7 @@ async fn run() -> Result<()> {
         if current_user != record.sql_user {
             set_session_user(&session, &record.sql_user).await?;
             current_user = record.sql_user.clone();
+            cached_context = None;
         }
 
         if should_report_progress(summary.records, tool_args.progress_every) {
@@ -241,9 +245,22 @@ async fn run() -> Result<()> {
             );
         }
 
+        let context = if tool_args.context_cache {
+            match &cached_context {
+                Some(context) => context.clone(),
+                None => {
+                    let context = session.create_query_context().await?;
+                    cached_context = Some(context.clone());
+                    context
+                }
+            }
+        } else {
+            session.create_query_context().await?
+        };
+
         let plan_start = Instant::now();
         let plan_result = plan_record(
-            &session,
+            context,
             &record,
             tool_args.plan_timeout_ms,
             tool_args.optimized_plan,
@@ -385,6 +402,9 @@ fn split_args() -> Result<(ToolArgs, Vec<String>)> {
             "--no-ast-prefilter" => {
                 tool_args.ast_prefilter = false;
             }
+            "--no-context-cache" => {
+                tool_args.context_cache = false;
+            }
             _ if arg.starts_with("--input=") => {
                 tool_args.input = Some(arg["--input=".len()..].to_string());
             }
@@ -444,6 +464,7 @@ fn print_help() {
     println!(
         "      --no-ast-prefilter         bind every parsed SQL instead of only candidate coalesce calls"
     );
+    println!("      --no-context-cache         create a fresh query context for each input record");
     println!();
     println!("Databend query options are passed through, for example:");
     println!(
@@ -557,20 +578,19 @@ fn parse_record(line_no: usize, line: &str) -> Option<QueryRecord> {
 }
 
 async fn plan_record(
-    session: &std::sync::Arc<Session>,
+    context: Arc<QueryContext>,
     record: &QueryRecord,
     plan_timeout_ms: u64,
     optimized_plan: bool,
     ast_prefilter: bool,
 ) -> std::result::Result<Option<Plan>, String> {
-    session.set_current_database(record.database.clone());
     let sql = record.sql.clone();
     let database = record.database.clone();
-    let session = session.clone();
 
     let future = async move {
-        let context = session.create_query_context().await?;
-        context.set_current_database(database).await?;
+        if context.get_current_database() != database {
+            context.set_current_database(database).await?;
+        }
         if optimized_plan {
             let mut planner = Planner::new(context);
             let (plan, _) = planner.plan_sql(&sql).await?;
