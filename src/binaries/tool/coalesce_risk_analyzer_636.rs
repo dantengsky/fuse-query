@@ -35,6 +35,7 @@ use databend_common_ast::parser::token::TokenKind;
 use databend_common_ast::parser::token::Tokenizer;
 use databend_common_ast::parser::Dialect;
 use databend_common_base::base::GlobalUniqName;
+use databend_common_base::runtime::ThreadTracker;
 use databend_common_catalog::catalog::CatalogManager;
 use databend_common_catalog::table_context::TableContext;
 use databend_common_config::Commands;
@@ -97,6 +98,7 @@ const QUERY_INFO_FIELDS: &[&str] = &[
 ];
 const PROBE_INSERT_INITIAL_TOKENS: usize = 128;
 const PROBE_INSERT_MAX_TOKENS: usize = 128 * 8;
+const RUNTIME_WORKER_STACK_SIZE: usize = 32 * 1024 * 1024;
 
 #[derive(Debug)]
 struct ToolArgs {
@@ -156,11 +158,31 @@ struct Summary {
 }
 
 fn main() {
-    if let Err(cause) = databend_common_base::runtime::Runtime::with_default_worker_threads()
-        .and_then(|rt| rt.block_on(run()))
-    {
+    if let Err(cause) = run_main() {
         eprintln!("coalesce-risk-analyzer-636 failed: {:?}", cause);
         std::process::exit(cause.code() as i32);
+    }
+}
+
+fn run_main() -> Result<()> {
+    ensure_runtime_stack_env();
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_stack_size(RUNTIME_WORKER_STACK_SIZE)
+        .on_thread_start(ThreadTracker::init)
+        .build()
+        .map_err(|e| ErrorCode::TokioError(e.to_string()))?;
+
+    runtime.block_on(run())
+}
+
+fn ensure_runtime_stack_env() {
+    let current = env::var("RUST_MIN_STACK")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok());
+    if current.map_or(true, |value| value < RUNTIME_WORKER_STACK_SIZE) {
+        env::set_var("RUST_MIN_STACK", RUNTIME_WORKER_STACK_SIZE.to_string());
     }
 }
 
@@ -199,8 +221,14 @@ async fn run() -> Result<()> {
 
         if should_report_progress(summary.records, tool_args.progress_every) {
             eprintln!(
-                "[planning] record={}, line_no={}",
-                summary.records, record.line_no
+                "[planning] record={}, line_no={}, mode={}",
+                summary.records,
+                record.line_no,
+                if tool_args.optimized_plan {
+                    "optimized-plan"
+                } else {
+                    "bind-only"
+                }
             );
         }
 
