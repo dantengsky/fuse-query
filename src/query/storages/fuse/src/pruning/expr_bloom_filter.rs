@@ -18,6 +18,7 @@ use databend_common_expression::Column;
 use databend_common_expression::DataBlock;
 use databend_common_expression::hash_util::hash_by_method_for_bloom;
 use databend_common_expression::types::MutableBitmap;
+use log::warn;
 
 pub struct ExprBloomFilter<'a> {
     filter: &'a Sbbf,
@@ -33,12 +34,35 @@ impl<'a> ExprBloomFilter<'a> {
         let data_type = column.data_type();
         let num_rows = column.len();
         let method = DataBlock::choose_hash_method_with_types(&[data_type.clone()])?;
-        let entries = &[column.into()];
+        let entries = &[column.clone().into()];
         let group_columns = entries.into();
         let mut hashes = Vec::with_capacity(num_rows);
         hash_by_method_for_bloom(&method, group_columns, num_rows, &mut hashes)?;
         let iter = hashes.iter().map(|&hash| self.filter.check_hash(hash));
         // SAFETY: iter length equals hashes.len()
-        Ok(unsafe { MutableBitmap::from_trusted_len_iter_unchecked(iter) })
+        let bitmap = unsafe { MutableBitmap::from_trusted_len_iter_unchecked(iter) };
+
+        let rejected = bitmap.null_count();
+        if rejected > 0 && rejected < 64 {
+            let mut samples = Vec::with_capacity(rejected.min(8));
+            for (i, hash) in hashes.iter().enumerate() {
+                if !bitmap.get(i) {
+                    let val = column.index(i);
+                    samples.push(format!("row{}:val={:?},hash={}", i, val, hash));
+                    if samples.len() >= 8 {
+                        break;
+                    }
+                }
+            }
+            warn!(
+                "bloom_rf_diag: type={:?} total={} rejected={} samples=[{}]",
+                data_type,
+                num_rows,
+                rejected,
+                samples.join("; ")
+            );
+        }
+
+        Ok(bitmap)
     }
 }

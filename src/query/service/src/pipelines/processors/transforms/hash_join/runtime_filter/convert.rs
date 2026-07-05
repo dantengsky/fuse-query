@@ -288,6 +288,14 @@ async fn build_bloom_filter(
     let column_name = probe_column.id.to_string();
     let total_items = bloom.len();
 
+    log::info!(
+        "bloom_rf_build_diag: filter_id={} column={} total_hashes={} sample_hashes=[{}]",
+        filter_id,
+        column_name,
+        total_items,
+        bloom.iter().take(16).map(|h| h.to_string()).collect::<Vec<_>>().join(",")
+    );
+
     if total_items < 3_000_000 {
         let mut filter = Sbbf::new_with_ndv_fpp(total_items as u64, 0.01)
             .map_err(|e| ErrorCode::Internal(e.to_string()))?;
