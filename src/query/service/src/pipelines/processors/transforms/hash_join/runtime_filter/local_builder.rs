@@ -149,17 +149,41 @@ impl SingleFilterBuilder {
             self.bloom_hashes = None;
             return Ok(());
         }
+        let prev_len = match &self.bloom_hashes {
+            Some(h) => h.len(),
+            None => 0,
+        };
         let mut hashes = match self.bloom_hashes.take() {
             Some(h) => h,
             None => Vec::with_capacity(column.len()),
         };
         hashes.reserve(column.len());
-        let entry = BlockEntry::from(column.remove_nullable());
+        let col_no_null = column.remove_nullable();
+        let entry = BlockEntry::from(col_no_null.clone());
         let hash_method = self
             .hash_method
             .as_ref()
             .expect("hash_method must exist for non-spatial filters");
         hash_by_method_for_bloom(hash_method, (&[entry]).into(), column.len(), &mut hashes)?;
+
+        // Diagnostic: log first batch of build values and their hashes
+        if prev_len == 0 && !hashes.is_empty() {
+            let sample_count = column.len().min(8);
+            let samples: Vec<String> = (0..sample_count)
+                .map(|i| {
+                    let val = col_no_null.index(i);
+                    format!("val={:?},hash={}", val, hashes[i])
+                })
+                .collect();
+            log::info!(
+                "bloom_rf_build_values_diag: filter_id={} type={:?} total_in_batch={} samples=[{}]",
+                self.id,
+                col_no_null.data_type(),
+                column.len(),
+                samples.join("; ")
+            );
+        }
+
         self.bloom_hashes = Some(hashes);
         Ok(())
     }

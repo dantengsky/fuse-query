@@ -197,22 +197,32 @@ impl ReadState {
     ) -> Result<(DataBlock, Option<RowSelection>, Option<Bitmap>)> {
         let pre_columns_chunks = Self::filter_column_chunks(&columns_chunks, &self.pre_column_ids)?;
 
-        // Diagnostic: log which pre_column_ids are present vs missing in chunks
+        // Diagnostic: log which pre_column_ids are present vs missing in chunks,
+        // and the byte sizes / col_meta offsets for present ones.
         if !self.runtime_filters.is_empty() {
-            let present: Vec<_> = self.pre_column_ids.iter()
-                .filter(|id| columns_chunks.contains_key(id))
-                .collect();
-            let missing: Vec<_> = self.pre_column_ids.iter()
-                .filter(|id| !columns_chunks.contains_key(id))
-                .collect();
-            if !missing.is_empty() {
+            let mut present_info: Vec<String> = Vec::new();
+            let mut missing: Vec<u32> = Vec::new();
+            for id in &self.pre_column_ids {
+                if let Some(item) = columns_chunks.get(id) {
+                    let data_len = match item {
+                        DataItem::RawData(b) => b.len(),
+                        DataItem::ColumnArray(_) => 0,
+                    };
+                    let meta_info = part.columns_meta.get(id)
+                        .map(|m| { let (off, len) = m.offset_length(); format!("off={},len={}", off, len) })
+                        .unwrap_or_else(|| "no_meta".to_string());
+                    present_info.push(format!("id={}:data_bytes={},{}", id, data_len, meta_info));
+                } else {
+                    missing.push(*id);
+                }
+            }
+            if !missing.is_empty() || log::log_enabled!(log::Level::Debug) {
                 log::warn!(
-                    "bloom_rf_preread_diag: block={} rows={} pre_col_ids_present={:?} pre_col_ids_missing={:?} all_chunk_col_ids={:?}",
+                    "bloom_rf_preread_diag: block={} rows={} present=[{}] missing_col_ids={:?}",
                     &part.location,
                     part.nums_rows,
-                    present,
+                    present_info.join("; "),
                     missing,
-                    columns_chunks.keys().collect::<Vec<_>>()
                 );
             }
         }
