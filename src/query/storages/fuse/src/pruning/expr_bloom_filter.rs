@@ -43,7 +43,7 @@ impl<'a> ExprBloomFilter<'a> {
         let bitmap = unsafe { MutableBitmap::from_trusted_len_iter_unchecked(iter) };
 
         let rejected = bitmap.null_count();
-        if rejected > 0 && rejected < 64 {
+        if rejected > 0 && (rejected < 64 || rejected == num_rows) {
             let mut samples = Vec::with_capacity(rejected.min(8));
             for (i, hash) in hashes.iter().enumerate() {
                 if !bitmap.get(i) {

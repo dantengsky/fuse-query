@@ -196,6 +196,27 @@ impl ReadState {
         part: &FuseBlockPartInfo,
     ) -> Result<(DataBlock, Option<RowSelection>, Option<Bitmap>)> {
         let pre_columns_chunks = Self::filter_column_chunks(&columns_chunks, &self.pre_column_ids)?;
+
+        // Diagnostic: log which pre_column_ids are present vs missing in chunks
+        if !self.runtime_filters.is_empty() {
+            let present: Vec<_> = self.pre_column_ids.iter()
+                .filter(|id| columns_chunks.contains_key(id))
+                .collect();
+            let missing: Vec<_> = self.pre_column_ids.iter()
+                .filter(|id| !columns_chunks.contains_key(id))
+                .collect();
+            if !missing.is_empty() {
+                log::warn!(
+                    "bloom_rf_preread_diag: block={} rows={} pre_col_ids_present={:?} pre_col_ids_missing={:?} all_chunk_col_ids={:?}",
+                    &part.location,
+                    part.nums_rows,
+                    present,
+                    missing,
+                    columns_chunks.keys().collect::<Vec<_>>()
+                );
+            }
+        }
+
         let mut preread_block = self
             .pre_reader
             .deserialize_part(part, pre_columns_chunks, None)?;
