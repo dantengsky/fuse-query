@@ -75,6 +75,8 @@ pub enum FileFormatParams {
     Orc(OrcFileFormatParams),
     Avro(AvroFileFormatParams),
     Lance(LanceFileFormatParams),
+    Arrow(ArrowFileFormatParams),
+    ArrowStream(ArrowFileFormatParams),
 }
 
 impl FileFormatParams {
@@ -89,6 +91,8 @@ impl FileFormatParams {
             FileFormatParams::Orc(_) => StageFileFormatType::Orc,
             FileFormatParams::Avro(_) => StageFileFormatType::Avro,
             FileFormatParams::Lance(_) => StageFileFormatType::Lance,
+            FileFormatParams::Arrow(_) => StageFileFormatType::Arrow,
+            FileFormatParams::ArrowStream(_) => StageFileFormatType::ArrowStream,
         }
     }
 
@@ -103,6 +107,8 @@ impl FileFormatParams {
             FileFormatParams::Orc(_) => ".orc",
             FileFormatParams::Avro(_) => ".avro",
             FileFormatParams::Lance(_) => ".lance",
+            FileFormatParams::Arrow(_) => ".arrow",
+            FileFormatParams::ArrowStream(_) => ".arrow_stream",
         }
     }
 
@@ -156,6 +162,8 @@ impl FileFormatParams {
             FileFormatParams::Orc(_) => StageFileCompression::None,
             FileFormatParams::Avro(_) => StageFileCompression::None,
             FileFormatParams::Lance(_) => StageFileCompression::None,
+            FileFormatParams::Arrow(_) => StageFileCompression::None,
+            FileFormatParams::ArrowStream(_) => StageFileCompression::None,
         }
     }
 
@@ -1027,6 +1035,26 @@ impl OrcFileFormatParams {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LanceFileFormatParams {}
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArrowFileFormatParams {
+    pub missing_field_as: NullAs,
+}
+
+impl Default for ArrowFileFormatParams {
+    fn default() -> Self {
+        Self {
+            missing_field_as: NullAs::Error,
+        }
+    }
+}
+
+impl ArrowFileFormatParams {
+    pub fn try_create(missing_field_as: Option<&str>) -> Result<Self> {
+        let missing_field_as = NullAs::parse(missing_field_as, MISSING_FIELD_AS, NullAs::Error)?;
+        Ok(Self { missing_field_as })
+    }
+}
+
 impl Display for FileFormatParams {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {
@@ -1117,6 +1145,12 @@ impl Display for FileFormatParams {
             }
             FileFormatParams::Lance(_) => {
                 write!(f, "TYPE = LANCE")
+            }
+            FileFormatParams::Arrow(params) => {
+                write!(f, "TYPE = ARROW MISSING_FIELD_AS = {}", params.missing_field_as)
+            }
+            FileFormatParams::ArrowStream(params) => {
+                write!(f, "TYPE = ARROW_STREAM MISSING_FIELD_AS = {}", params.missing_field_as)
             }
         }
     }

@@ -169,3 +169,4 @@ mod v174_user_key_pair;
 mod v175_field_stats_truncate_len;
 mod v176_task_script_sql;
 mod v177_task_delete_task_id;
+mod v178_arrow_and_storage_compat;

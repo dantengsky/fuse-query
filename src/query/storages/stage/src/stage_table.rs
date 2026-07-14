@@ -185,6 +185,11 @@ impl Table for StageTable {
             FileFormatParams::Lance(_) => Err(ErrorCode::Unimplemented(
                 "LANCE stage table read is not supported".to_string(),
             )),
+            FileFormatParams::Arrow(_) | FileFormatParams::ArrowStream(_) => {
+                Err(ErrorCode::Unimplemented(
+                    "Arrow stage table read is not supported on this version".to_string(),
+                ))
+            }
             _ => unreachable!(
                 "unexpected format {} in StageTable::read_partition",
                 stage_table_info.stage_info.file_format_params
@@ -244,6 +249,11 @@ impl Table for StageTable {
             FileFormatParams::Lance(_) => Err(ErrorCode::Unimplemented(
                 "LANCE stage table read is not supported".to_string(),
             )),
+            FileFormatParams::Arrow(_) | FileFormatParams::ArrowStream(_) => {
+                Err(ErrorCode::Unimplemented(
+                    "Arrow stage table read is not supported on this version".to_string(),
+                ))
+            }
             _ => unreachable!(
                 "unexpected format {} in StageTable::read_partition",
                 stage_table_info.stage_info.file_format_params
