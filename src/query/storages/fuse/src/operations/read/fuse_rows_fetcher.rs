@@ -68,6 +68,7 @@ pub fn row_fetch_processor(
         .map(|field| DataType::from(field.data_type()))
         .collect::<Vec<_>>();
     let block_reader = fuse_table.create_block_reader(ctx.clone(), projection.clone(), true)?;
+    let query_id = ctx.get_id();
 
     match &fuse_table.storage_format {
         FuseStorageFormat::Native => unreachable!(),
@@ -93,6 +94,7 @@ pub fn row_fetch_processor(
                         read_settings,
                         max_threads,
                         io_semaphore.clone(),
+                        query_id.clone(),
                     ),
                     need_wrap_nullable,
                     fetched_data_types.clone(),

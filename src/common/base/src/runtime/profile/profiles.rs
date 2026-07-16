@@ -41,6 +41,11 @@ pub enum ProfileStatisticsName {
     ScanBytesFromDataCache,
     ScanBytesFromMemory,
 
+    RowFetchRows,
+    RowFetchBlocks,
+    RowFetchEstimatedBytes,
+    RowFetchBatches,
+
     RemoteSpillWriteCount,
     RemoteSpillWriteBytes,
     RemoteSpillWriteTime,
@@ -227,6 +232,34 @@ pub fn get_statistics_desc() -> Arc<BTreeMap<ProfileStatisticsName, ProfileDesc>
                 desc: "The bytes read from memory cache",
                 index: ProfileStatisticsName::ScanBytesFromMemory as usize,
                 unit: StatisticsUnit::Bytes,
+                plain_statistics: true,
+            }),
+            (ProfileStatisticsName::RowFetchRows, ProfileDesc {
+                display_name: "row fetch rows",
+                desc: "The number of rows requested by RowFetch",
+                index: ProfileStatisticsName::RowFetchRows as usize,
+                unit: StatisticsUnit::Rows,
+                plain_statistics: true,
+            }),
+            (ProfileStatisticsName::RowFetchBlocks, ProfileDesc {
+                display_name: "row fetch blocks",
+                desc: "The number of distinct block fetches requested by RowFetch batches",
+                index: ProfileStatisticsName::RowFetchBlocks as usize,
+                unit: StatisticsUnit::Count,
+                plain_statistics: true,
+            }),
+            (ProfileStatisticsName::RowFetchEstimatedBytes, ProfileDesc {
+                display_name: "row fetch estimated bytes",
+                desc: "The estimated uncompressed bytes of columns requested by RowFetch",
+                index: ProfileStatisticsName::RowFetchEstimatedBytes as usize,
+                unit: StatisticsUnit::Bytes,
+                plain_statistics: true,
+            }),
+            (ProfileStatisticsName::RowFetchBatches, ProfileDesc {
+                display_name: "row fetch batches",
+                desc: "The number of RowFetch batches",
+                index: ProfileStatisticsName::RowFetchBatches as usize,
+                unit: StatisticsUnit::Count,
                 plain_statistics: true,
             }),
             (ProfileStatisticsName::RemoteSpillWriteCount, ProfileDesc {

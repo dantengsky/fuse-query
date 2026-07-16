@@ -147,6 +147,14 @@ static REMOTE_IO_READ_MILLISECONDS: LazyLock<Histogram> =
     LazyLock::new(|| register_histogram_in_milliseconds("fuse_remote_io_read_milliseconds"));
 static REMOTE_IO_DESERIALIZE_MILLISECONDS: LazyLock<Histogram> =
     LazyLock::new(|| register_histogram_in_milliseconds("fuse_remote_io_deserialize_milliseconds"));
+static ROW_FETCH_ROWS: LazyLock<Counter> =
+    LazyLock::new(|| register_counter("fuse_row_fetch_rows"));
+static ROW_FETCH_BLOCKS: LazyLock<Counter> =
+    LazyLock::new(|| register_counter("fuse_row_fetch_blocks"));
+static ROW_FETCH_ESTIMATED_BYTES: LazyLock<Counter> =
+    LazyLock::new(|| register_counter("fuse_row_fetch_estimated_bytes"));
+static ROW_FETCH_BATCHES: LazyLock<Counter> =
+    LazyLock::new(|| register_counter("fuse_row_fetch_batches"));
 static BLOCK_WRITE_NUMS: LazyLock<Counter> =
     LazyLock::new(|| register_counter("fuse_block_write_nums"));
 static BLOCK_WRITE_BYTES: LazyLock<Counter> =
@@ -587,6 +595,22 @@ pub fn metrics_inc_remote_io_read_milliseconds(c: u64) {
 
 pub fn metrics_inc_remote_io_deserialize_milliseconds(c: u64) {
     REMOTE_IO_DESERIALIZE_MILLISECONDS.observe(c as f64);
+}
+
+pub fn metrics_inc_row_fetch_rows(c: u64) {
+    ROW_FETCH_ROWS.inc_by(c);
+}
+
+pub fn metrics_inc_row_fetch_blocks(c: u64) {
+    ROW_FETCH_BLOCKS.inc_by(c);
+}
+
+pub fn metrics_inc_row_fetch_estimated_bytes(c: u64) {
+    ROW_FETCH_ESTIMATED_BYTES.inc_by(c);
+}
+
+pub fn metrics_inc_row_fetch_batches(c: u64) {
+    ROW_FETCH_BATCHES.inc_by(c);
 }
 
 /// Block metrics.

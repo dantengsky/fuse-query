@@ -17,6 +17,8 @@ use std::collections::hash_map::Entry;
 use std::future::Future;
 use std::sync::Arc;
 
+use databend_common_base::runtime::profile::Profile;
+use databend_common_base::runtime::profile::ProfileStatisticsName;
 use databend_common_base::runtime::spawn;
 use databend_common_catalog::plan::Projection;
 use databend_common_catalog::plan::block_id_in_segment;
@@ -30,6 +32,10 @@ use databend_common_exception::Result;
 use databend_common_expression::ColumnId;
 use databend_common_expression::DataBlock;
 use databend_common_expression::TableSchemaRef;
+use databend_common_metrics::storage::metrics_inc_row_fetch_batches;
+use databend_common_metrics::storage::metrics_inc_row_fetch_blocks;
+use databend_common_metrics::storage::metrics_inc_row_fetch_estimated_bytes;
+use databend_common_metrics::storage::metrics_inc_row_fetch_rows;
 use databend_common_storage::ColumnNodes;
 use databend_storages_common_cache::CacheAccessor;
 use databend_storages_common_cache::CacheValue;
@@ -43,6 +49,8 @@ use databend_storages_common_table_meta::meta::TableSnapshot;
 use futures_util::stream::FuturesUnordered;
 use futures_util::stream::StreamExt;
 use itertools::Itertools;
+use log::debug;
+use log::info;
 use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
 
@@ -106,6 +114,7 @@ impl RowsFetchMetadata for RowsFetchMetadataImpl {
 }
 
 pub(super) struct ParquetRowsFetcher {
+    query_id: String,
     snapshot: Option<Arc<TableSnapshot>>,
     table: Arc<FuseTable>,
     projection: Projection,
@@ -186,6 +195,38 @@ impl RowsFetcher for ParquetRowsFetcher {
         row_ids: &[u64],
         metadata: HashMap<u64, Self::Metadata>,
     ) -> Result<DataBlock> {
+        let block_count = metadata.len();
+        let estimated_bytes = metadata
+            .values()
+            .map(|metadata| metadata.block_bytes)
+            .sum::<usize>();
+
+        Profile::record_usize_profile(ProfileStatisticsName::RowFetchRows, row_ids.len());
+        Profile::record_usize_profile(ProfileStatisticsName::RowFetchBlocks, block_count);
+        Profile::record_usize_profile(
+            ProfileStatisticsName::RowFetchEstimatedBytes,
+            estimated_bytes,
+        );
+        Profile::record_usize_profile(ProfileStatisticsName::RowFetchBatches, 1);
+        metrics_inc_row_fetch_rows(row_ids.len() as u64);
+        metrics_inc_row_fetch_blocks(block_count as u64);
+        metrics_inc_row_fetch_estimated_bytes(estimated_bytes as u64);
+        metrics_inc_row_fetch_batches(1);
+
+        let message = format!(
+            "RowFetch batch query_id={} rows={} distinct_blocks={} estimated_bytes={} max_concurrency={}",
+            self.query_id,
+            row_ids.len(),
+            block_count,
+            estimated_bytes,
+            self.max_threads
+        );
+        if block_count >= 128 || estimated_bytes >= 256 * 1024 * 1024 {
+            info!("{}", message);
+        } else {
+            debug!("{}", message);
+        }
+
         let final_block_index = metadata
             .keys()
             .enumerate()
@@ -288,11 +329,13 @@ impl ParquetRowsFetcher {
         settings: ReadSettings,
         max_threads: usize,
         io_semaphore: Arc<Semaphore>,
+        query_id: String,
     ) -> Self {
         let schema = table.schema();
         let operator = table.operator.clone();
         let segment_reader = MetaReaders::segment_info_reader(operator, schema.clone());
         ParquetRowsFetcher {
+            query_id,
             table,
             snapshot: None,
             segment_reader,
