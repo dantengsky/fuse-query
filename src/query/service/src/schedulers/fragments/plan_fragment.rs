@@ -78,8 +78,8 @@ pub struct PlanFragment {
     pub exchange: Option<DataExchange>,
     pub query_id: String,
 
-    // The fragments to ask data from.
-    pub source_fragments: Vec<PlanFragment>,
+    /// Whether this intermediate fragment consumes a coordinator-only Merge exchange.
+    pub has_merge_input: bool,
 }
 
 impl PlanFragment {
@@ -88,10 +88,6 @@ impl PlanFragment {
         ctx: Arc<QueryContext>,
         actions: &mut QueryFragmentsActions,
     ) -> Result<()> {
-        // for input in self.source_fragments.iter() {
-        //     input.get_actions(ctx.clone(), actions)?;
-        // }
-
         let mut fragment_actions = QueryFragmentActions::create(self.fragment_id);
 
         match &self.fragment_type {
@@ -103,11 +99,7 @@ impl PlanFragment {
                 fragment_actions.add_action(action);
             }
             FragmentType::Intermediate => {
-                if self
-                    .source_fragments
-                    .iter()
-                    .any(|fragment| matches!(&fragment.exchange, Some(DataExchange::Merge(_))))
-                {
+                if self.has_merge_input {
                     // If this is a intermediate fragment with merge input,
                     // we will only send it to coordinator node.
                     let action = QueryFragmentAction::create(
