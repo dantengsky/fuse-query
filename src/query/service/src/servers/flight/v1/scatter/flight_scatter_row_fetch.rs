@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 
@@ -30,23 +29,6 @@ use databend_common_metrics::storage::metrics_inc_row_fetch_local_batches;
 use log::info;
 
 use super::FlightScatter;
-
-// Reading a block has a fixed metadata, object-store, and decode cost even when only one row is
-// selected. Treat one block as roughly this many selected rows when bounding destination load.
-const BLOCK_FIXED_COST_IN_ROWS: usize = 64;
-const MAX_PREFERRED_LOAD_PERCENT: usize = 110;
-
-struct BlockLoad {
-    prefix: u64,
-    rows: usize,
-    primary: usize,
-}
-
-impl BlockLoad {
-    fn weight(&self) -> usize {
-        self.rows.saturating_add(BLOCK_FIXED_COST_IN_ROWS)
-    }
-}
 
 struct RoutingDecision {
     local: bool,
@@ -159,8 +141,14 @@ impl AdaptiveRowFetchFlightScatter {
             )));
         }
 
-        let mut blocks = BTreeMap::<u64, BlockLoad>::new();
-        for (prefix, primary) in prefixes.iter().copied().zip(primary_indices) {
+        let mut blocks = HashMap::<u64, usize>::new();
+        let mut destination_rows = vec![0usize; self.scatter_size];
+        let mut destination_blocks = vec![0usize; self.scatter_size];
+        for (prefix, primary) in prefixes
+            .iter()
+            .copied()
+            .zip(primary_indices.iter().copied())
+        {
             let primary = primary as usize;
             if primary >= self.scatter_size {
                 return Err(ErrorCode::Internal(format!(
@@ -169,85 +157,32 @@ impl AdaptiveRowFetchFlightScatter {
                 )));
             }
 
-            match blocks.get_mut(&prefix) {
-                Some(block) => {
-                    if block.primary != primary {
+            destination_rows[primary] += 1;
+            match blocks.get(&prefix) {
+                Some(block_primary) => {
+                    if *block_primary != primary {
                         return Err(ErrorCode::Internal(format!(
                             "Rows from RowFetch block {} mapped to different primary destinations",
                             prefix
                         )));
                     }
-                    block.rows += 1;
                 }
                 None => {
-                    blocks.insert(prefix, BlockLoad {
-                        prefix,
-                        rows: 1,
-                        primary,
-                    });
+                    blocks.insert(prefix, primary);
+                    destination_blocks[primary] += 1;
                 }
             }
         }
 
         let distinct_blocks = blocks.len();
-        let mut blocks = blocks.into_values().collect::<Vec<_>>();
-        blocks.sort_unstable_by(|left, right| {
-            right
-                .weight()
-                .cmp(&left.weight())
-                .then_with(|| left.prefix.cmp(&right.prefix))
-        });
-
-        let total_weight = blocks
-            .iter()
-            .fold(0usize, |total, block| total.saturating_add(block.weight()));
-        let target_load = total_weight.div_ceil(self.scatter_size);
-        let max_preferred_load = target_load
-            .saturating_mul(MAX_PREFERRED_LOAD_PERCENT)
-            .div_ceil(100);
-
-        let mut loads = vec![0usize; self.scatter_size];
-        let mut assignments = HashMap::with_capacity(distinct_blocks);
-        let mut affinity_reassigned_blocks = 0;
-        let mut destination_rows = vec![0usize; self.scatter_size];
-        let mut destination_blocks = vec![0usize; self.scatter_size];
-
-        for block in blocks {
-            let min_load = loads.iter().copied().min().unwrap_or(0);
-            let primary_projected = loads[block.primary].saturating_add(block.weight());
-            let destination = if primary_projected <= max_preferred_load
-                || loads[block.primary] == min_load
-            {
-                block.primary
-            } else {
-                (0..self.scatter_size)
-                    .min_by_key(|destination| {
-                        (
-                            loads[*destination],
-                            (*destination + self.scatter_size - block.primary) % self.scatter_size,
-                        )
-                    })
-                    .unwrap()
-            };
-
-            if destination != block.primary {
-                affinity_reassigned_blocks += 1;
-            }
-            loads[destination] = loads[destination].saturating_add(block.weight());
-            destination_rows[destination] += block.rows;
-            destination_blocks[destination] += 1;
-            assignments.insert(block.prefix, destination as u64);
-        }
-
-        let indices = prefixes.iter().map(|prefix| assignments[prefix]).collect();
 
         Ok(RoutingDecision {
             local: false,
-            indices,
+            indices: primary_indices,
             distinct_blocks,
             destination_rows,
             destination_blocks,
-            affinity_reassigned_blocks,
+            affinity_reassigned_blocks: 0,
         })
     }
 
@@ -375,27 +310,21 @@ mod tests {
     }
 
     #[test]
-    fn distributes_dispersed_row_fetch_by_block() -> Result<()> {
+    fn preserves_primary_hash_affinity_for_dispersed_blocks() -> Result<()> {
         let block = row_id_block(&[1, 1, 2, 3, 4]);
         let decision = scatter(2).route(&block)?;
 
         assert!(!decision.local);
         assert_eq!(decision.distinct_blocks, 4);
-        assert_eq!(decision.indices[0], decision.indices[1]);
-        assert!(
-            decision
-                .destination_blocks
-                .iter()
-                .filter(|blocks| **blocks > 0)
-                .count()
-                > 1
-        );
-        assert!(decision.affinity_reassigned_blocks > 0);
+        assert_eq!(decision.indices, vec![0; 5]);
+        assert_eq!(decision.destination_rows, vec![5, 0, 0]);
+        assert_eq!(decision.destination_blocks, vec![4, 0, 0]);
+        assert_eq!(decision.affinity_reassigned_blocks, 0);
         Ok(())
     }
 
     #[test]
-    fn bounds_load_while_moving_whole_blocks() -> Result<()> {
+    fn does_not_reassign_skewed_primary_blocks() -> Result<()> {
         let mut block_ids = vec![1; 100];
         block_ids.extend(vec![2; 50]);
         block_ids.extend([3, 4]);
@@ -404,18 +333,10 @@ mod tests {
 
         assert_eq!(decision.destination_rows.iter().sum::<usize>(), 152);
         assert_eq!(decision.destination_blocks.iter().sum::<usize>(), 4);
-        assert_eq!(decision.affinity_reassigned_blocks, 3);
-        assert_eq!(
-            decision.indices[..100].iter().copied().collect::<Vec<_>>(),
-            vec![0; 100]
-        );
-        assert_eq!(
-            decision.indices[100..150]
-                .iter()
-                .copied()
-                .collect::<Vec<_>>(),
-            vec![1; 50]
-        );
+        assert_eq!(decision.destination_rows, vec![152, 0, 0]);
+        assert_eq!(decision.destination_blocks, vec![4, 0, 0]);
+        assert_eq!(decision.affinity_reassigned_blocks, 0);
+        assert_eq!(decision.indices, vec![0; 152]);
         Ok(())
     }
 }
