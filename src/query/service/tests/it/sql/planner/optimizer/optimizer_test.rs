@@ -201,6 +201,16 @@ async fn test_merge_dependent_shuffle_runs_on_coordinator() -> anyhow::Result<()
         .collect::<Vec<_>>();
     assert_eq!(shuffle_actions.len(), 1);
     assert_eq!(shuffle_actions[0].fragment_actions.len(), 3);
+    let Some(DataExchange::NodeToNodeExchange(exchange)) =
+        shuffle_actions[0].data_exchange.as_ref()
+    else {
+        unreachable!("expected adaptive RowFetch shuffle")
+    };
+    let row_fetch = exchange
+        .row_fetch
+        .as_ref()
+        .expect("RowFetch shuffle must include adaptive routing");
+    assert_eq!(row_fetch.local_block_threshold, 128);
 
     for action in &shuffle_actions[0].fragment_actions {
         let exchange_sink = ExchangeSink::from_physical_plan(&action.physical_plan)

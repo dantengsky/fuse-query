@@ -11,7 +11,7 @@ Sort(Single)
         ├── estimated rows: 0.00
         └── Exchange
             ├── output columns: [lazy_row_fetch.a (#0), lazy_row_fetch._row_id (#3)]
-            ├── exchange type: Hash(bit_shift_right(3, 31))
+            ├── exchange type: Adaptive RowFetch(Hash(bit_shift_right(3, 31)), local blocks <= 128)
             └── Limit
                 ├── output columns: [lazy_row_fetch.a (#0), lazy_row_fetch._row_id (#3)]
                 ├── limit: 1000

@@ -355,7 +355,10 @@ impl PhysicalPlanBuilder {
                     Self::build_row_fetch_shuffle_key(input_schema.as_ref(), row_id_col_offset)?;
                 plan = PhysicalPlan::new(Exchange {
                     input: plan,
-                    kind: FragmentKind::Normal,
+                    kind: FragmentKind::RowFetch {
+                        row_id_col_offset,
+                        local_block_threshold: max_threads.saturating_mul(8).max(128),
+                    },
                     keys: vec![shuffle_key],
                     ignore_exchange: false,
                     allow_adjust_parallelism: true,

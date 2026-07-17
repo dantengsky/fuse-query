@@ -49,6 +49,7 @@ use crate::servers::flight::v1::exchange::BroadcastExchange;
 use crate::servers::flight::v1::exchange::DataExchange;
 use crate::servers::flight::v1::exchange::MergeExchange;
 use crate::servers::flight::v1::exchange::NodeToNodeExchange;
+use crate::servers::flight::v1::exchange::RowFetchExchange;
 use crate::sessions::QueryContext;
 use crate::sessions::TableContext;
 use crate::sessions::TableContextCluster;
@@ -237,7 +238,11 @@ impl FragmentDeriveHandle {
 
         Ok(match exchange_sink.kind {
             FragmentKind::Init => None,
-            FragmentKind::Normal => {
+            FragmentKind::Normal
+            | FragmentKind::RowFetch {
+                row_id_col_offset: _,
+                local_block_threshold: _,
+            } => {
                 let destination_ids = get_executors(cluster);
 
                 let mut destination_channels = Vec::with_capacity(destination_ids.len());
@@ -252,6 +257,16 @@ impl FragmentDeriveHandle {
                     destination_channels,
                     shuffle_keys: exchange_sink.keys.clone(),
                     allow_adjust_parallelism: exchange_sink.allow_adjust_parallelism,
+                    row_fetch: match exchange_sink.kind {
+                        FragmentKind::RowFetch {
+                            row_id_col_offset,
+                            local_block_threshold,
+                        } => Some(RowFetchExchange {
+                            row_id_col_offset,
+                            local_block_threshold,
+                        }),
+                        _ => None,
+                    },
                 }))
             }
             FragmentKind::GlobalShuffle => {
@@ -270,6 +285,7 @@ impl FragmentDeriveHandle {
                     destination_channels,
                     shuffle_keys: exchange_sink.keys.clone(),
                     allow_adjust_parallelism: exchange_sink.allow_adjust_parallelism,
+                    row_fetch: None,
                 }))
             }
             FragmentKind::Merge => Some(MergeExchange::create(
