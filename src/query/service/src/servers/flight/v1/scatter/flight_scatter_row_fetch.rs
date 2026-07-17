@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashSet;
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
+use std::collections::HashMap;
 
 use databend_common_base::runtime::profile::Profile;
 use databend_common_base::runtime::profile::ProfileStatisticsName;
@@ -22,11 +24,38 @@ use databend_common_exception::Result;
 use databend_common_expression::DataBlock;
 use databend_common_expression::types::DataType;
 use databend_common_expression::types::NumberDataType;
+use databend_common_metrics::storage::metrics_inc_row_fetch_affinity_reassigned_blocks;
 use databend_common_metrics::storage::metrics_inc_row_fetch_distributed_batches;
 use databend_common_metrics::storage::metrics_inc_row_fetch_local_batches;
 use log::info;
 
 use super::FlightScatter;
+
+// Reading a block has a fixed metadata, object-store, and decode cost even when only one row is
+// selected. Treat one block as roughly this many selected rows when bounding destination load.
+const BLOCK_FIXED_COST_IN_ROWS: usize = 64;
+const MAX_PREFERRED_LOAD_PERCENT: usize = 110;
+
+struct BlockLoad {
+    prefix: u64,
+    rows: usize,
+    primary: usize,
+}
+
+impl BlockLoad {
+    fn weight(&self) -> usize {
+        self.rows.saturating_add(BLOCK_FIXED_COST_IN_ROWS)
+    }
+}
+
+struct RoutingDecision {
+    local: bool,
+    indices: Vec<u64>,
+    distinct_blocks: usize,
+    destination_rows: Vec<usize>,
+    destination_blocks: Vec<usize>,
+    affinity_reassigned_blocks: usize,
+}
 
 pub struct AdaptiveRowFetchFlightScatter {
     hash_scatter: Box<dyn FlightScatter>,
@@ -56,7 +85,7 @@ impl AdaptiveRowFetchFlightScatter {
         })
     }
 
-    fn distinct_blocks(&self, data_block: &DataBlock) -> Result<usize> {
+    fn row_id_prefixes(&self, data_block: &DataBlock) -> Result<Vec<u64>> {
         let entry = data_block
             .columns()
             .get(self.row_id_col_offset)
@@ -94,41 +123,179 @@ impl AdaptiveRowFetchFlightScatter {
         Ok(row_ids
             .iter()
             .map(|row_id| split_row_id(*row_id).0)
-            .collect::<HashSet<_>>()
-            .len())
+            .collect())
     }
 
-    fn use_local(&self, data_block: &DataBlock) -> Result<(bool, usize)> {
-        let distinct_blocks = self.distinct_blocks(data_block)?;
-        Ok((
-            distinct_blocks <= self.local_block_threshold,
+    fn local_decision(&self, prefixes: Vec<u64>, distinct_blocks: usize) -> RoutingDecision {
+        let mut destination_rows = vec![0; self.scatter_size];
+        let mut destination_blocks = vec![0; self.scatter_size];
+        destination_rows[self.local_pos] = prefixes.len();
+        destination_blocks[self.local_pos] = distinct_blocks;
+
+        RoutingDecision {
+            local: true,
+            indices: vec![self.local_pos as u64; prefixes.len()],
             distinct_blocks,
-        ))
+            destination_rows,
+            destination_blocks,
+            affinity_reassigned_blocks: 0,
+        }
     }
 
-    fn local_indices(&self, rows: usize) -> Vec<u64> {
-        vec![self.local_pos as u64; rows]
+    fn distributed_decision(
+        &self,
+        data_block: &DataBlock,
+        prefixes: Vec<u64>,
+    ) -> Result<RoutingDecision> {
+        let primary_indices = self
+            .hash_scatter
+            .scatter_indices(data_block)?
+            .ok_or_else(|| ErrorCode::Internal("RowFetch hash scatter does not expose indices"))?;
+        if primary_indices.len() != prefixes.len() {
+            return Err(ErrorCode::Internal(format!(
+                "RowFetch hash scatter produced {} indices for {} rows",
+                primary_indices.len(),
+                prefixes.len()
+            )));
+        }
+
+        let mut blocks = BTreeMap::<u64, BlockLoad>::new();
+        for (prefix, primary) in prefixes.iter().copied().zip(primary_indices) {
+            let primary = primary as usize;
+            if primary >= self.scatter_size {
+                return Err(ErrorCode::Internal(format!(
+                    "RowFetch hash scatter destination {} is out of bounds for {} destinations",
+                    primary, self.scatter_size
+                )));
+            }
+
+            match blocks.get_mut(&prefix) {
+                Some(block) => {
+                    if block.primary != primary {
+                        return Err(ErrorCode::Internal(format!(
+                            "Rows from RowFetch block {} mapped to different primary destinations",
+                            prefix
+                        )));
+                    }
+                    block.rows += 1;
+                }
+                None => {
+                    blocks.insert(prefix, BlockLoad {
+                        prefix,
+                        rows: 1,
+                        primary,
+                    });
+                }
+            }
+        }
+
+        let distinct_blocks = blocks.len();
+        let mut blocks = blocks.into_values().collect::<Vec<_>>();
+        blocks.sort_unstable_by(|left, right| {
+            right
+                .weight()
+                .cmp(&left.weight())
+                .then_with(|| left.prefix.cmp(&right.prefix))
+        });
+
+        let total_weight = blocks
+            .iter()
+            .fold(0usize, |total, block| total.saturating_add(block.weight()));
+        let target_load = total_weight.div_ceil(self.scatter_size);
+        let max_preferred_load = target_load
+            .saturating_mul(MAX_PREFERRED_LOAD_PERCENT)
+            .div_ceil(100);
+
+        let mut loads = vec![0usize; self.scatter_size];
+        let mut assignments = HashMap::with_capacity(distinct_blocks);
+        let mut affinity_reassigned_blocks = 0;
+        let mut destination_rows = vec![0usize; self.scatter_size];
+        let mut destination_blocks = vec![0usize; self.scatter_size];
+
+        for block in blocks {
+            let min_load = loads.iter().copied().min().unwrap_or(0);
+            let primary_projected = loads[block.primary].saturating_add(block.weight());
+            let destination = if primary_projected <= max_preferred_load
+                || loads[block.primary] == min_load
+            {
+                block.primary
+            } else {
+                (0..self.scatter_size)
+                    .min_by_key(|destination| {
+                        (
+                            loads[*destination],
+                            (*destination + self.scatter_size - block.primary) % self.scatter_size,
+                        )
+                    })
+                    .unwrap()
+            };
+
+            if destination != block.primary {
+                affinity_reassigned_blocks += 1;
+            }
+            loads[destination] = loads[destination].saturating_add(block.weight());
+            destination_rows[destination] += block.rows;
+            destination_blocks[destination] += 1;
+            assignments.insert(block.prefix, destination as u64);
+        }
+
+        let indices = prefixes.iter().map(|prefix| assignments[prefix]).collect();
+
+        Ok(RoutingDecision {
+            local: false,
+            indices,
+            distinct_blocks,
+            destination_rows,
+            destination_blocks,
+            affinity_reassigned_blocks,
+        })
     }
 
-    fn record_decision(&self, local: bool, rows: usize, distinct_blocks: usize) {
-        let mode = if local {
+    fn route(&self, data_block: &DataBlock) -> Result<RoutingDecision> {
+        if self.scatter_size == 0 || self.local_pos >= self.scatter_size {
+            return Err(ErrorCode::Internal(format!(
+                "Invalid adaptive RowFetch destinations: local_pos={}, scatter_size={}",
+                self.local_pos, self.scatter_size
+            )));
+        }
+
+        let prefixes = self.row_id_prefixes(data_block)?;
+        let distinct_blocks = prefixes.iter().copied().collect::<BTreeSet<_>>().len();
+        if distinct_blocks <= self.local_block_threshold {
+            return Ok(self.local_decision(prefixes, distinct_blocks));
+        }
+        self.distributed_decision(data_block, prefixes)
+    }
+
+    fn record_decision(&self, decision: &RoutingDecision, rows: usize) {
+        let mode = if decision.local {
             Profile::record_usize_profile(ProfileStatisticsName::RowFetchLocalBatches, 1);
             metrics_inc_row_fetch_local_batches(1);
             "local"
         } else {
             Profile::record_usize_profile(ProfileStatisticsName::RowFetchDistributedBatches, 1);
+            Profile::record_usize_profile(
+                ProfileStatisticsName::RowFetchAffinityReassignedBlocks,
+                decision.affinity_reassigned_blocks,
+            );
             metrics_inc_row_fetch_distributed_batches(1);
+            metrics_inc_row_fetch_affinity_reassigned_blocks(
+                decision.affinity_reassigned_blocks as u64,
+            );
             "distributed"
         };
 
         info!(
-            "Adaptive RowFetch routing query_id={} mode={} rows={} distinct_blocks={} local_block_threshold={} destinations={}",
+            "Adaptive RowFetch routing query_id={} mode={} rows={} distinct_blocks={} local_block_threshold={} destinations={} destination_rows={:?} destination_blocks={:?} affinity_reassigned_blocks={}",
             self.query_id,
             mode,
             rows,
-            distinct_blocks,
+            decision.distinct_blocks,
             self.local_block_threshold,
-            self.scatter_size
+            self.scatter_size,
+            decision.destination_rows,
+            decision.destination_blocks,
+            decision.affinity_reassigned_blocks
         );
     }
 }
@@ -139,18 +306,11 @@ impl FlightScatter for AdaptiveRowFetchFlightScatter {
     }
 
     fn execute(&self, data_block: DataBlock) -> Result<Vec<DataBlock>> {
-        let (local, distinct_blocks) = self.use_local(&data_block)?;
-        self.record_decision(local, data_block.num_rows(), distinct_blocks);
-        if !local {
-            return self.hash_scatter.execute(data_block);
-        }
+        let decision = self.route(&data_block)?;
+        self.record_decision(&decision, data_block.num_rows());
 
         let block_meta = data_block.get_meta().cloned();
-        let blocks = DataBlock::scatter(
-            &data_block,
-            &self.local_indices(data_block.num_rows()),
-            self.scatter_size,
-        )?;
+        let blocks = DataBlock::scatter(&data_block, &decision.indices, self.scatter_size)?;
         blocks
             .into_iter()
             .map(|block| block.add_meta(block_meta.clone()))
@@ -158,11 +318,7 @@ impl FlightScatter for AdaptiveRowFetchFlightScatter {
     }
 
     fn scatter_indices(&self, data_block: &DataBlock) -> Result<Option<Vec<u64>>> {
-        if self.use_local(data_block)?.0 {
-            Ok(Some(self.local_indices(data_block.num_rows())))
-        } else {
-            self.hash_scatter.scatter_indices(data_block)
-        }
+        Ok(Some(self.route(data_block)?.indices))
     }
 }
 
@@ -175,11 +331,11 @@ mod tests {
 
     use super::*;
 
-    struct TestHashScatter;
+    struct PrimaryZeroScatter;
 
-    impl FlightScatter for TestHashScatter {
+    impl FlightScatter for PrimaryZeroScatter {
         fn name(&self) -> &'static str {
-            "TestHash"
+            "PrimaryZero"
         }
 
         fn execute(&self, data_block: DataBlock) -> Result<Vec<DataBlock>> {
@@ -188,11 +344,7 @@ mod tests {
         }
 
         fn scatter_indices(&self, data_block: &DataBlock) -> Result<Option<Vec<u64>>> {
-            Ok(Some(
-                (0..data_block.num_rows())
-                    .map(|index| (index % 3) as u64)
-                    .collect(),
-            ))
+            Ok(Some(vec![0; data_block.num_rows()]))
         }
     }
 
@@ -204,15 +356,15 @@ mod tests {
         DataBlock::new_from_columns(vec![UInt64Type::from_data(row_ids)])
     }
 
-    fn scatter(local_block_threshold: usize) -> Box<dyn FlightScatter> {
-        AdaptiveRowFetchFlightScatter::create(
-            Box::new(TestHashScatter),
-            "test-query".to_string(),
-            0,
+    fn scatter(local_block_threshold: usize) -> AdaptiveRowFetchFlightScatter {
+        AdaptiveRowFetchFlightScatter {
+            hash_scatter: Box::new(PrimaryZeroScatter),
+            query_id: "test-query".to_string(),
+            row_id_col_offset: 0,
             local_block_threshold,
-            1,
-            3,
-        )
+            local_pos: 1,
+            scatter_size: 3,
+        }
     }
 
     #[test]
@@ -223,9 +375,47 @@ mod tests {
     }
 
     #[test]
-    fn distributes_dispersed_row_fetch() -> Result<()> {
-        let block = row_id_block(&[1, 2, 3, 4]);
-        assert_eq!(scatter(2).scatter_indices(&block)?, Some(vec![0, 1, 2, 0]));
+    fn distributes_dispersed_row_fetch_by_block() -> Result<()> {
+        let block = row_id_block(&[1, 1, 2, 3, 4]);
+        let decision = scatter(2).route(&block)?;
+
+        assert!(!decision.local);
+        assert_eq!(decision.distinct_blocks, 4);
+        assert_eq!(decision.indices[0], decision.indices[1]);
+        assert!(
+            decision
+                .destination_blocks
+                .iter()
+                .filter(|blocks| **blocks > 0)
+                .count()
+                > 1
+        );
+        assert!(decision.affinity_reassigned_blocks > 0);
+        Ok(())
+    }
+
+    #[test]
+    fn bounds_load_while_moving_whole_blocks() -> Result<()> {
+        let mut block_ids = vec![1; 100];
+        block_ids.extend(vec![2; 50]);
+        block_ids.extend([3, 4]);
+        let block = row_id_block(&block_ids);
+        let decision = scatter(2).route(&block)?;
+
+        assert_eq!(decision.destination_rows.iter().sum::<usize>(), 152);
+        assert_eq!(decision.destination_blocks.iter().sum::<usize>(), 4);
+        assert_eq!(decision.affinity_reassigned_blocks, 3);
+        assert_eq!(
+            decision.indices[..100].iter().copied().collect::<Vec<_>>(),
+            vec![0; 100]
+        );
+        assert_eq!(
+            decision.indices[100..150]
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+            vec![1; 50]
+        );
         Ok(())
     }
 }

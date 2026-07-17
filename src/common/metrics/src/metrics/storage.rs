@@ -159,6 +159,10 @@ static ROW_FETCH_LOCAL_BATCHES: LazyLock<Counter> =
     LazyLock::new(|| register_counter("fuse_row_fetch_local_batches"));
 static ROW_FETCH_DISTRIBUTED_BATCHES: LazyLock<Counter> =
     LazyLock::new(|| register_counter("fuse_row_fetch_distributed_batches"));
+static ROW_FETCH_INPUT_BATCHES: LazyLock<Counter> =
+    LazyLock::new(|| register_counter("fuse_row_fetch_input_batches"));
+static ROW_FETCH_AFFINITY_REASSIGNED_BLOCKS: LazyLock<Counter> =
+    LazyLock::new(|| register_counter("fuse_row_fetch_affinity_reassigned_blocks"));
 static BLOCK_WRITE_NUMS: LazyLock<Counter> =
     LazyLock::new(|| register_counter("fuse_block_write_nums"));
 static BLOCK_WRITE_BYTES: LazyLock<Counter> =
@@ -623,6 +627,14 @@ pub fn metrics_inc_row_fetch_local_batches(c: u64) {
 
 pub fn metrics_inc_row_fetch_distributed_batches(c: u64) {
     ROW_FETCH_DISTRIBUTED_BATCHES.inc_by(c);
+}
+
+pub fn metrics_inc_row_fetch_input_batches(c: u64) {
+    ROW_FETCH_INPUT_BATCHES.inc_by(c);
+}
+
+pub fn metrics_inc_row_fetch_affinity_reassigned_blocks(c: u64) {
+    ROW_FETCH_AFFINITY_REASSIGNED_BLOCKS.inc_by(c);
 }
 
 /// Block metrics.

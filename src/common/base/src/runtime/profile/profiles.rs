@@ -73,6 +73,9 @@ pub enum ProfileStatisticsName {
     MemoryUsage,
     ExternalServerRetryCount,
     ExternalServerRequestCount,
+
+    RowFetchInputBatches,
+    RowFetchAffinityReassignedBlocks,
 }
 
 #[derive(Clone, Hash, Eq, PartialEq, serde::Serialize, serde::Deserialize, Debug)]
@@ -422,6 +425,20 @@ pub fn get_statistics_desc() -> Arc<BTreeMap<ProfileStatisticsName, ProfileDesc>
                 display_name: "external server request count",
                 desc: "The count of external server request times",
                 index: ProfileStatisticsName::ExternalServerRequestCount as usize,
+                unit: StatisticsUnit::Count,
+                plain_statistics: true,
+            }),
+            (ProfileStatisticsName::RowFetchInputBatches, ProfileDesc {
+                display_name: "row fetch input batches",
+                desc: "The number of input batches coalesced before adaptive RowFetch routing",
+                index: ProfileStatisticsName::RowFetchInputBatches as usize,
+                unit: StatisticsUnit::Count,
+                plain_statistics: true,
+            }),
+            (ProfileStatisticsName::RowFetchAffinityReassignedBlocks, ProfileDesc {
+                display_name: "row fetch affinity reassigned blocks",
+                desc: "The number of RowFetch blocks moved from their primary hash destination to bound load skew",
+                index: ProfileStatisticsName::RowFetchAffinityReassignedBlocks as usize,
                 unit: StatisticsUnit::Count,
                 plain_statistics: true,
             }),

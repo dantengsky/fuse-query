@@ -29,6 +29,7 @@ mod exchange_transform_shuffle;
 mod hash_send_sink;
 mod hash_send_source;
 mod hash_send_transform;
+mod row_fetch_exchange_coalescer;
 mod statistics_receiver;
 mod statistics_sender;
 
@@ -55,3 +56,4 @@ pub use exchange_transform_shuffle::ExchangeShuffleTransform;
 pub use hash_send_sink::HashSendSink;
 pub use hash_send_source::HashSendSource;
 pub use hash_send_transform::HashSendTransform;
+pub use row_fetch_exchange_coalescer::RowFetchExchangeCoalescer;
