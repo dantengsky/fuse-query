@@ -32,7 +32,10 @@ use databend_common_sql_test_support::configure_optimizer_settings;
 use databend_common_sql_test_support::run_test_case_core;
 use databend_meta_client::types::NodeInfo;
 use databend_query::clusters::ClusterHelper;
+use databend_query::physical_plans::ConstantTableScan;
+use databend_query::physical_plans::ExchangeSink;
 use databend_query::physical_plans::PhysicalPlanBuilder;
+use databend_query::physical_plans::PhysicalPlanCast;
 use databend_query::schedulers::Fragmenter;
 use databend_query::schedulers::QueryFragmentsActions;
 use databend_query::servers::flight::v1::exchange::DataExchange;
@@ -197,8 +200,20 @@ async fn test_merge_dependent_shuffle_runs_on_coordinator() -> anyhow::Result<()
         })
         .collect::<Vec<_>>();
     assert_eq!(shuffle_actions.len(), 1);
-    assert_eq!(shuffle_actions[0].fragment_actions.len(), 1);
-    assert_eq!(shuffle_actions[0].fragment_actions[0].executor, local_id);
+    assert_eq!(shuffle_actions[0].fragment_actions.len(), 3);
+
+    for action in &shuffle_actions[0].fragment_actions {
+        let exchange_sink = ExchangeSink::from_physical_plan(&action.physical_plan)
+            .expect("shuffle action must contain an ExchangeSink");
+
+        if action.executor == local_id {
+            assert!(!ConstantTableScan::check_physical_plan(
+                &exchange_sink.input
+            ));
+        } else {
+            assert!(ConstantTableScan::check_physical_plan(&exchange_sink.input));
+        }
+    }
 
     execute_sql(&ctx, "DROP TABLE lazy_row_fetch_fragment_test").await?;
     Ok(())
