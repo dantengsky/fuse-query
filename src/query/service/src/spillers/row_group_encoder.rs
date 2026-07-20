@@ -366,11 +366,11 @@ pub struct RangeFetchPlan {
 
 impl RangeFetchPlan {
     fn new(fetch_ranges: Vec<Range<u64>>, settings: &ReadSettings) -> Self {
-        let merger = RangeMerger::from_iter(
+        let merger = RangeMerger::from_iter_with_whole_read(
             fetch_ranges.iter().cloned(),
             settings.max_gap_size,
             settings.max_range_size,
-            Some(settings.parquet_fast_read_bytes),
+            settings.parquet_fast_read_bytes,
         );
 
         let merged = merger.ranges();
