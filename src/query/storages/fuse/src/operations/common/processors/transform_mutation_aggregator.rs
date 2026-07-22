@@ -22,6 +22,7 @@ use databend_common_base::runtime::execute_futures_in_parallel;
 use databend_common_catalog::plan::BlockMetaWithHLL;
 use databend_common_catalog::table::Table;
 use databend_common_catalog::table_context::TableContext;
+use databend_common_exception::ErrorCode;
 use databend_common_exception::Result;
 use databend_common_expression::BlockMetaInfoPtr;
 use databend_common_expression::BlockThresholds;
@@ -373,11 +374,17 @@ impl TableMutationAggregator {
                     .collect::<Vec<_>>();
                 Some(SegmentStatistics::new(hlls).to_bytes()?)
             };
-            let all_perfect = new_blocks.len() > 1;
+            // Only compaction/reclustering output may be force-marked perfect to keep
+            // those operations at a fixed point. REPLACE/MERGE append after-images
+            // must retain the physical perfect-block count from reduce_block_metas.
+            let force_all_blocks_perfect = matches!(
+                self.write_segment_ctx.kind,
+                MutationKind::Compact | MutationKind::Recluster
+            ) && new_blocks.len() > 1;
 
             let ctx = self.write_segment_ctx.clone();
             tasks.push(async move {
-                ctx.write_segment(new_blocks, new_hlls, all_perfect, set_hilbert_level)
+                ctx.write_segment(new_blocks, new_hlls, force_all_blocks_perfect, set_hilbert_level)
                     .await
             });
         }
@@ -497,7 +504,7 @@ impl TableMutationAggregator {
             let write_segment_ctx = self.write_segment_ctx.clone();
 
             tasks.push(async move {
-                let mut all_perfect = false;
+                let mut force_all_blocks_perfect = false;
                 let mut set_level = false;
                 let (new_blocks, new_hlls, origin_summary) = if let Some(loc) = location {
                     // read the old segment
@@ -558,11 +565,20 @@ impl TableMutationAggregator {
                     let stats = generate_segment_stats(new_hlls)?;
                     (new_blocks, stats, Some(segment_info.summary))
                 } else {
-                    // use by compact.
+                    // Only compact builds replacement segments without corresponding
+                    // entries in base_segments. Treating a missing base segment from
+                    // any other mutation as compact output could silently corrupt its
+                    // segment statistics.
+                    if !matches!(write_segment_ctx.kind, MutationKind::Compact) {
+                        return Err(ErrorCode::Internal(format!(
+                            "{} mutation references missing base segment index {}",
+                            write_segment_ctx.kind, index
+                        )));
+                    }
                     assert!(segment_mutation.deleted_blocks.is_empty());
                     // There are more than 1 blocks, means that the blocks can no longer be compacted.
                     // They can be marked as perfect blocks.
-                    all_perfect = segment_mutation.replaced_blocks.len() > 1;
+                    force_all_blocks_perfect = segment_mutation.replaced_blocks.len() > 1;
                     let (new_blocks, new_hlls) = segment_mutation
                         .replaced_blocks
                         .into_iter()
@@ -574,7 +590,7 @@ impl TableMutationAggregator {
                 };
 
                 let new_segment_info = write_segment_ctx
-                    .write_segment(new_blocks, new_hlls, all_perfect, set_level)
+                    .write_segment(new_blocks, new_hlls, force_all_blocks_perfect, set_level)
                     .await?;
 
                 Ok(SegmentLite {
@@ -831,7 +847,7 @@ impl WriteSegmentCtx {
         &self,
         blocks: Vec<Arc<BlockMeta>>,
         stats: Option<Vec<u8>>,
-        all_perfect: bool,
+        force_all_blocks_perfect: bool,
         set_hilbert_level: bool,
     ) -> Result<(String, Statistics)> {
         let location = self
@@ -839,7 +855,7 @@ impl WriteSegmentCtx {
             .gen_segment_info_location(self.table_meta_timestamps, false);
         let mut new_summary =
             reduce_block_metas(&blocks, self.thresholds, self.default_cluster_key);
-        if all_perfect {
+        if force_all_blocks_perfect {
             // To fix issue #13217.
             if new_summary.block_count > new_summary.perfect_block_count {
                 warn!(
