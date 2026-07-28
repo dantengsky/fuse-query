@@ -1060,29 +1060,23 @@ impl DPhpyOptimizer {
     ) -> Result<(Arc<SExpr>, bool)> {
         // Convert `final_plan` to `SExpr`
         let join_expr = final_plan.s_expr(&self.join_relations);
+        let join_expr = self.apply_filters(&join_expr)?;
         // Find first join node in `s_expr`, then replace it with `join_expr`
-        let new_s_expr = self.replace_join_expr(&join_expr, s_expr)?;
+        let new_s_expr = Self::replace_join_expr(&join_expr, s_expr)?;
         Ok((Arc::new(new_s_expr), true))
     }
 
     /// Replace the join expression in the plan tree
     #[allow(clippy::only_used_in_recursion)]
     #[recursive::recursive]
-    fn replace_join_expr(&self, join_expr: &SExpr, s_expr: &SExpr) -> Result<SExpr> {
+    fn replace_join_expr(join_expr: &SExpr, s_expr: &SExpr) -> Result<SExpr> {
         match s_expr.plan.as_ref() {
-            RelOperator::Join(_) => {
-                let mut new_s_expr = s_expr.clone();
-                new_s_expr.plan = join_expr.plan.clone();
-                new_s_expr.children = join_expr.children.clone();
-
-                // Apply filters if needed
-                self.apply_filters(&new_s_expr)
-            }
+            // Do not mutate a clone of the old join: it shares the old statistics cache.
+            RelOperator::Join(_) => Ok(join_expr.clone()),
             _ => {
-                let child_expr = self.replace_join_expr(join_expr, &s_expr.children[0])?;
-                let mut new_s_expr = s_expr.clone();
-                new_s_expr.children = vec![Arc::new(child_expr)];
-                Ok(new_s_expr)
+                let child_expr = Self::replace_join_expr(join_expr, &s_expr.children[0])?;
+                // Rebuild ancestors to invalidate properties derived from the old join tree.
+                Ok(s_expr.replace_children([Arc::new(child_expr)]))
             }
         }
     }
@@ -1148,5 +1142,57 @@ impl Optimizer for DPhpyOptimizer {
 
     async fn optimize(&mut self, s_expr: &SExpr) -> Result<SExpr> {
         self.optimize_async(s_expr).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::optimizer::ir::RelExpr;
+    use crate::optimizer::ir::StatInfo;
+    use crate::plans::DummyTableScan;
+    use crate::plans::EvalScalar;
+    use crate::plans::Join;
+
+    fn stat_info(cardinality: f64) -> Arc<StatInfo> {
+        Arc::new(StatInfo {
+            cardinality,
+            ..Default::default()
+        })
+    }
+
+    fn join_with_cached_cardinality(cardinality: f64) -> SExpr {
+        SExpr::create(
+            Arc::new(RelOperator::Join(Join::default())),
+            vec![
+                Arc::new(SExpr::create_leaf(DummyTableScan::new())),
+                Arc::new(SExpr::create_leaf(DummyTableScan::new())),
+            ],
+            None,
+            None,
+            Some(stat_info(cardinality)),
+        )
+    }
+
+    #[test]
+    fn test_replace_join_expr_invalidates_cached_parent_stats() {
+        let old_join = join_with_cached_cardinality(1.0);
+        let old_root = SExpr::create(
+            Arc::new(RelOperator::EvalScalar(EvalScalar { items: vec![] })),
+            vec![Arc::new(old_join)],
+            None,
+            None,
+            Some(stat_info(1.0)),
+        );
+        let new_join = join_with_cached_cardinality(42.0);
+
+        let result = DPhpyOptimizer::replace_join_expr(&new_join, &old_root).unwrap();
+        let cardinality = RelExpr::with_s_expr(&result)
+            .derive_cardinality()
+            .unwrap()
+            .cardinality;
+
+        assert_eq!(cardinality, 42.0);
+        assert_eq!(result.child(0).unwrap(), &new_join);
     }
 }
