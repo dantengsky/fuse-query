@@ -38,3 +38,11 @@ in stats      :
 out stats     :
 0 ColumnStat { min: Bytes([97, 97]), max: Bytes([122, 122]), ndv: 11.700000000000001, null_count: 0, histogram: None }
 
+expr          : s like 'a\_b'
+cardinality   : 100
+estimated     : 0
+in stats      :
+0 ColumnStat { min: Bytes([97, 97]), max: Bytes([122, 122]), ndv: 52.0, null_count: 0, histogram: None }
+out stats     :
+0 ColumnStat { min: Bytes([97, 97]), max: Bytes([122, 122]), ndv: 0.0, null_count: 0, histogram: None }
+

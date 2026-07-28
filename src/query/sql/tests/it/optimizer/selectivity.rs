@@ -586,7 +586,7 @@ fn test_selectivity_special_predicate_outcomes() -> Result<()> {
         null_count: StatCount::exact(0),
         histogram: None,
     })]);
-    for expr in ["s like 'ab%'", "s like '%ab_'"] {
+    for expr in ["s like 'ab%'", "s like '%ab_'", "s like 'a\\_b'"] {
         run_case_with_predicates(
             &mut file,
             &[expr],
