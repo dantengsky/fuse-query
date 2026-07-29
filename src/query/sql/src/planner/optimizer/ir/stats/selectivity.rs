@@ -150,7 +150,9 @@ impl SelectivityEstimator {
             }) => !domain.has_true,
             _ => false,
         }) {
-            self.proven_empty = true;
+            // Column domains come from table statistics and may lag behind newly
+            // appended data. They are useful for estimating zero rows, but they
+            // are not constraints and therefore cannot prove that a scan is empty.
             self.clear_column_stats_for_empty_result();
             return Ok(0.0);
         }
@@ -984,6 +986,7 @@ mod tests {
         let mut estimator = SelectivityEstimator::new(column_stats, StatCardinality::estimate(8.0));
 
         assert_eq!(estimator.apply(&[predicate])?, 0.0);
+        assert!(!estimator.is_proven_empty());
         let column_stats = estimator.into_column_stats();
         let column_stat = &column_stats[&column_index];
         assert_eq!(column_stat.ndv, StatEstimate::exact(0.0));
