@@ -1157,6 +1157,7 @@ mod tests {
     fn stat_info(cardinality: f64) -> Arc<StatInfo> {
         Arc::new(StatInfo {
             cardinality,
+            max_cardinality: cardinality,
             ..Default::default()
         })
     }
