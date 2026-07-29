@@ -21,6 +21,10 @@ use crate::plans::ScalarExpr;
 use crate::plans::ScalarItem;
 use crate::plans::SortItem;
 
+// An estimate that understates the largest relevant input by more than three
+// orders of magnitude is too uncertain for cardinality-sensitive join choices.
+pub(crate) const MAX_CARDINALITY_UNDERESTIMATION_RATIO: f64 = 1_000.0;
+
 #[derive(Default, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct RequiredProperty {
     pub distribution: Distribution,
@@ -49,10 +53,30 @@ pub struct Statistics {
 
 #[derive(Default, Clone, Debug)]
 pub struct StatInfo {
-    // TODO(leiysky): introduce upper bound of cardinality to
-    // reduce error in estimation.
     pub cardinality: f64,
+    /// A conservative estimate of the cardinality that may reach this subtree's
+    /// output. Join preserves its input cardinalities because skew and fan-out
+    /// can make its output estimate unsafe for broadcast decisions. Operators
+    /// that bound or selectively reduce their output reset this value.
+    pub max_cardinality: f64,
     pub statistics: Statistics,
+}
+
+impl StatInfo {
+    pub(crate) fn cardinality_is_severely_underestimated(&self) -> bool {
+        let cardinality = self.cardinality;
+        let max_cardinality = self.max_cardinality.max(cardinality);
+
+        cardinality.is_finite()
+            && max_cardinality.is_finite()
+            && cardinality >= 0.0
+            && max_cardinality >= 0.0
+            && if cardinality == 0.0 {
+                max_cardinality > 0.0
+            } else {
+                max_cardinality / cardinality > MAX_CARDINALITY_UNDERESTIMATION_RATIO
+            }
+    }
 }
 
 #[derive(Default, Clone, Debug)]
