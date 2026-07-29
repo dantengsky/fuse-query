@@ -96,6 +96,7 @@ impl Operator for Filter {
         let mut sb =
             SelectivityEstimator::new(stat_info.statistics.column_stats.clone(), input_cardinality);
         let cardinality = sb.apply(&self.predicates)?;
+        let precise_cardinality = sb.is_proven_empty().then_some(0);
         // Derive column statistics
         let column_stats = if cardinality == 0.0 {
             HashMap::new()
@@ -105,9 +106,52 @@ impl Operator for Filter {
         Ok(Arc::new(StatInfo {
             cardinality,
             statistics: Statistics {
-                precise_cardinality: None,
+                precise_cardinality,
                 column_stats,
             },
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use databend_common_expression::Scalar;
+
+    use super::*;
+    use crate::optimizer::ir::SExpr;
+    use crate::plans::ConstantExpr;
+    use crate::plans::DummyTableScan;
+    use crate::plans::MutationSource;
+
+    fn constant_filter(value: bool, input: SExpr) -> SExpr {
+        SExpr::create_unary(
+            Filter {
+                predicates: vec![ScalarExpr::ConstantExpr(ConstantExpr {
+                    span: None,
+                    value: Scalar::Boolean(value),
+                })],
+            },
+            input,
+        )
+    }
+
+    #[test]
+    fn test_filter_preserves_proven_empty_cardinality() -> Result<()> {
+        let expr = constant_filter(false, SExpr::create_leaf(DummyTableScan::default()));
+        let stat = RelExpr::with_s_expr(&expr).derive_cardinality()?;
+
+        assert_eq!(stat.cardinality, 0.0);
+        assert_eq!(stat.statistics.precise_cardinality, Some(0));
+        Ok(())
+    }
+
+    #[test]
+    fn test_filter_does_not_promote_estimated_zero_to_precise() -> Result<()> {
+        let expr = constant_filter(true, SExpr::create_leaf(MutationSource::default()));
+        let stat = RelExpr::with_s_expr(&expr).derive_cardinality()?;
+
+        assert_eq!(stat.cardinality, 0.0);
+        assert_eq!(stat.statistics.precise_cardinality, None);
+        Ok(())
     }
 }
