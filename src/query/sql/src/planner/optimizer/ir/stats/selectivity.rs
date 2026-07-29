@@ -57,6 +57,7 @@ pub struct SelectivityEstimator {
     cardinality: StatCardinality,
     column_stats: ColumnStatSet,
     overrides: ColumnStatSet,
+    proven_empty: bool,
 }
 
 impl SelectivityEstimator {
@@ -65,7 +66,15 @@ impl SelectivityEstimator {
             cardinality,
             column_stats: input_stat,
             overrides: ColumnStatSet::new(),
+            proven_empty: cardinality == StatCardinality::Exact(0),
         }
+    }
+
+    /// Returns true when the predicates deterministically produce no rows.
+    ///
+    /// This is deliberately stronger than an estimated cardinality of zero.
+    pub fn is_proven_empty(&self) -> bool {
+        self.proven_empty
     }
 
     fn merged_column_stats(&self) -> ColumnStatSet {
@@ -119,6 +128,7 @@ impl SelectivityEstimator {
             return match constant_filter_truthiness(&constant.scalar) {
                 Some(true) => Ok(self.cardinality.value()),
                 Some(false) => {
+                    self.proven_empty = true;
                     self.clear_column_stats_for_empty_result();
                     Ok(0.0)
                 }
@@ -140,6 +150,7 @@ impl SelectivityEstimator {
             }) => !domain.has_true,
             _ => false,
         }) {
+            self.proven_empty = true;
             self.clear_column_stats_for_empty_result();
             return Ok(0.0);
         }
@@ -234,6 +245,7 @@ impl SelectivityEstimator {
             Selectivity::Unknown => DEFAULT_SELECTIVITY,
             Selectivity::LowerBound => UNKNOWN_COL_STATS_FILTER_SEL_LOWER_BOUND,
             Selectivity::Zero => {
+                self.proven_empty = true;
                 self.clear_column_stats_for_empty_result();
                 return 0.0;
             }
@@ -1004,6 +1016,7 @@ mod tests {
         let mut estimator = SelectivityEstimator::new(column_stats, StatCardinality::exact(8));
 
         assert_eq!(estimator.apply(&[predicate])?, 0.0);
+        assert!(!estimator.is_proven_empty());
         let column_stats = estimator.into_column_stats();
         let column_stat = &column_stats[&column_index];
         assert_ne!(column_stat.ndv, StatEstimate::exact(0.0));
@@ -1035,6 +1048,7 @@ mod tests {
         let mut estimator = SelectivityEstimator::new(column_stats, StatCardinality::estimate(0.0));
 
         assert_eq!(estimator.apply(&[predicate])?, 0.0);
+        assert!(!estimator.is_proven_empty());
         let column_stats = estimator.into_column_stats();
         let column_stat = &column_stats[&column_index];
         assert_ne!(column_stat.ndv, StatEstimate::exact(0.0));
@@ -1044,13 +1058,13 @@ mod tests {
 
     #[test]
     fn test_constant_filter_truthiness_accepts_numeric_constants() -> Result<()> {
-        for (scalar, expected_rows) in [
-            (Scalar::Number(NumberScalar::UInt8(1)), 10.0),
-            (Scalar::Number(NumberScalar::Int8(-1)), 10.0),
-            (Scalar::Number(NumberScalar::UInt8(0)), 0.0),
-            (Scalar::Boolean(true), 10.0),
-            (Scalar::Boolean(false), 0.0),
-            (Scalar::Null, 0.0),
+        for (scalar, expected_rows, proven_empty) in [
+            (Scalar::Number(NumberScalar::UInt8(1)), 10.0, false),
+            (Scalar::Number(NumberScalar::Int8(-1)), 10.0, false),
+            (Scalar::Number(NumberScalar::UInt8(0)), 0.0, true),
+            (Scalar::Boolean(true), 10.0, false),
+            (Scalar::Boolean(false), 0.0, true),
+            (Scalar::Null, 0.0, true),
         ] {
             let mut estimator =
                 SelectivityEstimator::new(ColumnStatSet::new(), StatCardinality::estimate(10.0));
@@ -1060,6 +1074,7 @@ mod tests {
             });
 
             assert_eq!(estimator.apply(&[predicate])?, expected_rows);
+            assert_eq!(estimator.is_proven_empty(), proven_empty);
         }
 
         Ok(())
