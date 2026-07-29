@@ -129,6 +129,10 @@ impl Join for OuterRightHashJoin {
         )
     }
 
+    fn can_skip_probe(&self) -> bool {
+        *self.basic_state.build_rows == 0
+    }
+
     fn probe_block(&mut self, data: DataBlock) -> Result<Box<dyn JoinStream + '_>> {
         if data.is_empty() || *self.basic_state.build_rows == 0 {
             return Ok(Box::new(EmptyJoinStream));
