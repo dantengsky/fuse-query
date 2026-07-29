@@ -174,6 +174,13 @@ mod tests {
         }
     }
 
+    fn estimated_stat(cardinality: f64) -> StatInfo {
+        StatInfo {
+            cardinality,
+            statistics: Statistics::default(),
+        }
+    }
+
     fn proven_empty_expr() -> SExpr {
         SExpr::create_unary(
             Filter {
@@ -220,6 +227,23 @@ mod tests {
 
         assert!(!should_commute(JoinType::Left, &left, &right));
         assert!(should_commute(JoinType::Right, &left, &right));
+    }
+
+    #[test]
+    fn test_outer_join_builds_smaller_nonzero_input() {
+        let selective_preserved_input = estimated_stat(1.0);
+        let stale_range_input = estimated_stat(20.0);
+
+        assert!(should_commute(
+            JoinType::Left,
+            &selective_preserved_input,
+            &stale_range_input
+        ));
+        assert!(!should_commute(
+            JoinType::Left,
+            &stale_range_input,
+            &selective_preserved_input
+        ));
     }
 
     #[test]
