@@ -53,8 +53,11 @@ use unicase::Ascii;
 use super::PhysicalPlanCast;
 use super::runtime_filter::PhysicalRuntimeFilters;
 use super::runtime_filter::SpatialRuntimeFilterMode;
+use crate::physical_plans::ConstantTableScan;
+use crate::physical_plans::EvalScalar;
 use crate::physical_plans::Exchange;
 use crate::physical_plans::PhysicalPlanBuilder;
+use crate::physical_plans::TableScan;
 use crate::physical_plans::explain::PlanStatsInfo;
 use crate::physical_plans::format::HashJoinFormatter;
 use crate::physical_plans::format::PhysicalFormat;
@@ -164,6 +167,69 @@ pub struct HashJoin {
     pub runtime_filter: PhysicalRuntimeFilters,
     pub broadcast_id: Option<u32>,
     pub nested_loop_filter: Option<NestedLoopFilterInfo>,
+}
+
+fn join_output_is_known_empty(
+    join_type: JoinType,
+    probe_is_empty: bool,
+    build_is_empty: bool,
+) -> bool {
+    match join_type {
+        JoinType::Cross | JoinType::Inner | JoinType::InnerAny | JoinType::Asof => {
+            probe_is_empty || build_is_empty
+        }
+        JoinType::Left
+        | JoinType::LeftAny
+        | JoinType::LeftSingle
+        | JoinType::LeftAsof
+        | JoinType::LeftAnti
+        | JoinType::RightMark => probe_is_empty,
+        JoinType::Right
+        | JoinType::RightAny
+        | JoinType::RightSingle
+        | JoinType::RightAsof
+        | JoinType::RightAnti
+        | JoinType::LeftMark => build_is_empty,
+        JoinType::Full => probe_is_empty && build_is_empty,
+        JoinType::LeftSemi | JoinType::RightSemi => probe_is_empty || build_is_empty,
+    }
+}
+
+fn physical_plan_is_known_empty(plan: &PhysicalPlan) -> bool {
+    if let Some(scan) = ConstantTableScan::from_physical_plan(plan) {
+        return scan.num_rows == 0;
+    }
+
+    if let Some(scan) = TableScan::from_physical_plan(plan) {
+        return scan.source.parts.partitions.is_empty() && scan.source.statistics.read_rows == 0;
+    }
+
+    if let Some(eval) = EvalScalar::from_physical_plan(plan) {
+        return physical_plan_is_known_empty(&eval.input);
+    }
+
+    if let Some(join) = HashJoin::from_physical_plan(plan) {
+        return join_output_is_known_empty(
+            join.join_type,
+            physical_plan_is_known_empty(&join.probe),
+            physical_plan_is_known_empty(&join.build),
+        );
+    }
+
+    false
+}
+
+fn empty_outer_join_after_pruning(
+    join_type: JoinType,
+    probe_side: &PhysicalPlan,
+    build_side: &PhysicalPlan,
+) -> bool {
+    matches!(join_type, JoinType::Left | JoinType::Right)
+        && join_output_is_known_empty(
+            join_type,
+            physical_plan_is_known_empty(probe_side),
+            physical_plan_is_known_empty(build_side),
+        )
 }
 
 #[typetag::serde]
@@ -1529,6 +1595,20 @@ impl PhysicalPlanBuilder {
         let (_merged_fields_unused, output_schema, projections) =
             self.create_output_schema(join, probe_fields, build_fields, &column_projections)?;
 
+        // Storage pruning runs while the physical scan plans are built, after
+        // logical join ordering has already finished. If the preserved side of
+        // an outer join is known to have no partitions, the join result is empty
+        // regardless of the other side. Fold it now so execution does not build
+        // a potentially large hash table before discovering the empty input.
+        if empty_outer_join_after_pruning(join.join_type, &probe_side, &build_side) {
+            return Ok(PhysicalPlan::new(ConstantTableScan {
+                meta: PhysicalPlanMeta::new("ConstantTableScan"),
+                values: vec![],
+                num_rows: 0,
+                output_schema,
+            }));
+        }
+
         // Step 10: Process non-equi conditions
         let (
             non_equi_conditions,
@@ -1605,6 +1685,7 @@ impl PhysicalPlanBuilder {
 
 #[cfg(test)]
 mod tests {
+    use databend_common_expression::Column;
     use databend_common_expression::types::NumberDataType;
     use databend_common_sql::ColumnBindingBuilder;
     use databend_common_sql::Visibility;
@@ -1613,6 +1694,15 @@ mod tests {
     use databend_common_sql::plans::JoinEquiCondition;
 
     use super::*;
+
+    fn constant_plan(num_rows: usize) -> PhysicalPlan {
+        PhysicalPlan::new(ConstantTableScan {
+            meta: PhysicalPlanMeta::new("ConstantTableScan"),
+            values: Vec::<Column>::new(),
+            num_rows,
+            output_schema: DataSchema::empty().into(),
+        })
+    }
 
     fn int64_type() -> DataType {
         DataType::Number(NumberDataType::Int64)
@@ -1638,6 +1728,34 @@ mod tests {
             DataField::new("1", int64_type()),
         ]);
         (probe, build, target)
+    }
+
+    #[test]
+    fn detects_empty_outer_join_preserved_side_after_pruning() {
+        let empty_probe = PhysicalPlan::new(EvalScalar::create(
+            constant_plan(0),
+            vec![],
+            BTreeSet::new(),
+            None,
+        ));
+        let non_empty_build = constant_plan(1);
+
+        assert!(empty_outer_join_after_pruning(
+            JoinType::Left,
+            &empty_probe,
+            &non_empty_build
+        ));
+        assert!(!empty_outer_join_after_pruning(
+            JoinType::Right,
+            &empty_probe,
+            &non_empty_build
+        ));
+    }
+
+    #[test]
+    fn derives_empty_nested_right_outer_join_from_empty_build() {
+        assert!(join_output_is_known_empty(JoinType::Right, false, true));
+        assert!(!join_output_is_known_empty(JoinType::Right, true, false));
     }
 
     #[test]
