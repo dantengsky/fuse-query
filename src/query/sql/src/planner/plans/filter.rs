@@ -104,6 +104,7 @@ impl Operator for Filter {
         };
         Ok(Arc::new(StatInfo {
             cardinality,
+            max_cardinality: cardinality,
             statistics: Statistics {
                 precise_cardinality: None,
                 column_stats,

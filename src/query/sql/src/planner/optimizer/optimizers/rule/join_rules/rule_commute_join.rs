@@ -19,6 +19,7 @@ use databend_common_exception::Result;
 use crate::optimizer::ir::Matcher;
 use crate::optimizer::ir::RelExpr;
 use crate::optimizer::ir::SExpr;
+use crate::optimizer::ir::StatInfo;
 use crate::optimizer::optimizers::rule::Rule;
 use crate::optimizer::optimizers::rule::RuleID;
 use crate::optimizer::optimizers::rule::TransformResult;
@@ -30,6 +31,48 @@ use crate::plans::RelOperator;
 fn contains_recursive_cte(expr: &SExpr) -> bool {
     matches!(expr.plan(), RelOperator::RecursiveCteScan(_))
         || expr.children().any(contains_recursive_cte)
+}
+
+fn should_commute(join_type: JoinType, left: &StatInfo, right: &StatInfo) -> bool {
+    let left_build_cardinality = if left.cardinality_is_severely_underestimated() {
+        left.max_cardinality.max(left.cardinality)
+    } else {
+        left.cardinality
+    };
+    let right_build_cardinality = if right.cardinality_is_severely_underestimated() {
+        right.max_cardinality.max(right.cardinality)
+    } else {
+        right.cardinality
+    };
+    if left_build_cardinality < right_build_cardinality
+        || (left_build_cardinality == right_build_cardinality
+            && left.cardinality < right.cardinality)
+    {
+        return matches!(
+            join_type,
+            JoinType::Inner
+                | JoinType::Cross
+                | JoinType::Left
+                | JoinType::Right
+                | JoinType::LeftSingle
+                | JoinType::RightSingle
+                | JoinType::LeftSemi
+                | JoinType::RightSemi
+                | JoinType::LeftAnti
+                | JoinType::RightAnti
+                | JoinType::LeftMark
+                | JoinType::RightMark
+        );
+    }
+
+    if left_build_cardinality != right_build_cardinality || left.cardinality != right.cardinality {
+        return false;
+    }
+
+    matches!(
+        join_type,
+        JoinType::Right | JoinType::RightSingle | JoinType::RightSemi | JoinType::RightAnti
+    )
 }
 
 /// Rule to apply commutativity of join operator.
@@ -79,33 +122,9 @@ impl Rule for RuleCommuteJoin {
 
         let left_rel_expr = RelExpr::with_s_expr(left_child);
         let right_rel_expr = RelExpr::with_s_expr(right_child);
-        let left_card = left_rel_expr.derive_cardinality()?.cardinality;
-        let right_card = right_rel_expr.derive_cardinality()?.cardinality;
-
-        let need_commute = if left_card < right_card {
-            matches!(
-                join.join_type,
-                JoinType::Inner
-                    | JoinType::Cross
-                    | JoinType::Left
-                    | JoinType::Right
-                    | JoinType::LeftSingle
-                    | JoinType::RightSingle
-                    | JoinType::LeftSemi
-                    | JoinType::RightSemi
-                    | JoinType::LeftAnti
-                    | JoinType::RightAnti
-                    | JoinType::LeftMark
-                    | JoinType::RightMark
-            )
-        } else if left_card == right_card {
-            matches!(
-                join.join_type,
-                JoinType::Right | JoinType::RightSingle | JoinType::RightSemi | JoinType::RightAnti
-            )
-        } else {
-            false
-        };
+        let left_stat = left_rel_expr.derive_cardinality()?;
+        let right_stat = right_rel_expr.derive_cardinality()?;
+        let need_commute = should_commute(join.join_type, &left_stat, &right_stat);
         if need_commute {
             // Swap the join conditions side
             for condition in join.equi_conditions.iter_mut() {
@@ -134,4 +153,65 @@ impl Default for RuleCommuteJoin {
     fn default() -> Self {
         Self::new()
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::optimizer::ir::Statistics;
+
+    fn estimated_stat(cardinality: f64) -> StatInfo {
+        StatInfo {
+            cardinality,
+            max_cardinality: cardinality,
+            statistics: Statistics::default(),
+        }
+    }
+
+    #[test]
+    fn test_commute_join_prefers_safer_build_cardinality() {
+        let mut left = estimated_stat(1_000.0);
+        left.max_cardinality = 1_000.0;
+        let mut underestimated_right = estimated_stat(10.0);
+        underestimated_right.max_cardinality = 200_000_000.0;
+
+        assert!(should_commute(
+            JoinType::Inner,
+            &left,
+            &underestimated_right
+        ));
+        assert!(!should_commute(
+            JoinType::Inner,
+            &underestimated_right,
+            &left
+        ));
+    }
+
+    #[test]
+    fn test_commute_join_preserves_cardinality_order_without_severe_underestimate() {
+        let mut selective_left = estimated_stat(1_000_000.0);
+        selective_left.max_cardinality = 1_000_000_000.0;
+        let right = estimated_stat(100_000_000.0);
+
+        assert!(should_commute(JoinType::Inner, &selective_left, &right));
+        assert!(!should_commute(JoinType::Inner, &right, &selective_left));
+    }
+
+    #[test]
+    fn test_outer_join_builds_smaller_nonzero_input() {
+        let selective_preserved_input = estimated_stat(1.0);
+        let stale_range_input = estimated_stat(20.0);
+
+        assert!(should_commute(
+            JoinType::Left,
+            &selective_preserved_input,
+            &stale_range_input
+        ));
+        assert!(!should_commute(
+            JoinType::Left,
+            &stale_range_input,
+            &selective_preserved_input
+        ));
+    }
+
 }
