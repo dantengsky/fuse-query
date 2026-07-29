@@ -51,6 +51,9 @@ Join 执行器仍对每个 Probe block 计算 Join Key 和 hash。旧执行器�
    两个精确零保持原有 canonicalization。
 6. `RIGHT OUTER JOIN` 的 Build 是 Preserve 侧；Build 行数为零时结果必为空。新 Hash Join 在
    `probe_block` 入口直接返回空流，避免 Probe Key 求值、projection 和 hash probe。
+7. 所有 Build worker 完成 `final_build` 并通过同步屏障后，执行器检查空 Build 快速返回条件；满足
+   条件时关闭 Probe 输入和 Join 输出，使上游扫描与表达式 pipeline 一并停止。Grace spill 模式不
+   使用这条判定，避免将已经写入 spill 的 Build 数据误判为空。
 
 ## 未采用的方案
 
@@ -73,7 +76,10 @@ Join 执行器仍对每个 Probe block 计算 Join Key 和 hash。旧执行器�
 - 原有零值 canonicalization 保持不变。
 - 新 Hash Join 完成空 Build 后不会求值 `RIGHT OUTER JOIN` 的 Probe Key；执行器定向测试用一个
   必然报错的 Probe Key 验证快速路径确实位于表达式求值之前。
+- 新 Hash Join 在 BuildFinal 同步后关闭空 Build 对应的 Probe pipeline；执行器定向测试把必然
+  报错的表达式放在 Join 上游，验证该 pipeline 不会被拉取。
 - SQL 回归覆盖非空 Probe 与空 Preserve/Build 输入的 `RIGHT OUTER JOIN` 空结果。
+- SQL 回归同时覆盖空 Build 时不求值 Probe pipeline 中的 Join Key。
 
 验证结果：
 
