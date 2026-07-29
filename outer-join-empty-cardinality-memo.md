@@ -29,6 +29,10 @@ Filter 会提前得到零行估算；另一侧即使还有更高选择性的谓�
 worker 完成裁剪后回传的运行时统计；物理 Join 创建时尚未获得该结果。列统计是估算依据而不是数据
 约束，也可能落后于新追加数据，因此不能据此证明扫描为空。
 
+规划修复部署后，Join 已按预期交换为 `RIGHT OUTER JOIN`，空输入位于 Hash Build 侧，但新 Hash
+Join 执行器仍对每个 Probe block 计算 Join Key 和 hash。旧执行器在空 Build 时已跳过这些工作，
+因此剩余回归位于执行阶段，而不是基数估算或 Join 方向。
+
 诊断还发现，缺少频率统计时，严重倾斜的等值谓词可能被当作近似唯一值。这会进一步恶化基数，
 但不能通过特殊处理某个业务值或假设统一选择率来安全修复。
 
@@ -45,6 +49,8 @@ worker 完成裁剪后回传的运行时统计；物理 Join 创建时尚未获�
    证明的矛盾；Outer Join 仍按 Preserve 侧语义传播精确零。
 5. 两侧确实同为零时，`CommuteJoin` 继续优先把唯一的精确空输入放在 Build 侧；两个非精确零或
    两个精确零保持原有 canonicalization。
+6. `RIGHT OUTER JOIN` 的 Build 是 Preserve 侧；Build 行数为零时结果必为空。新 Hash Join 在
+   `probe_block` 入口直接返回空流，避免 Probe Key 求值、projection 和 hash probe。
 
 ## 未采用的方案
 
@@ -65,6 +71,9 @@ worker 完成裁剪后回传的运行时统计；物理 Join 创建时尚未获�
 - 零基数平局时，精确空侧被放到 Build。
 - 精确空侧本来就在 Build 时不交换。
 - 原有零值 canonicalization 保持不变。
+- 新 Hash Join 完成空 Build 后不会求值 `RIGHT OUTER JOIN` 的 Probe Key；执行器定向测试用一个
+  必然报错的 Probe Key 验证快速路径确实位于表达式求值之前。
+- SQL 回归覆盖非空 Probe 与空 Preserve/Build 输入的 `RIGHT OUTER JOIN` 空结果。
 
 验证结果：
 
