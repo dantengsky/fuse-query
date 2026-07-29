@@ -130,6 +130,9 @@ impl Operator for TopN {
 
         Ok(Arc::new(StatInfo {
             cardinality,
+            // TopN always bounds its output, so the subtree's risk estimate
+            // resets to the bounded cardinality.
+            max_cardinality: cardinality,
             statistics: Statistics {
                 precise_cardinality,
                 column_stats: Default::default(),

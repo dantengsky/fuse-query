@@ -77,6 +77,9 @@ impl UnionAll {
 
         Ok(Arc::new(StatInfo {
             cardinality,
+            max_cardinality: cardinality
+                .max(left_stat_info.max_cardinality)
+                .max(right_stat_info.max_cardinality),
             statistics: Statistics {
                 precise_cardinality,
                 column_stats: Default::default(),

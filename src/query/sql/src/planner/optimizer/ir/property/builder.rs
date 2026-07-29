@@ -122,6 +122,24 @@ impl<'a> RelExpr<'a> {
         }
     }
 
+    /// Get statistics for the specified child group.
+    ///
+    /// Unlike `derive_cardinality_child`, the memo variants deliberately look
+    /// through the current expression's child index. This is needed by physical
+    /// alternative selection, where the build subtree rather than the current
+    /// equivalence group determines whether an exchange is safe.
+    pub(crate) fn stat_info_child_group(&self, index: IndexType) -> Result<Arc<StatInfo>> {
+        match self {
+            RelExpr::SExpr { expr } => {
+                let child = expr.child(index)?;
+                RelExpr::with_s_expr(child).derive_cardinality()
+            }
+            RelExpr::MExpr { expr, memo } | RelExpr::OptContext { expr, memo, .. } => {
+                Ok(expr.child_group(memo, index)?.stat_info.clone())
+            }
+        }
+    }
+
     #[recursive::recursive]
     pub fn derive_physical_prop(&self) -> Result<PhysicalProperty> {
         let plan = match self {
