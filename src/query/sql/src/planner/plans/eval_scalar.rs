@@ -245,6 +245,7 @@ impl Operator for EvalScalar {
 
         Ok(Arc::new(StatInfo {
             cardinality: input.cardinality,
+            max_cardinality: input.max_cardinality,
             statistics: Statistics {
                 precise_cardinality: input.statistics.precise_cardinality,
                 column_stats,
@@ -296,6 +297,7 @@ mod tests {
         let expr = SExpr::create_leaf(Arc::new(RelOperator::ConstantTableScan(scan)));
         let stat = Arc::new(StatInfo {
             cardinality: cardinality as f64,
+            max_cardinality: cardinality as f64,
             statistics: Statistics {
                 precise_cardinality: Some(cardinality as u64),
                 column_stats: HashMap::from([(Symbol::new(index), ColumnStat {

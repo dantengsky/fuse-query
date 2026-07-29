@@ -160,6 +160,9 @@ impl UnionAll {
 
         Ok(Arc::new(StatInfo {
             cardinality,
+            max_cardinality: cardinality
+                .max(left_stat_info.max_cardinality)
+                .max(right_stat_info.max_cardinality),
             statistics: Statistics {
                 precise_cardinality,
                 column_stats,
@@ -330,6 +333,7 @@ mod tests {
     fn stat_info(index: usize, cardinality: f64) -> Arc<StatInfo> {
         Arc::new(StatInfo {
             cardinality,
+            max_cardinality: cardinality,
             statistics: Statistics {
                 precise_cardinality: None,
                 column_stats: HashMap::from([(Symbol::new(index), ColumnStat {
@@ -358,6 +362,7 @@ mod tests {
         let left = stat_info(0, 3.0);
         let right = Arc::new(StatInfo {
             cardinality: 4.0,
+            max_cardinality: 4.0,
             statistics: Statistics::default(),
         });
 
@@ -372,6 +377,7 @@ mod tests {
         let left = stat_info(0, 3.0);
         let right = Arc::new(StatInfo {
             cardinality: 0.0,
+            max_cardinality: 0.0,
             statistics: Statistics {
                 precise_cardinality: Some(0),
                 column_stats: HashMap::new(),
@@ -406,6 +412,7 @@ mod tests {
         .expect("lossless nullable cast should preserve key statistics");
         let large = Arc::new(StatInfo {
             cardinality: source.cardinality,
+            max_cardinality: source.cardinality,
             statistics: Statistics {
                 precise_cardinality: None,
                 column_stats: HashMap::from([(Symbol::new(1), cast_stat)]),
@@ -455,6 +462,7 @@ mod tests {
     ) -> Arc<StatInfo> {
         Arc::new(StatInfo {
             cardinality,
+            max_cardinality: cardinality,
             statistics: Statistics {
                 precise_cardinality,
                 column_stats: HashMap::from([(Symbol::new(index), ColumnStat {
