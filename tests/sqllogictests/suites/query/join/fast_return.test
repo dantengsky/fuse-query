@@ -29,6 +29,11 @@ query IIII
 select * from t2 left join t1 on t1.a = t2.a order by t1.a, t2.a
 ----
 
+# The right/build side is preserved, so an empty build makes the result empty.
+query IIII
+select * from t1 right join t2 on t1.a = t2.a order by t1.a, t2.a
+----
+
 statement ok
 set force_join_data_spill = 1;
 
