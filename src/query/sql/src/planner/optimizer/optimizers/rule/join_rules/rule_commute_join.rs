@@ -34,7 +34,20 @@ fn contains_recursive_cte(expr: &SExpr) -> bool {
 }
 
 fn should_commute(join_type: JoinType, left: &StatInfo, right: &StatInfo) -> bool {
-    if left.cardinality < right.cardinality {
+    let left_build_cardinality = if left.cardinality_is_severely_underestimated() {
+        left.max_cardinality.max(left.cardinality)
+    } else {
+        left.cardinality
+    };
+    let right_build_cardinality = if right.cardinality_is_severely_underestimated() {
+        right.max_cardinality.max(right.cardinality)
+    } else {
+        right.cardinality
+    };
+    if left_build_cardinality < right_build_cardinality
+        || (left_build_cardinality == right_build_cardinality
+            && left.cardinality < right.cardinality)
+    {
         return matches!(
             join_type,
             JoinType::Inner
@@ -52,7 +65,7 @@ fn should_commute(join_type: JoinType, left: &StatInfo, right: &StatInfo) -> boo
         );
     }
 
-    if left.cardinality != right.cardinality {
+    if left_build_cardinality != right_build_cardinality || left.cardinality != right.cardinality {
         return false;
     }
 
@@ -167,6 +180,7 @@ mod tests {
     fn empty_stat(precise: bool) -> StatInfo {
         StatInfo {
             cardinality: 0.0,
+            max_cardinality: 0.0,
             statistics: Statistics {
                 precise_cardinality: precise.then_some(0),
                 column_stats: Default::default(),
@@ -177,8 +191,38 @@ mod tests {
     fn estimated_stat(cardinality: f64) -> StatInfo {
         StatInfo {
             cardinality,
+            max_cardinality: cardinality,
             statistics: Statistics::default(),
         }
+    }
+
+    #[test]
+    fn test_commute_join_prefers_safer_build_cardinality() {
+        let mut left = estimated_stat(1_000.0);
+        left.max_cardinality = 1_000.0;
+        let mut underestimated_right = estimated_stat(10.0);
+        underestimated_right.max_cardinality = 200_000_000.0;
+
+        assert!(should_commute(
+            JoinType::Inner,
+            &left,
+            &underestimated_right
+        ));
+        assert!(!should_commute(
+            JoinType::Inner,
+            &underestimated_right,
+            &left
+        ));
+    }
+
+    #[test]
+    fn test_commute_join_preserves_cardinality_order_without_severe_underestimate() {
+        let mut selective_left = estimated_stat(1_000_000.0);
+        selective_left.max_cardinality = 1_000_000_000.0;
+        let right = estimated_stat(100_000_000.0);
+
+        assert!(should_commute(JoinType::Inner, &selective_left, &right));
+        assert!(!should_commute(JoinType::Inner, &right, &selective_left));
     }
 
     fn proven_empty_expr() -> SExpr {
