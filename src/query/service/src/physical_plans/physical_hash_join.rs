@@ -63,6 +63,7 @@ use crate::physical_plans::physical_plan::PhysicalPlan;
 use crate::physical_plans::physical_plan::PhysicalPlanMeta;
 use crate::physical_plans::resolve_scalar;
 use crate::physical_plans::runtime_filter::build_runtime_filter;
+use crate::physical_plans::runtime_filter::resolve_runtime_filter_build_table_index;
 use crate::pipelines::HashJoinStateRef;
 use crate::pipelines::PipelineBuilder;
 use crate::pipelines::processors::HashJoinBuildState;
@@ -908,6 +909,7 @@ impl PhysicalPlanBuilder {
     fn process_equi_conditions(
         &self,
         join: &Join,
+        build_side: &SExpr,
         probe_schema: &DataSchemaRef,
         build_schema: &DataSchemaRef,
         column_projections: &[Symbol],
@@ -942,14 +944,7 @@ impl PhysicalPlanBuilder {
 
             let build_table_index = if right_condition.used_columns().len() == 1 {
                 let column_idx = *right_condition.used_columns().iter().next().unwrap();
-                if matches!(
-                    self.metadata.read().column(column_idx),
-                    ColumnEntry::BaseTableColumn(_)
-                ) {
-                    self.metadata.read().column(column_idx).table_index()
-                } else {
-                    None
-                }
+                resolve_runtime_filter_build_table_index(&self.metadata, build_side, column_idx)
             } else {
                 None
             };
@@ -1561,6 +1556,7 @@ impl PhysicalPlanBuilder {
             build_table_indexes,
         ) = self.process_equi_conditions(
             join,
+            s_expr.build_side_child(),
             &probe_schema,
             &build_schema,
             &column_projections,
