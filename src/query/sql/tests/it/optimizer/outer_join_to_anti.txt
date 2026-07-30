@@ -1,0 +1,488 @@
+=== regular_right_key_becomes_left_anti ===
+description: A NULL filter on a regular right equi-key should become a left anti join.
+sql: SELECT l.k
+FROM outer_to_anti_left AS l
+LEFT JOIN outer_to_anti_right AS r ON l.k = r.k
+WHERE r.k IS NULL
+raw_plan:
+EvalScalar
+├── scalars: [outer_to_anti_left.k (#0) AS (#0)]
+└── Filter
+    ├── filters: [not(is_not_null(outer_to_anti_right.k (#3)))]
+    └── Join(Left)
+        ├── build keys: [outer_to_anti_right.k (#3)]
+        ├── probe keys: [outer_to_anti_left.k (#0)]
+        ├── other filters: []
+        ├── Scan
+        │   ├── table: default.outer_to_anti_right (#1)
+        │   ├── filters: []
+        │   ├── order by: []
+        │   └── limit: NONE
+        └── Scan
+            ├── table: default.outer_to_anti_left (#0)
+            ├── filters: []
+            ├── order by: []
+            └── limit: NONE
+optimized_plan:
+EvalScalar
+├── scalars: [outer_to_anti_left.k (#0) AS (#0), NULL AS (#3), NULL AS (#4), NULL AS (#5), NULL AS (#6)]
+└── Join(LeftAnti)
+    ├── build keys: [outer_to_anti_right.k (#3)]
+    ├── probe keys: [outer_to_anti_left.k (#0)]
+    ├── other filters: []
+    ├── Scan
+    │   ├── table: default.outer_to_anti_right (#1)
+    │   ├── filters: []
+    │   ├── order by: []
+    │   └── limit: NONE
+    └── Scan
+        ├── table: default.outer_to_anti_left (#0)
+        ├── filters: []
+        ├── order by: []
+        └── limit: NONE
+
+=== right_outputs_are_reconstructed_as_nulls ===
+description: Right outputs should remain available as typed NULL expressions.
+sql: SELECT l.k, r.k, r.payload
+FROM outer_to_anti_left AS l
+LEFT JOIN outer_to_anti_right AS r ON l.k = r.k
+WHERE r.k IS NULL
+raw_plan:
+EvalScalar
+├── scalars: [outer_to_anti_left.k (#0) AS (#0), outer_to_anti_right.k (#3) AS (#3), outer_to_anti_right.payload (#5) AS (#5)]
+└── Filter
+    ├── filters: [not(is_not_null(outer_to_anti_right.k (#3)))]
+    └── Join(Left)
+        ├── build keys: [outer_to_anti_right.k (#3)]
+        ├── probe keys: [outer_to_anti_left.k (#0)]
+        ├── other filters: []
+        ├── Scan
+        │   ├── table: default.outer_to_anti_right (#1)
+        │   ├── filters: []
+        │   ├── order by: []
+        │   └── limit: NONE
+        └── Scan
+            ├── table: default.outer_to_anti_left (#0)
+            ├── filters: []
+            ├── order by: []
+            └── limit: NONE
+optimized_plan:
+EvalScalar
+├── scalars: [outer_to_anti_left.k (#0) AS (#0), NULL AS (#3), NULL AS (#4), NULL AS (#5)]
+└── Join(LeftAnti)
+    ├── build keys: [outer_to_anti_right.k (#3)]
+    ├── probe keys: [outer_to_anti_left.k (#0)]
+    ├── other filters: []
+    ├── Scan
+    │   ├── table: default.outer_to_anti_right (#1)
+    │   ├── filters: []
+    │   ├── order by: []
+    │   └── limit: NONE
+    └── Scan
+        ├── table: default.outer_to_anti_left (#0)
+        ├── filters: []
+        ├── order by: []
+        └── limit: NONE
+
+=== remaining_filter_is_preserved ===
+description: An unrelated predicate on the preserved side should remain after rewriting.
+sql: SELECT l.k
+FROM outer_to_anti_left AS l
+LEFT JOIN outer_to_anti_right AS r ON l.k = r.k
+WHERE r.k IS NULL AND l.keep > 0
+raw_plan:
+EvalScalar
+├── scalars: [outer_to_anti_left.k (#0) AS (#0)]
+└── Filter
+    ├── filters: [not(is_not_null(outer_to_anti_right.k (#3))), gt(outer_to_anti_left.keep (#2), 0)]
+    └── Join(Left)
+        ├── build keys: [outer_to_anti_right.k (#3)]
+        ├── probe keys: [outer_to_anti_left.k (#0)]
+        ├── other filters: []
+        ├── Scan
+        │   ├── table: default.outer_to_anti_right (#1)
+        │   ├── filters: []
+        │   ├── order by: []
+        │   └── limit: NONE
+        └── Scan
+            ├── table: default.outer_to_anti_left (#0)
+            ├── filters: []
+            ├── order by: []
+            └── limit: NONE
+optimized_plan:
+EvalScalar
+├── scalars: [outer_to_anti_left.k (#0) AS (#0), NULL AS (#3), NULL AS (#4), NULL AS (#5), NULL AS (#6), outer_to_anti_left.keep (#2) AS (#7)]
+└── Join(LeftAnti)
+    ├── build keys: [outer_to_anti_right.k (#3)]
+    ├── probe keys: [outer_to_anti_left.k (#0)]
+    ├── other filters: []
+    ├── Scan
+    │   ├── table: default.outer_to_anti_right (#1)
+    │   ├── filters: []
+    │   ├── order by: []
+    │   └── limit: NONE
+    └── Scan
+        ├── table: default.outer_to_anti_left (#0)
+        ├── filters: [gt(outer_to_anti_left.keep (#2), 0)]
+        ├── order by: []
+        └── limit: NONE
+
+=== right_outer_exclusion_becomes_anti ===
+description: The symmetric right outer exclusion should become an anti join.
+sql: SELECT l.keep, r.k
+FROM outer_to_anti_left AS l
+RIGHT JOIN outer_to_anti_right AS r ON l.k = r.k
+WHERE l.k IS NULL
+raw_plan:
+EvalScalar
+├── scalars: [outer_to_anti_left.keep (#2) AS (#2), outer_to_anti_right.k (#3) AS (#3)]
+└── Filter
+    ├── filters: [not(is_not_null(outer_to_anti_left.k (#0)))]
+    └── Join(Right)
+        ├── build keys: [outer_to_anti_right.k (#3)]
+        ├── probe keys: [outer_to_anti_left.k (#0)]
+        ├── other filters: []
+        ├── Scan
+        │   ├── table: default.outer_to_anti_right (#1)
+        │   ├── filters: []
+        │   ├── order by: []
+        │   └── limit: NONE
+        └── Scan
+            ├── table: default.outer_to_anti_left (#0)
+            ├── filters: []
+            ├── order by: []
+            └── limit: NONE
+optimized_plan:
+EvalScalar
+├── scalars: [NULL AS (#0), NULL AS (#1), NULL AS (#2), outer_to_anti_right.k (#3) AS (#3), NULL AS (#6)]
+└── Join(LeftAnti)
+    ├── build keys: [outer_to_anti_left.k (#0)]
+    ├── probe keys: [outer_to_anti_right.k (#3)]
+    ├── other filters: []
+    ├── Scan
+    │   ├── table: default.outer_to_anti_left (#0)
+    │   ├── filters: []
+    │   ├── order by: []
+    │   └── limit: NONE
+    └── Scan
+        ├── table: default.outer_to_anti_right (#1)
+        ├── filters: []
+        ├── order by: []
+        └── limit: NONE
+
+=== nullable_payload_test_keeps_outer_join ===
+description: A nullable non-key payload may be NULL on matched rows and is not an anti-join signal.
+sql: SELECT l.k, r.payload
+FROM outer_to_anti_left AS l
+LEFT JOIN outer_to_anti_right AS r ON l.k = r.k
+WHERE r.payload IS NULL
+raw_plan:
+EvalScalar
+├── scalars: [outer_to_anti_left.k (#0) AS (#0), outer_to_anti_right.payload (#5) AS (#5)]
+└── Filter
+    ├── filters: [not(is_not_null(outer_to_anti_right.payload (#5)))]
+    └── Join(Left)
+        ├── build keys: [outer_to_anti_right.k (#3)]
+        ├── probe keys: [outer_to_anti_left.k (#0)]
+        ├── other filters: []
+        ├── Scan
+        │   ├── table: default.outer_to_anti_right (#1)
+        │   ├── filters: []
+        │   ├── order by: []
+        │   └── limit: NONE
+        └── Scan
+            ├── table: default.outer_to_anti_left (#0)
+            ├── filters: []
+            ├── order by: []
+            └── limit: NONE
+optimized_plan:
+Filter
+├── filters: [not(is_not_null(outer_to_anti_right.payload (#5)))]
+└── Join(Left)
+    ├── build keys: [outer_to_anti_right.k (#3)]
+    ├── probe keys: [outer_to_anti_left.k (#0)]
+    ├── other filters: []
+    ├── Scan
+    │   ├── table: default.outer_to_anti_right (#1)
+    │   ├── filters: []
+    │   ├── order by: []
+    │   └── limit: NONE
+    └── Scan
+        ├── table: default.outer_to_anti_left (#0)
+        ├── filters: []
+        ├── order by: []
+        └── limit: NONE
+
+=== non_nullable_derived_payload_becomes_anti ===
+description: A non-nullable derived payload can only be NULL because the outer join found no match.
+sql: SELECT l.k
+FROM outer_to_anti_left AS l
+LEFT JOIN (
+    SELECT k, 'first' AS marker FROM outer_to_anti_right
+    UNION ALL
+    SELECT k, 'second' AS marker FROM outer_to_anti_right
+) AS r ON l.k = r.k
+WHERE r.marker IS NULL
+raw_plan:
+EvalScalar
+├── scalars: [outer_to_anti_left.k (#0) AS (#0)]
+└── Filter
+    ├── filters: [not(is_not_null(marker (#13)))]
+    └── Join(Left)
+        ├── build keys: [k (#11)]
+        ├── probe keys: [outer_to_anti_left.k (#0)]
+        ├── other filters: []
+        ├── EvalScalar
+        │   ├── scalars: [CAST(marker (#12) AS String NULL) AS (#13)]
+        │   └── UnionAll
+        │       ├── output: [k (#11), marker (#12)]
+        │       ├── left: [outer_to_anti_right.k (#3), marker (#6)]
+        │       ├── right: [outer_to_anti_right.k (#7), marker (#10)]
+        │       ├── cte_scan_names: []
+        │       ├── logical_recursive_cte_id: None
+        │       ├── EvalScalar
+        │       │   ├── scalars: [outer_to_anti_right.k (#3) AS (#3), 'first' AS (#6)]
+        │       │   └── Scan
+        │       │       ├── table: default.outer_to_anti_right (#1)
+        │       │       ├── filters: []
+        │       │       ├── order by: []
+        │       │       └── limit: NONE
+        │       └── EvalScalar
+        │           ├── scalars: [outer_to_anti_right.k (#7) AS (#7), 'second' AS (#10)]
+        │           └── Scan
+        │               ├── table: default.outer_to_anti_right (#2)
+        │               ├── filters: []
+        │               ├── order by: []
+        │               └── limit: NONE
+        └── Scan
+            ├── table: default.outer_to_anti_left (#0)
+            ├── filters: []
+            ├── order by: []
+            └── limit: NONE
+optimized_plan:
+EvalScalar
+├── scalars: [outer_to_anti_left.k (#0) AS (#0), NULL AS (#11), NULL AS (#12), NULL AS (#13), NULL AS (#14)]
+└── Join(LeftAnti)
+    ├── build keys: [k (#11)]
+    ├── probe keys: [outer_to_anti_left.k (#0)]
+    ├── other filters: []
+    ├── EvalScalar
+    │   ├── scalars: [CAST(marker (#12) AS String NULL) AS (#13)]
+    │   └── UnionAll
+    │       ├── output: [k (#11), marker (#12)]
+    │       ├── left: [outer_to_anti_right.k (#3), marker (#6)]
+    │       ├── right: [outer_to_anti_right.k (#7), marker (#10)]
+    │       ├── cte_scan_names: []
+    │       ├── logical_recursive_cte_id: None
+    │       ├── EvalScalar
+    │       │   ├── scalars: [outer_to_anti_right.k (#3) AS (#3), 'first' AS (#6)]
+    │       │   └── Scan
+    │       │       ├── table: default.outer_to_anti_right (#1)
+    │       │       ├── filters: []
+    │       │       ├── order by: []
+    │       │       └── limit: NONE
+    │       └── EvalScalar
+    │           ├── scalars: [outer_to_anti_right.k (#7) AS (#7), 'second' AS (#10)]
+    │           └── Scan
+    │               ├── table: default.outer_to_anti_right (#2)
+    │               ├── filters: []
+    │               ├── order by: []
+    │               └── limit: NONE
+    └── Scan
+        ├── table: default.outer_to_anti_left (#0)
+        ├── filters: []
+        ├── order by: []
+        └── limit: NONE
+
+=== nullable_union_branch_keeps_outer_join ===
+description: All Union branches must prove a derived payload non-null before the rewrite is safe.
+sql: SELECT l.k
+FROM outer_to_anti_left AS l
+LEFT JOIN (
+    SELECT k, payload AS marker FROM outer_to_anti_right
+    UNION ALL
+    SELECT k, 1 AS marker FROM outer_to_anti_right
+) AS r ON l.k = r.k
+WHERE r.marker IS NULL
+raw_plan:
+EvalScalar
+├── scalars: [outer_to_anti_left.k (#0) AS (#0)]
+└── Filter
+    ├── filters: [not(is_not_null(marker (#11)))]
+    └── Join(Left)
+        ├── build keys: [k (#10)]
+        ├── probe keys: [outer_to_anti_left.k (#0)]
+        ├── other filters: []
+        ├── UnionAll
+        │   ├── output: [k (#10), marker (#11)]
+        │   ├── left: [outer_to_anti_right.k (#3), outer_to_anti_right.payload (#5)]
+        │   ├── right: [outer_to_anti_right.k (#6), CAST(marker (#9) AS Int32 NULL)]
+        │   ├── cte_scan_names: []
+        │   ├── logical_recursive_cte_id: None
+        │   ├── EvalScalar
+        │   │   ├── scalars: [outer_to_anti_right.k (#3) AS (#3), outer_to_anti_right.payload (#5) AS (#5)]
+        │   │   └── Scan
+        │   │       ├── table: default.outer_to_anti_right (#1)
+        │   │       ├── filters: []
+        │   │       ├── order by: []
+        │   │       └── limit: NONE
+        │   └── EvalScalar
+        │       ├── scalars: [outer_to_anti_right.k (#6) AS (#6), 1 AS (#9)]
+        │       └── Scan
+        │           ├── table: default.outer_to_anti_right (#2)
+        │           ├── filters: []
+        │           ├── order by: []
+        │           └── limit: NONE
+        └── Scan
+            ├── table: default.outer_to_anti_left (#0)
+            ├── filters: []
+            ├── order by: []
+            └── limit: NONE
+optimized_plan:
+EvalScalar
+├── scalars: [outer_to_anti_left.k (#0) AS (#0), marker (#11) AS (#12)]
+└── Filter
+    ├── filters: [not(is_not_null(marker (#11)))]
+    └── Join(Left)
+        ├── build keys: [k (#10)]
+        ├── probe keys: [outer_to_anti_left.k (#0)]
+        ├── other filters: []
+        ├── UnionAll
+        │   ├── output: [k (#10), marker (#11)]
+        │   ├── left: [outer_to_anti_right.k (#3), outer_to_anti_right.payload (#5)]
+        │   ├── right: [outer_to_anti_right.k (#6), CAST(marker (#9) AS Int32 NULL)]
+        │   ├── cte_scan_names: []
+        │   ├── logical_recursive_cte_id: None
+        │   ├── Scan
+        │   │   ├── table: default.outer_to_anti_right (#1)
+        │   │   ├── filters: []
+        │   │   ├── order by: []
+        │   │   └── limit: NONE
+        │   └── EvalScalar
+        │       ├── scalars: [outer_to_anti_right.k (#6) AS (#6), 1 AS (#9)]
+        │       └── Scan
+        │           ├── table: default.outer_to_anti_right (#2)
+        │           ├── filters: []
+        │           ├── order by: []
+        │           └── limit: NONE
+        └── Scan
+            ├── table: default.outer_to_anti_left (#0)
+            ├── filters: []
+            ├── order by: []
+            └── limit: NONE
+
+=== nested_outer_join_output_keeps_outer_join ===
+description: A nested outer join may null-extend a source column declared NOT NULL.
+sql: SELECT l.k
+FROM outer_to_anti_left AS l
+LEFT JOIN (
+    SELECT r.k, n.marker
+    FROM outer_to_anti_right AS r
+    LEFT JOIN outer_to_anti_non_null AS n ON r.k = n.k
+) AS d ON l.k = d.k
+WHERE d.marker IS NULL
+raw_plan:
+EvalScalar
+├── scalars: [outer_to_anti_left.k (#0) AS (#0)]
+└── Filter
+    ├── filters: [not(is_not_null(marker (#8)))]
+    └── Join(Left)
+        ├── build keys: [outer_to_anti_right.k (#3)]
+        ├── probe keys: [outer_to_anti_left.k (#0)]
+        ├── other filters: []
+        ├── EvalScalar
+        │   ├── scalars: [outer_to_anti_right.k (#3) AS (#3), marker (#8) AS (#8)]
+        │   └── Join(Left)
+        │       ├── build keys: [outer_to_anti_non_null.k (#6)]
+        │       ├── probe keys: [outer_to_anti_right.k (#3)]
+        │       ├── other filters: []
+        │       ├── EvalScalar
+        │       │   ├── scalars: [CAST(outer_to_anti_non_null.marker (#7) AS Int32 NULL) AS (#8)]
+        │       │   └── Scan
+        │       │       ├── table: default.outer_to_anti_non_null (#2)
+        │       │       ├── filters: []
+        │       │       ├── order by: []
+        │       │       └── limit: NONE
+        │       └── Scan
+        │           ├── table: default.outer_to_anti_right (#1)
+        │           ├── filters: []
+        │           ├── order by: []
+        │           └── limit: NONE
+        └── Scan
+            ├── table: default.outer_to_anti_left (#0)
+            ├── filters: []
+            ├── order by: []
+            └── limit: NONE
+optimized_plan:
+EvalScalar
+├── scalars: [outer_to_anti_left.k (#0) AS (#0), marker (#8) AS (#9)]
+└── Filter
+    ├── filters: [not(is_not_null(marker (#8)))]
+    └── Join(Left)
+        ├── build keys: [outer_to_anti_right.k (#3)]
+        ├── probe keys: [outer_to_anti_left.k (#0)]
+        ├── other filters: []
+        ├── Join(Left)
+        │   ├── build keys: [outer_to_anti_non_null.k (#6)]
+        │   ├── probe keys: [outer_to_anti_right.k (#3)]
+        │   ├── other filters: []
+        │   ├── EvalScalar
+        │   │   ├── scalars: [CAST(outer_to_anti_non_null.marker (#7) AS Int32 NULL) AS (#8)]
+        │   │   └── Scan
+        │   │       ├── table: default.outer_to_anti_non_null (#2)
+        │   │       ├── filters: []
+        │   │       ├── order by: []
+        │   │       └── limit: NONE
+        │   └── Scan
+        │       ├── table: default.outer_to_anti_right (#1)
+        │       ├── filters: []
+        │       ├── order by: []
+        │       └── limit: NONE
+        └── Scan
+            ├── table: default.outer_to_anti_left (#0)
+            ├── filters: []
+            ├── order by: []
+            └── limit: NONE
+
+=== null_safe_condition_keeps_outer_join ===
+description: A null-equal join key must not be rewritten as an anti join.
+sql: SELECT l.k, r.k
+FROM outer_to_anti_left AS l
+LEFT JOIN outer_to_anti_right AS r ON l.k IS NOT DISTINCT FROM r.k
+WHERE r.k IS NULL
+raw_plan:
+EvalScalar
+├── scalars: [outer_to_anti_left.k (#0) AS (#0), outer_to_anti_right.k (#3) AS (#3)]
+└── Filter
+    ├── filters: [not(is_not_null(outer_to_anti_right.k (#3)))]
+    └── Join(Left)
+        ├── build keys: []
+        ├── probe keys: []
+        ├── other filters: [assume_not_null(if(and(not(is_not_null(outer_to_anti_left.k (#0))), not(is_not_null(outer_to_anti_right.k (#3)))), true, or(not(is_not_null(outer_to_anti_left.k (#0))), not(is_not_null(outer_to_anti_right.k (#3)))), false, eq(outer_to_anti_left.k (#0), outer_to_anti_right.k (#3))))]
+        ├── Scan
+        │   ├── table: default.outer_to_anti_right (#1)
+        │   ├── filters: []
+        │   ├── order by: []
+        │   └── limit: NONE
+        └── Scan
+            ├── table: default.outer_to_anti_left (#0)
+            ├── filters: []
+            ├── order by: []
+            └── limit: NONE
+optimized_plan:
+Filter
+├── filters: [not(is_not_null(outer_to_anti_right.k (#3)))]
+└── Join(Left)
+    ├── build keys: []
+    ├── probe keys: []
+    ├── other filters: [assume_not_null(if(and(not(is_not_null(outer_to_anti_left.k (#0))), not(is_not_null(outer_to_anti_right.k (#3)))), true, or(not(is_not_null(outer_to_anti_left.k (#0))), not(is_not_null(outer_to_anti_right.k (#3)))), false, eq(outer_to_anti_left.k (#0), outer_to_anti_right.k (#3))))]
+    ├── Scan
+    │   ├── table: default.outer_to_anti_right (#1)
+    │   ├── filters: []
+    │   ├── order by: []
+    │   └── limit: NONE
+    └── Scan
+        ├── table: default.outer_to_anti_left (#0)
+        ├── filters: []
+        ├── order by: []
+        └── limit: NONE
