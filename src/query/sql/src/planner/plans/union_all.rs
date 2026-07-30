@@ -12,14 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::cmp::Ordering;
 use std::sync::Arc;
 
 use databend_common_catalog::table_context::TableContext;
 use databend_common_exception::Result;
+use databend_common_expression::stat_distribution::StatCardinality;
+use databend_common_expression::stat_distribution::StatCount;
+use databend_common_expression::stat_distribution::StatEstimate;
 
 use crate::ColumnSet;
 use crate::ScalarExpr;
 use crate::Symbol;
+use crate::optimizer::ir::ColumnStat;
+use crate::optimizer::ir::ColumnStatSet;
 use crate::optimizer::ir::Distribution;
 use crate::optimizer::ir::PhysicalProperty;
 use crate::optimizer::ir::RelExpr;
@@ -27,6 +33,7 @@ use crate::optimizer::ir::RelationalProperty;
 use crate::optimizer::ir::RequiredProperty;
 use crate::optimizer::ir::StatInfo;
 use crate::optimizer::ir::Statistics;
+use crate::plans::EvalScalar;
 use crate::plans::Operator;
 use crate::plans::RelOp;
 
@@ -64,24 +71,113 @@ impl UnionAll {
     ) -> Result<Arc<StatInfo>> {
         let cardinality = left_stat_info.cardinality + right_stat_info.cardinality;
 
-        let precise_cardinality =
-            left_stat_info
-                .statistics
-                .precise_cardinality
-                .and_then(|left_cardinality| {
-                    right_stat_info
-                        .statistics
-                        .precise_cardinality
-                        .map(|right_cardinality| left_cardinality + right_cardinality)
-                });
+        let precise_cardinality = left_stat_info
+            .statistics
+            .precise_cardinality
+            .zip(right_stat_info.statistics.precise_cardinality)
+            .map(|(left, right)| left + right);
+        let left_cardinality = left_stat_info
+            .statistics
+            .precise_cardinality
+            .map(StatCardinality::exact)
+            .unwrap_or_else(|| StatCardinality::estimate(left_stat_info.cardinality));
+        let right_cardinality = right_stat_info
+            .statistics
+            .precise_cardinality
+            .map(StatCardinality::exact)
+            .unwrap_or_else(|| StatCardinality::estimate(right_stat_info.cardinality));
+
+        debug_assert_eq!(self.left_outputs.len(), self.right_outputs.len());
+        debug_assert_eq!(self.left_outputs.len(), self.output_indexes.len());
+
+        let column_stats = self
+            .left_outputs
+            .iter()
+            .zip(&self.right_outputs)
+            .zip(self.output_indexes.iter().copied())
+            .map(
+                |(((left_output, left_expr), (right_output, right_expr)), output)| {
+                    let left = match left_expr.as_ref() {
+                        Some(expr) => EvalScalar::derive_item_stat(
+                            expr,
+                            &left_stat_info.statistics,
+                            left_cardinality,
+                        )?,
+                        None => left_stat_info
+                            .statistics
+                            .column_stats
+                            .get(left_output)
+                            .cloned(),
+                    };
+                    let right = match right_expr.as_ref() {
+                        Some(expr) => EvalScalar::derive_item_stat(
+                            expr,
+                            &right_stat_info.statistics,
+                            right_cardinality,
+                        )?,
+                        None => right_stat_info
+                            .statistics
+                            .column_stats
+                            .get(right_output)
+                            .cloned(),
+                    };
+
+                    let (left, right) = match (left, right) {
+                        (Some(left), Some(right)) => (left, right),
+                        (Some(left), None)
+                            if right_stat_info.statistics.precise_cardinality == Some(0) =>
+                        {
+                            return Ok(Some((output, left)));
+                        }
+                        (None, Some(right))
+                            if left_stat_info.statistics.precise_cardinality == Some(0) =>
+                        {
+                            return Ok(Some((output, right)));
+                        }
+                        _ => return Ok(None),
+                    };
+                    let min = if left.min.compare(&right.min)? == Ordering::Less {
+                        left.min.clone()
+                    } else {
+                        right.min.clone()
+                    };
+                    let max = if left.max.compare(&right.max)? == Ordering::Greater {
+                        left.max.clone()
+                    } else {
+                        right.max.clone()
+                    };
+                    Ok(Some((output, ColumnStat {
+                        min,
+                        max,
+                        ndv: Self::merge_ndv(&left, &right),
+                        null_count: StatCount::sum(left.null_count, right.null_count),
+                        histogram: None,
+                    })))
+                },
+            )
+            .filter_map(Result::transpose)
+            .collect::<Result<ColumnStatSet>>()?;
 
         Ok(Arc::new(StatInfo {
             cardinality,
             statistics: Statistics {
                 precise_cardinality,
-                column_stats: Default::default(),
+                column_stats,
             },
         }))
+    }
+
+    fn merge_ndv(left: &ColumnStat, right: &ColumnStat) -> StatEstimate {
+        let lower = left.ndv.lower.max(right.ndv.lower);
+        let upper = left.ndv.upper + right.ndv.upper;
+        StatEstimate::new(
+            lower,
+            left.ndv
+                .expected
+                .max(right.ndv.expected)
+                .clamp(lower, upper),
+            upper,
+        )
     }
 }
 
@@ -195,5 +291,157 @@ impl Operator for UnionAll {
         ]);
 
         Ok(children_required)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use databend_common_expression::stat_distribution::StatEstimate;
+    use databend_common_expression::types::DataType;
+    use databend_common_expression::types::NumberDataType;
+    use databend_common_statistics::Datum;
+
+    use super::*;
+    use crate::ColumnBindingBuilder;
+    use crate::Visibility;
+    use crate::optimizer::ir::Statistics;
+    use crate::plans::BoundColumnRef;
+    use crate::plans::CastExpr;
+    use crate::plans::Join;
+    use crate::plans::JoinEquiCondition;
+    use crate::plans::JoinType;
+
+    fn column(index: usize, data_type: DataType) -> ScalarExpr {
+        BoundColumnRef {
+            span: None,
+            column: ColumnBindingBuilder::new(
+                format!("c{index}"),
+                Symbol::new(index),
+                Box::new(data_type),
+                Visibility::Visible,
+            )
+            .build(),
+        }
+        .into()
+    }
+
+    fn stat_info(index: usize, cardinality: f64) -> Arc<StatInfo> {
+        Arc::new(StatInfo {
+            cardinality,
+            statistics: Statistics {
+                precise_cardinality: None,
+                column_stats: HashMap::from([(Symbol::new(index), ColumnStat {
+                    min: Datum::Int(1),
+                    max: Datum::Int(cardinality as i64),
+                    ndv: StatEstimate::exact(cardinality),
+                    null_count: StatCount::exact(0),
+                    histogram: None,
+                })]),
+            },
+        })
+    }
+
+    fn single_column_union(left: usize, right: usize, output: usize) -> UnionAll {
+        UnionAll {
+            left_outputs: vec![(Symbol::new(left), None)],
+            right_outputs: vec![(Symbol::new(right), None)],
+            cte_scan_names: vec![],
+            logical_recursive_cte_id: None,
+            output_indexes: vec![Symbol::new(output)],
+        }
+    }
+
+    #[test]
+    fn test_nonempty_branch_without_key_stats_keeps_union_key_unknown() -> Result<()> {
+        let left = stat_info(0, 3.0);
+        let right = Arc::new(StatInfo {
+            cardinality: 4.0,
+            statistics: Statistics::default(),
+        });
+
+        let union = single_column_union(0, 1, 2).derive_union_stats(left, right)?;
+
+        assert!(!union.statistics.column_stats.contains_key(&Symbol::new(2)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_exact_empty_branch_preserves_other_union_key_stats() -> Result<()> {
+        let left = stat_info(0, 3.0);
+        let right = Arc::new(StatInfo {
+            cardinality: 0.0,
+            statistics: Statistics {
+                precise_cardinality: Some(0),
+                column_stats: HashMap::new(),
+            },
+        });
+
+        let union = single_column_union(0, 1, 2).derive_union_stats(left, right)?;
+        let stat = &union.statistics.column_stats[&Symbol::new(2)];
+
+        assert_eq!(stat.ndv, StatEstimate::exact(3.0));
+        assert_eq!(stat.min, Datum::Int(1));
+        assert_eq!(stat.max, Datum::Int(3));
+        Ok(())
+    }
+
+    #[test]
+    fn test_cast_outer_union_chain_keeps_small_join_build() -> Result<()> {
+        let int = DataType::Number(NumberDataType::Int64);
+        let nullable_int = int.clone().wrap_nullable();
+        let source = stat_info(0, 550_000_000.0);
+        let cast = ScalarExpr::CastExpr(CastExpr {
+            span: None,
+            is_try: false,
+            argument: Box::new(column(0, int)),
+            target_type: Box::new(nullable_int.clone()),
+        });
+        let cast_stat = EvalScalar::derive_item_stat(
+            &cast,
+            &source.statistics,
+            StatCardinality::estimate(source.cardinality),
+        )?
+        .expect("lossless nullable cast should preserve key statistics");
+        let large = Arc::new(StatInfo {
+            cardinality: source.cardinality,
+            statistics: Statistics {
+                precise_cardinality: None,
+                column_stats: HashMap::from([(Symbol::new(1), cast_stat)]),
+            },
+        });
+
+        let outer = |small_index, cardinality| {
+            Join {
+                equi_conditions: vec![JoinEquiCondition::new(
+                    column(1, nullable_int.clone()),
+                    column(small_index, nullable_int.clone()),
+                    false,
+                )],
+                join_type: JoinType::Right,
+                ..Default::default()
+            }
+            .derive_join_stats(large.clone(), stat_info(small_index, cardinality))
+        };
+        let left = outer(2, 3.0)?;
+        let right = outer(3, 4.0)?;
+
+        let union = single_column_union(2, 3, 4).derive_union_stats(left, right)?;
+        assert_eq!(union.cardinality, 7.0);
+        assert!(union.statistics.column_stats.contains_key(&Symbol::new(4)));
+
+        let parent = Join {
+            equi_conditions: vec![JoinEquiCondition::new(
+                column(1, nullable_int.clone()),
+                column(4, nullable_int),
+                false,
+            )],
+            join_type: JoinType::Inner,
+            ..Default::default()
+        }
+        .derive_join_stats(large, union)?;
+        assert_eq!(parent.cardinality, 7.0);
+        Ok(())
     }
 }
