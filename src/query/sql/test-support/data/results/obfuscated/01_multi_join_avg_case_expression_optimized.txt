@@ -24,27 +24,27 @@ Exchange(Merge)
                             │       ├── order by: []
                             │       └── limit: NONE
                             └── Join(Inner)
-                                ├── build keys: [a0m (#149)]
-                                ├── probe keys: [a0c.a0m (#9)]
+                                ├── build keys: [a5r.a5t (#151)]
+                                ├── probe keys: [a0c.a0l (#8)]
                                 ├── other filters: []
                                 ├── Exchange(Broadcast)
-                                │   └── EvalScalar
-                                │       ├── scalars: [CAST(a2x.a0m (#74) AS String NULL) AS (#149)]
-                                │       └── Scan
-                                │           ├── table: default.a2x (#2)
-                                │           ├── filters: [eq(substring(a2x.a4m (#118), 20, 1), '1')]
-                                │           ├── order by: []
-                                │           └── limit: NONE
+                                │   └── Scan
+                                │       ├── table: default.a5r (#3)
+                                │       ├── filters: [eq(substring(a5r.a5w (#156), 1, 1), '1')]
+                                │       ├── order by: []
+                                │       └── limit: NONE
                                 └── Join(Inner)
-                                    ├── build keys: [a5r.a5t (#151)]
-                                    ├── probe keys: [a0c.a0l (#8)]
+                                    ├── build keys: [a0m (#149)]
+                                    ├── probe keys: [a0c.a0m (#9)]
                                     ├── other filters: []
                                     ├── Exchange(Broadcast)
-                                    │   └── Scan
-                                    │       ├── table: default.a5r (#3)
-                                    │       ├── filters: [eq(substring(a5r.a5w (#156), 1, 1), '1')]
-                                    │       ├── order by: []
-                                    │       └── limit: NONE
+                                    │   └── EvalScalar
+                                    │       ├── scalars: [CAST(a2x.a0m (#74) AS String NULL) AS (#149)]
+                                    │       └── Scan
+                                    │           ├── table: default.a2x (#2)
+                                    │           ├── filters: [eq(substring(a2x.a4m (#118), 20, 1), '1'), is_not_null(CAST(a2x.a0m (#74) AS String NULL))]
+                                    │           ├── order by: []
+                                    │           └── limit: NONE
                                     └── Scan
                                         ├── table: default.a0c (#0)
                                         ├── filters: [gte(a0c.a0d (#0), '20240526'), lte(a0c.a0d (#0), '20250525')]
