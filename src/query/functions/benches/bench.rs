@@ -16,6 +16,67 @@ fn main() {
     divan::main();
 }
 
+#[divan::bench_group(max_time = 1)]
+mod numeric_membership {
+    use databend_common_expression::BlockEntry;
+    use databend_common_expression::DataBlock;
+    use databend_common_expression::Evaluator;
+    use databend_common_expression::FromData;
+    use databend_common_expression::FunctionContext;
+    use databend_common_expression::type_check;
+    use databend_common_expression::types::DataType;
+    use databend_common_expression::types::NumberDataType;
+    use databend_common_expression::types::number::Int64Type;
+    use databend_common_functions::BUILTIN_FUNCTIONS;
+    use databend_common_sql_test_support as parser;
+
+    const ROWS: usize = 1 << 20;
+
+    fn bench_expr(bencher: divan::Bencher, sql: &str) {
+        let raw_expr = parser::parse_raw_expr(
+            sql,
+            &[("x", DataType::Number(NumberDataType::Int64))],
+            &BUILTIN_FUNCTIONS,
+        );
+        let expr = type_check::check(&raw_expr, &BUILTIN_FUNCTIONS).unwrap();
+        let values = (0..ROWS).map(|value| value as i64).collect::<Vec<_>>();
+        let block = DataBlock::new(vec![BlockEntry::Column(Int64Type::from_data(values))], ROWS);
+        let func_ctx = FunctionContext::default();
+        let evaluator = Evaluator::new(&block, &func_ctx, &BUILTIN_FUNCTIONS);
+
+        bencher.bench(|| {
+            let value = evaluator.run(&expr).unwrap();
+            divan::black_box(value);
+        });
+    }
+
+    #[divan::bench]
+    fn contains(bencher: divan::Bencher) {
+        bench_expr(bencher, "contains([1, 3, 5, 7, 11, 13, 17, 19], x)");
+    }
+
+    #[divan::bench]
+    fn if_contains(bencher: divan::Bencher) {
+        bench_expr(
+            bencher,
+            "if(contains([1, 3, 5, 7, 11, 13, 17, 19], x), 0, x % 1000003)",
+        );
+    }
+
+    #[divan::bench]
+    fn if_modulo(bencher: divan::Bencher) {
+        bench_expr(bencher, "if(x % 1000003 = 0, 0, x % 1000003)");
+    }
+
+    #[divan::bench]
+    fn or_chain(bencher: divan::Bencher) {
+        bench_expr(
+            bencher,
+            "x = 1 OR x = 3 OR x = 5 OR x = 7 OR x = 11 OR x = 13 OR x = 17 OR x = 19",
+        );
+    }
+}
+
 // bench            fastest       │ slowest       │ median        │ mean          │ samples │ iters
 // ╰─ dummy                       │               │               │               │         │
 //    ├─ check                    │               │               │               │         │
