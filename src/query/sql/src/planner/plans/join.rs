@@ -2077,8 +2077,7 @@ mod tests {
                 })]),
             },
         });
-        // UnionAll currently loses its key column statistics, but it still
-        // carries the largest relevant cardinality from its branches.
+        // Model a derived input whose key statistics are unavailable.
         let union_stat = estimated_stat(5_000.0, 100_000.0);
         let join = Join {
             equi_conditions: vec![JoinEquiCondition::new(
