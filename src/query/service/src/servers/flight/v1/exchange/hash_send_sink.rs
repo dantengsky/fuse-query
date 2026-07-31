@@ -59,7 +59,7 @@ impl HashSendSink {
             channels,
             input: input.clone(),
             tasks: SyncTaskSet::new(worker_id, waker),
-            partition_stream: BlockPartitionStream::create(
+            partition_stream: BlockPartitionStream::create_with_string_views(
                 rows_threshold,
                 bytes_threshold,
                 scatter_size,
