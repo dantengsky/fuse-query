@@ -12,19 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::hash_map::DefaultHasher;
-use std::hash::Hasher;
-
-use databend_common_exception::ErrorCode;
 use databend_common_exception::Result;
+use databend_common_expression::BlockEntry;
 use databend_common_expression::DataBlock;
 use databend_common_expression::Evaluator;
 use databend_common_expression::Expr;
 use databend_common_expression::FunctionContext;
 use databend_common_expression::FunctionID;
+use databend_common_expression::ProjectedBlock;
 use databend_common_expression::RemoteExpr;
 use databend_common_expression::Scalar;
 use databend_common_expression::Value;
+use databend_common_expression::group_hash_entries;
 use databend_common_expression::type_check::check_function;
 use databend_common_expression::types::AccessType;
 use databend_common_expression::types::AnyType;
@@ -62,16 +61,8 @@ impl HashFlightScatter {
         }
         let hash_key = hash_keys
             .iter()
-            .map(|key| {
-                check_function(
-                    None,
-                    "siphash",
-                    &[],
-                    &[key.as_expr(&BUILTIN_FUNCTIONS)],
-                    &BUILTIN_FUNCTIONS,
-                )
-            })
-            .collect::<Result<_>>()?;
+            .map(|key| key.as_expr(&BUILTIN_FUNCTIONS))
+            .collect();
 
         Ok(Box::new(Self {
             func_ctx,
@@ -167,19 +158,7 @@ impl FlightScatter for HashFlightScatter {
     }
 
     fn execute(&self, data_block: DataBlock) -> Result<Vec<DataBlock>> {
-        let evaluator = Evaluator::new(&data_block, &self.func_ctx, &BUILTIN_FUNCTIONS);
-        let num = data_block.num_rows();
-        let indices = if !self.hash_key.is_empty() {
-            let mut hash_keys = Vec::with_capacity(self.hash_key.len());
-            for expr in &self.hash_key {
-                let indices = evaluator.run(expr).unwrap();
-                let indices = get_hash_values(indices, num, 0)?;
-                hash_keys.push(indices)
-            }
-            self.combine_hash_keys(&hash_keys, num)
-        } else {
-            Ok(vec![0; num])
-        }?;
+        let indices = self.build_scatter_indices(&data_block)?;
 
         let block_meta = data_block.get_meta();
         let data_blocks = DataBlock::scatter(&data_block, &indices, self.scatter_size)?;
@@ -193,43 +172,36 @@ impl FlightScatter for HashFlightScatter {
     }
 
     fn scatter_indices(&self, data_block: &DataBlock) -> Result<Option<Vec<u64>>> {
-        let evaluator = Evaluator::new(data_block, &self.func_ctx, &BUILTIN_FUNCTIONS);
-        let num = data_block.num_rows();
-        let indices = if !self.hash_key.is_empty() {
-            let mut hash_keys = Vec::with_capacity(self.hash_key.len());
-            for expr in &self.hash_key {
-                let indices = evaluator.run(expr).unwrap();
-                let indices = get_hash_values(indices, num, 0)?;
-                hash_keys.push(indices)
-            }
-            self.combine_hash_keys(&hash_keys, num)
-        } else {
-            Ok(vec![0; num])
-        }?;
-        Ok(Some(indices))
+        Ok(Some(self.build_scatter_indices(data_block)?))
     }
 }
 
 impl HashFlightScatter {
-    pub fn combine_hash_keys(
-        &self,
-        hash_keys: &[Buffer<u64>],
-        num_rows: usize,
-    ) -> Result<Vec<u64>> {
-        if self.hash_key.len() != hash_keys.len() {
-            return Err(ErrorCode::Internal(
-                "Hash keys and hash functions must be the same length.",
-            ));
-        }
-        let mut hash = vec![DefaultHasher::default(); num_rows];
-        for keys in hash_keys.iter() {
-            for (i, value) in keys.iter().enumerate() {
-                hash[i].write_u64(*value);
-            }
+    fn build_scatter_indices(&self, data_block: &DataBlock) -> Result<Vec<u64>> {
+        let num_rows = data_block.num_rows();
+        if self.hash_key.is_empty() {
+            return Ok(vec![0; num_rows]);
         }
 
-        let m = self.scatter_size as u64;
-        Ok(hash.into_iter().map(|h| h.finish() % m).collect())
+        let evaluator = Evaluator::new(data_block, &self.func_ctx, &BUILTIN_FUNCTIONS);
+        let hash_keys = self
+            .hash_key
+            .iter()
+            .map(|expr| {
+                Ok(BlockEntry::new(evaluator.run(expr)?, || {
+                    (expr.data_type().clone(), num_rows)
+                }))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let mut hashes = vec![0; num_rows];
+        group_hash_entries(ProjectedBlock::from(&hash_keys), &mut hashes);
+
+        let scatter_size = self.scatter_size as u64;
+        for hash in &mut hashes {
+            *hash %= scatter_size;
+        }
+        Ok(hashes)
     }
 }
 
@@ -310,5 +282,152 @@ fn get_hash_values(
                     .collect())
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use databend_common_expression::ColumnRef;
+    use databend_common_expression::FromData;
+    use databend_common_expression::types::StringType;
+    use databend_common_expression::types::UInt64Type;
+
+    use super::*;
+
+    fn column_expr(id: usize, data_type: DataType) -> Expr {
+        Expr::ColumnRef(ColumnRef {
+            span: None,
+            id,
+            data_type,
+            display_name: format!("#{id}"),
+        })
+    }
+
+    fn scatter_indices(
+        hash_key: Vec<Expr>,
+        scatter_size: usize,
+        block: &DataBlock,
+    ) -> Result<Vec<u64>> {
+        let hash_key = hash_key
+            .iter()
+            .map(Expr::as_remote_expr)
+            .collect::<Vec<_>>();
+        let scatter =
+            HashFlightScatter::try_create(FunctionContext::default(), hash_key, scatter_size, 0)?;
+        Ok(scatter.scatter_indices(block)?.unwrap())
+    }
+
+    fn block_hash_keys(block: &DataBlock) -> Vec<Expr> {
+        block
+            .columns()
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| column_expr(index, entry.data_type()))
+            .collect()
+    }
+
+    fn assert_balanced(indices: &[u64], partitions: usize) {
+        let mut counts = vec![0_usize; partitions];
+        for &index in indices {
+            counts[index as usize] += 1;
+        }
+
+        let max_partition = counts.iter().copied().max().unwrap_or_default();
+        assert!(
+            max_partition * partitions * 20 <= indices.len() * 21,
+            "partition counts are imbalanced: {counts:?}"
+        );
+    }
+
+    #[test]
+    fn hashes_evaluated_and_materialized_keys_consistently() -> Result<()> {
+        let raw_addresses = StringType::from_data(vec!["AbC", "DEF", "ghI", "Jkl"]);
+        let lower_addresses = StringType::from_data(vec!["abc", "def", "ghi", "jkl"]);
+        let wallet_ids = UInt64Type::from_data(vec![1, 2, 3, 4]);
+
+        let raw_block = DataBlock::new_from_columns(vec![raw_addresses, wallet_ids.clone()]);
+        let lower_block = DataBlock::new_from_columns(vec![lower_addresses, wallet_ids]);
+
+        let lower_expr = check_function(
+            None,
+            "lower",
+            &[],
+            &[column_expr(0, DataType::String)],
+            &BUILTIN_FUNCTIONS,
+        )?;
+        let evaluated_keys = vec![
+            lower_expr,
+            column_expr(1, DataType::Number(NumberDataType::UInt64)),
+        ];
+        let materialized_keys = block_hash_keys(&lower_block);
+
+        for partitions in [3, 4, 8] {
+            let evaluated = scatter_indices(evaluated_keys.clone(), partitions, &raw_block)?;
+            let materialized =
+                scatter_indices(materialized_keys.clone(), partitions, &lower_block)?;
+            assert_eq!(evaluated, materialized);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn hashes_valid_nullable_and_non_nullable_keys_consistently() -> Result<()> {
+        let validity = vec![true, true, true, true];
+        let nullable_block = DataBlock::new_from_columns(vec![
+            StringType::from_data_with_validity(
+                vec!["alpha", "beta", "gamma", "delta"],
+                validity.clone(),
+            ),
+            UInt64Type::from_data_with_validity(vec![11, 12, 13, 14], validity),
+        ]);
+        let non_nullable_block = DataBlock::new_from_columns(vec![
+            StringType::from_data(vec!["alpha", "beta", "gamma", "delta"]),
+            UInt64Type::from_data(vec![11, 12, 13, 14]),
+        ]);
+
+        for partitions in [3, 4, 8] {
+            let nullable = scatter_indices(
+                block_hash_keys(&nullable_block),
+                partitions,
+                &nullable_block,
+            )?;
+            let non_nullable = scatter_indices(
+                block_hash_keys(&non_nullable_block),
+                partitions,
+                &non_nullable_block,
+            )?;
+            assert_eq!(nullable, non_nullable);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn distributes_query_shaped_keys_across_partitions() -> Result<()> {
+        const ROWS: usize = 1 << 16;
+
+        let addresses = (0..ROWS)
+            .map(|row| format!("{row:042x}"))
+            .collect::<Vec<_>>();
+        let raw_addresses = (0..ROWS)
+            .map(|row| format!("{:042x}", row.wrapping_mul(17)))
+            .collect::<Vec<_>>();
+        let user_ids = (0..ROWS).map(|row| row as u64).collect::<Vec<_>>();
+        let chain_ids = (0..ROWS).map(|row| (row % 2048) as u64).collect::<Vec<_>>();
+        let wallet_ids = (0..ROWS)
+            .map(|row| row.wrapping_mul(31) as u64)
+            .collect::<Vec<_>>();
+        let block = DataBlock::new_from_columns(vec![
+            StringType::from_data(addresses),
+            StringType::from_data(raw_addresses),
+            UInt64Type::from_data(user_ids),
+            UInt64Type::from_data(chain_ids),
+            UInt64Type::from_data(wallet_ids),
+        ]);
+
+        for partitions in [3, 4, 8] {
+            let indices = scatter_indices(block_hash_keys(&block), partitions, &block)?;
+            assert_balanced(&indices, partitions);
+        }
+        Ok(())
     }
 }
