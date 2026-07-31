@@ -1045,10 +1045,6 @@ impl Settings {
         self.try_get_u64("flight_connection_retry_interval")
     }
 
-    pub fn get_enable_global_hash_shuffle(&self) -> Result<bool> {
-        Ok(self.try_get_u64("enable_global_hash_shuffle")? == 1)
-    }
-
     pub fn get_hash_shuffle_rows_threshold(&self) -> Result<usize> {
         Ok(self.try_get_u64("hash_shuffle_rows_threshold")? as usize)
     }
