@@ -990,6 +990,22 @@ impl DataBlock {
 
         DataBlock::new(columns, self.num_rows)
     }
+
+    /// Rebuild string columns with compact backing buffers while preserving block metadata.
+    pub fn compact_string_buffers(self) -> DataBlock {
+        let num_rows = self.num_rows;
+        let meta = self.meta;
+        let entries = self
+            .entries
+            .into_iter()
+            .map(|entry| match entry {
+                BlockEntry::Column(column) => BlockEntry::Column(column.compact_string_buffers()),
+                entry => entry,
+            })
+            .collect();
+
+        DataBlock::new_with_meta(entries, num_rows, meta)
+    }
 }
 
 impl Eq for Box<dyn BlockMetaInfo> {}
