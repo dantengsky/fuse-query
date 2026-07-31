@@ -119,6 +119,14 @@ async fn test_set_settings() {
             let expect = "WrongValueForVariable. Code: 2803, Text = Value 101 is not within the range [0, 100].";
             assert_eq!(expect, format!("{}", result.unwrap_err()));
         }
+
+        {
+            assert!(settings.get_enable_global_hash_shuffle().unwrap());
+            settings
+                .set_setting("enable_global_hash_shuffle".to_string(), "0".to_string())
+                .unwrap();
+            assert!(!settings.get_enable_global_hash_shuffle().unwrap());
+        }
     }
 
     // String out of range.

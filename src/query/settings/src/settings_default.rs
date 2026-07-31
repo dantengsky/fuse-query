@@ -1163,6 +1163,13 @@ impl DefaultSettings {
                     scope: SettingScope::Both,
                     range: Some(SettingRange::String(vec!["None".into(), "LZ4".into(), "ZSTD".into()])),
                 }),
+                ("enable_global_hash_shuffle", DefaultSettingValue {
+                    value: UserSettingValue::UInt64(1),
+                    desc: "Use global shuffle for distributed hash joins.",
+                    mode: SettingMode::Both,
+                    scope: SettingScope::Both,
+                    range: Some(SettingRange::Numeric(0..=1)),
+                }),
                 ("hash_shuffle_rows_threshold", DefaultSettingValue {
                     value: UserSettingValue::UInt64(8192),
                     desc: "Sets the max rows threshold for hash shuffle block partition stream.",
