@@ -31,7 +31,9 @@ use databend_common_expression::DataSchema;
 use databend_common_expression::Evaluator;
 use databend_common_expression::Expr;
 use databend_common_expression::FieldIndex;
+use databend_common_expression::FilterExecutor;
 use databend_common_expression::FunctionContext;
+use databend_common_expression::SelectExprBuilder;
 use databend_common_expression::filter_helper::FilterHelpers;
 use databend_common_expression::types::Bitmap;
 use databend_common_expression::types::BooleanType;
@@ -55,6 +57,7 @@ pub struct ReadState {
     pub pre_reader: Arc<BlockReader>,
     pub remain_reader: Arc<BlockReader>,
     pub filters: Option<Expr>,
+    filter_executor: Option<FilterExecutor>,
     pub runtime_filters: Vec<BloomRuntimeFilterRef>,
     pub pre_column_ids: HashSet<ColumnId>,
     pub remain_column_ids: HashSet<ColumnId>,
@@ -135,22 +138,55 @@ impl ReadState {
             None
         };
 
+        let func_ctx = ctx.get_function_context()?;
+        let max_block_size = (ctx.get_settings().get_max_block_size()? as usize).max(1);
+        let filter_executor = prewhere_filter.as_ref().and_then(|filter| {
+            if !func_ctx.enable_selector_executor {
+                return None;
+            }
+
+            // Keep bitmap evaluation for predicates that are already cheap to vectorize. Direct
+            // string-scalar equality has a specialized selector path that avoids that overhead.
+            let (select_expr, _) = SelectExprBuilder::new(&BUILTIN_FUNCTIONS)
+                .build(filter)
+                .into();
+            select_expr.contains_string_column_eq_constant().then(|| {
+                FilterExecutor::new(
+                    filter.clone(),
+                    func_ctx.clone(),
+                    max_block_size,
+                    None,
+                    &BUILTIN_FUNCTIONS,
+                    false,
+                )
+            })
+        });
+
         Ok(Self {
             pre_reader: prewhere_reader,
             remain_reader,
             filters: prewhere_filter,
+            filter_executor,
             runtime_filters,
             pre_column_ids,
             remain_column_ids,
-            func_ctx: ctx.get_function_context()?,
+            func_ctx,
             output_schema: block_reader.data_schema(),
             prewhere_selectivity_threshold,
             use_single_prewhere_reader,
         })
     }
 
-    pub fn filter(&self, block: &DataBlock, num_rows: usize) -> Result<Option<MutableBitmap>> {
+    pub fn filter(&mut self, block: &DataBlock, num_rows: usize) -> Result<Option<MutableBitmap>> {
         if let Some(ref f) = self.filters {
+            if let Some(filter_executor) = self.filter_executor.as_mut() {
+                return Ok(Some(filter_with_selector(
+                    filter_executor,
+                    block,
+                    num_rows,
+                )?));
+            }
+
             let evaluator = Evaluator::new(block, &self.func_ctx, &BUILTIN_FUNCTIONS);
             let filter_result = evaluator.run(f)?.try_downcast::<BooleanType>().unwrap();
             Ok(Some(FilterHelpers::filter_to_bitmap(
@@ -191,7 +227,7 @@ impl ReadState {
     }
 
     pub fn deserialize_and_filter(
-        &self,
+        &mut self,
         columns_chunks: HashMap<ColumnId, DataItem>,
         part: &FuseBlockPartInfo,
     ) -> Result<(DataBlock, Option<RowSelection>, Option<Bitmap>)> {
@@ -276,9 +312,53 @@ fn should_push_down_row_selection(row_selection: &RowSelection, threshold: u64) 
     (row_selection.selected_rows as u128) * 100 < (total_rows as u128) * (threshold as u128)
 }
 
+fn filter_with_selector(
+    filter_executor: &mut FilterExecutor,
+    block: &DataBlock,
+    num_rows: usize,
+) -> Result<MutableBitmap> {
+    debug_assert_eq!(block.num_rows(), num_rows);
+    let mut bitmap = MutableBitmap::from_len_zeroed(num_rows);
+    let chunk_size = filter_executor.max_block_size().max(1);
+
+    if num_rows <= chunk_size {
+        let selected = filter_executor.select(block)?;
+        apply_selection(
+            &mut bitmap,
+            &filter_executor.true_selection()[..selected],
+            0,
+        );
+        return Ok(bitmap);
+    }
+
+    for offset in (0..num_rows).step_by(chunk_size) {
+        let end = (offset + chunk_size).min(num_rows);
+        let block = block.slice(offset..end);
+        let selected = filter_executor.select(&block)?;
+        apply_selection(
+            &mut bitmap,
+            &filter_executor.true_selection()[..selected],
+            offset,
+        );
+    }
+    Ok(bitmap)
+}
+
+fn apply_selection(bitmap: &mut MutableBitmap, selection: &[u32], offset: usize) {
+    for index in selection {
+        bitmap.set(offset + *index as usize, true);
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use databend_common_expression::FromData;
+    use databend_common_expression::RawExpr;
+    use databend_common_expression::Scalar;
+    use databend_common_expression::type_check;
+    use databend_common_expression::types::DataType;
     use databend_common_expression::types::MutableBitmap;
+    use databend_common_expression::types::StringType;
 
     use super::*;
 
@@ -306,5 +386,66 @@ mod tests {
         let sparse_selection = RowSelection::from(&sparse_bitmap);
 
         assert!(!should_push_down_row_selection(&sparse_selection, 0));
+    }
+
+    #[test]
+    fn test_apply_selection_accepts_unordered_indices_and_offset() {
+        let mut bitmap = MutableBitmap::from_len_zeroed(8);
+        apply_selection(&mut bitmap, &[4, 1, 3], 2);
+        assert_eq!(bitmap.iter().collect::<Vec<_>>(), vec![
+            false, false, false, true, false, true, true, false
+        ]);
+    }
+
+    #[test]
+    fn test_chunked_selector_bitmap_matches_evaluator() {
+        let raw_expr = RawExpr::FunctionCall {
+            span: None,
+            name: "eq".to_string(),
+            params: vec![],
+            args: vec![
+                RawExpr::ColumnRef {
+                    span: None,
+                    id: 0,
+                    data_type: DataType::String,
+                    display_name: "value".to_string(),
+                },
+                RawExpr::Constant {
+                    span: None,
+                    scalar: Scalar::String("match".to_string()),
+                    data_type: Some(DataType::String),
+                },
+            ],
+        };
+        let expr = type_check::check(&raw_expr, &BUILTIN_FUNCTIONS).unwrap();
+        let (select_expr, _) = SelectExprBuilder::new(&BUILTIN_FUNCTIONS)
+            .build(&expr)
+            .into();
+        assert!(select_expr.contains_string_column_eq_constant());
+        let block = DataBlock::new_from_columns(vec![StringType::from_data(vec![
+            "other", "match", "other", "match", "match", "other", "match",
+        ])]);
+        let func_ctx = FunctionContext::default();
+        let mut filter_executor = FilterExecutor::new(
+            expr.clone(),
+            func_ctx.clone(),
+            3,
+            None,
+            &BUILTIN_FUNCTIONS,
+            false,
+        );
+
+        let actual = filter_with_selector(&mut filter_executor, &block, block.num_rows()).unwrap();
+        let expected = Evaluator::new(&block, &func_ctx, &BUILTIN_FUNCTIONS)
+            .run(&expr)
+            .unwrap()
+            .try_downcast::<BooleanType>()
+            .unwrap();
+        let expected = FilterHelpers::filter_to_bitmap(expected, block.num_rows());
+
+        assert_eq!(
+            actual.iter().collect::<Vec<_>>(),
+            expected.iter().collect::<Vec<_>>()
+        );
     }
 }
