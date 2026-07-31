@@ -787,23 +787,20 @@ impl Operator for Join {
         }
 
         // Otherwise, use hash shuffle
-        let enable_global_hash_shuffle = ctx.get_settings().get_enable_global_hash_shuffle()?;
         if child_index == 0 {
             let left_conditions = self
                 .equi_conditions
                 .iter()
                 .map(|condition| condition.left.clone())
                 .collect();
-            required.distribution =
-                hash_join_distribution(left_conditions, enable_global_hash_shuffle);
+            required.distribution = Distribution::GlobalHash(left_conditions);
         } else {
             let right_conditions = self
                 .equi_conditions
                 .iter()
                 .map(|condition| condition.right.clone())
                 .collect();
-            required.distribution =
-                hash_join_distribution(right_conditions, enable_global_hash_shuffle);
+            required.distribution = Distribution::GlobalHash(right_conditions);
         }
 
         Ok(required)
@@ -816,8 +813,6 @@ impl Operator for Join {
         _required: &RequiredProperty,
     ) -> Result<Vec<Vec<RequiredProperty>>> {
         let mut children_required = vec![];
-        let settings = ctx.get_settings();
-        let enable_global_hash_shuffle = settings.get_enable_global_hash_shuffle()?;
 
         // For mark join with nullable eq comparison, ensure to use broadcast for subquery side
         if self.join_type.is_mark_join()
@@ -837,10 +832,7 @@ impl Operator for Join {
                         distribution: Distribution::Broadcast,
                     },
                     RequiredProperty {
-                        distribution: hash_join_distribution(
-                            conditions,
-                            enable_global_hash_shuffle,
-                        ),
+                        distribution: Distribution::GlobalHash(conditions),
                     },
                 ]);
             } else {
@@ -853,10 +845,7 @@ impl Operator for Join {
 
                 children_required.push(vec![
                     RequiredProperty {
-                        distribution: hash_join_distribution(
-                            conditions,
-                            enable_global_hash_shuffle,
-                        ),
+                        distribution: Distribution::GlobalHash(conditions),
                     },
                     RequiredProperty {
                         distribution: Distribution::Broadcast,
@@ -866,6 +855,7 @@ impl Operator for Join {
             return Ok(children_required);
         }
 
+        let settings = ctx.get_settings();
         if !matches!(self.join_type, JoinType::Cross) && !settings.get_enforce_broadcast_join()? {
             // (Hash, Hash) – use full equi-join key set to avoid single-column hash shuffle
             let left_keys: Vec<_> = self
@@ -882,13 +872,10 @@ impl Operator for Join {
             if !left_keys.is_empty() {
                 children_required.push(vec![
                     RequiredProperty {
-                        distribution: hash_join_distribution(left_keys, enable_global_hash_shuffle),
+                        distribution: Distribution::GlobalHash(left_keys),
                     },
                     RequiredProperty {
-                        distribution: hash_join_distribution(
-                            right_keys,
-                            enable_global_hash_shuffle,
-                        ),
+                        distribution: Distribution::GlobalHash(right_keys),
                     },
                 ]);
             }
@@ -944,14 +931,6 @@ impl Operator for Join {
         }
 
         Ok(children_required)
-    }
-}
-
-fn hash_join_distribution(keys: Vec<ScalarExpr>, enable_global_hash_shuffle: bool) -> Distribution {
-    if enable_global_hash_shuffle {
-        Distribution::GlobalHash(keys)
-    } else {
-        Distribution::NodeToNodeHash(keys)
     }
 }
 
@@ -1982,18 +1961,6 @@ mod tests {
             max_cardinality,
             statistics: Statistics::default(),
         })
-    }
-
-    #[test]
-    fn test_hash_join_distribution_switch() {
-        assert!(matches!(
-            hash_join_distribution(vec![], true),
-            Distribution::GlobalHash(_)
-        ));
-        assert!(matches!(
-            hash_join_distribution(vec![], false),
-            Distribution::NodeToNodeHash(_)
-        ));
     }
 
     #[test]
