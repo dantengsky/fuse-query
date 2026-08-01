@@ -780,14 +780,14 @@ impl Operator for Join {
                 .iter()
                 .map(|condition| condition.left.clone())
                 .collect();
-            required.distribution = Distribution::GlobalHash(left_conditions);
+            required.distribution = hash_join_distribution(left_conditions);
         } else {
             let right_conditions = self
                 .equi_conditions
                 .iter()
                 .map(|condition| condition.right.clone())
                 .collect();
-            required.distribution = Distribution::GlobalHash(right_conditions);
+            required.distribution = hash_join_distribution(right_conditions);
         }
 
         Ok(required)
@@ -819,7 +819,7 @@ impl Operator for Join {
                         distribution: Distribution::Broadcast,
                     },
                     RequiredProperty {
-                        distribution: Distribution::GlobalHash(conditions),
+                        distribution: hash_join_distribution(conditions),
                     },
                 ]);
             } else {
@@ -832,7 +832,7 @@ impl Operator for Join {
 
                 children_required.push(vec![
                     RequiredProperty {
-                        distribution: Distribution::GlobalHash(conditions),
+                        distribution: hash_join_distribution(conditions),
                     },
                     RequiredProperty {
                         distribution: Distribution::Broadcast,
@@ -859,10 +859,10 @@ impl Operator for Join {
             if !left_keys.is_empty() {
                 children_required.push(vec![
                     RequiredProperty {
-                        distribution: Distribution::GlobalHash(left_keys),
+                        distribution: hash_join_distribution(left_keys),
                     },
                     RequiredProperty {
-                        distribution: Distribution::GlobalHash(right_keys),
+                        distribution: hash_join_distribution(right_keys),
                     },
                 ]);
             }
@@ -919,6 +919,10 @@ impl Operator for Join {
 
         Ok(children_required)
     }
+}
+
+fn hash_join_distribution(keys: Vec<ScalarExpr>) -> Distribution {
+    Distribution::NodeToNodeHash(keys)
 }
 
 fn is_safe_broadcast_build(stat_info: &StatInfo, max_build_rows: u64) -> bool {
@@ -1937,6 +1941,19 @@ mod tests {
             max_cardinality,
             statistics: Statistics::default(),
         })
+    }
+
+    #[test]
+    fn test_hash_join_uses_node_to_node_shuffle() {
+        let keys = vec![
+            column(0, DataType::Number(NumberDataType::UInt64)),
+            column(1, DataType::Number(NumberDataType::UInt64)),
+        ];
+
+        let Distribution::NodeToNodeHash(actual) = hash_join_distribution(keys.clone()) else {
+            panic!("hash joins should use node-to-node shuffle");
+        };
+        assert_eq!(actual, keys);
     }
 
     #[test]
