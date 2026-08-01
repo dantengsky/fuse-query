@@ -6052,6 +6052,7 @@ dependencies = [
  "jsonb",
  "jwt-simple",
  "log",
+ "lz4",
  "maplit",
  "match-template",
  "md-5",

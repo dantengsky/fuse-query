@@ -15,7 +15,6 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use arrow_ipc::CompressionType;
 use arrow_ipc::writer::IpcWriteOptions;
 use databend_common_base::base::ProgressValues;
 use databend_common_base::runtime::profile::Profile;
@@ -57,6 +56,7 @@ use crate::pipelines::processors::transforms::aggregator::aggregate_meta::Aggreg
 use crate::pipelines::processors::transforms::aggregator::exchange_defines;
 use crate::servers::flight::v1::exchange::ExchangeShuffleMeta;
 use crate::servers::flight::v1::exchange::serde::serialize_block;
+use crate::servers::flight::v1::ipc_compression::make_ipc_options;
 use crate::sessions::QueryContext;
 use crate::sessions::TableContextSettings;
 use crate::sessions::TableContextSpillProgress;
@@ -68,6 +68,7 @@ pub struct TransformExchangeAggregateSerializer {
     ctx: Arc<QueryContext>,
     local_pos: usize,
     options: IpcWriteOptions,
+    native_lz4: bool,
 
     params: Arc<AggregatorParams>,
     spiller: Arc<Spiller>,
@@ -86,13 +87,7 @@ impl TransformExchangeAggregateSerializer {
         compression: Option<FlightCompression>,
         local_pos: usize,
     ) -> Result<Box<dyn Processor>> {
-        let compression = match compression {
-            None => None,
-            Some(compression) => match compression {
-                FlightCompression::Lz4 => Some(CompressionType::LZ4_FRAME),
-                FlightCompression::Zstd => Some(CompressionType::ZSTD),
-            },
-        };
+        let (options, native_lz4) = make_ipc_options(compression)?;
         let config = SpillerConfig {
             spiller_type: SpillerType::Aggregation,
             location_prefix,
@@ -113,9 +108,8 @@ impl TransformExchangeAggregateSerializer {
                 params,
                 local_pos,
                 spiller: spiller.into(),
-                options: IpcWriteOptions::default()
-                    .try_with_compression(compression)
-                    .unwrap(),
+                options,
+                native_lz4,
             },
         ))
     }
@@ -172,7 +166,7 @@ impl BlockMetaTransform<ExchangeShuffleMeta> for TransformExchangeAggregateSeria
                     if let Some(meta) = stream_blocks[0].take_meta() {
                         c.replace_meta(meta);
                     }
-                    let c = serialize_block(block_number, c, &self.options)?;
+                    let c = serialize_block(block_number, c, &self.options, self.native_lz4)?;
                     serialized_blocks.push(FlightSerialized::DataBlock(c));
                 }
                 Some(AggregateMeta::Partitioned { data, .. }) => {
@@ -205,8 +199,12 @@ impl BlockMetaTransform<ExchangeShuffleMeta> for TransformExchangeAggregateSeria
 
                             // Only create empty block when ALL payloads are empty
                             if payload_blocks.is_empty() {
-                                let serialized =
-                                    serialize_block(-1, DataBlock::empty(), &self.options)?;
+                                let serialized = serialize_block(
+                                    -1,
+                                    DataBlock::empty(),
+                                    &self.options,
+                                    self.native_lz4,
+                                )?;
                                 serialized_blocks.push(FlightSerialized::DataBlock(serialized));
 
                                 continue;
@@ -220,7 +218,8 @@ impl BlockMetaTransform<ExchangeShuffleMeta> for TransformExchangeAggregateSeria
                                     false,
                                 ),
                             ))?;
-                            let serialized = serialize_block(-1, merged_block, &self.options)?;
+                            let serialized =
+                                serialize_block(-1, merged_block, &self.options, self.native_lz4)?;
                             serialized_blocks.push(FlightSerialized::DataBlock(serialized));
                         }
                         Some(AggregateMeta::NewBucketSpilled(_)) => {
@@ -253,11 +252,16 @@ impl BlockMetaTransform<ExchangeShuffleMeta> for TransformExchangeAggregateSeria
                                 -1,
                                 data_block,
                                 &self.options,
+                                self.native_lz4,
                             )?));
                         }
                         None => {
-                            let serialized =
-                                serialize_block(-1, DataBlock::empty(), &self.options)?;
+                            let serialized = serialize_block(
+                                -1,
+                                DataBlock::empty(),
+                                &self.options,
+                                self.native_lz4,
+                            )?;
                             serialized_blocks.push(FlightSerialized::DataBlock(serialized));
                         }
 
@@ -380,7 +384,7 @@ fn exchange_agg_spilling_aggregate_payload(
             )))?;
 
             let write_options = exchange_defines::spilled_write_options();
-            return serialize_block(-1, data_block, &write_options);
+            return serialize_block(-1, data_block, &write_options, false);
         }
 
         Ok(DataBlock::empty())
