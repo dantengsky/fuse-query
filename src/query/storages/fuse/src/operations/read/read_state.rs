@@ -49,6 +49,18 @@ pub struct BloomRuntimeFilterRef {
     pub column_index: FieldIndex,
     pub filter: RuntimeBloomFilter,
     pub stats: Arc<RuntimeFilterStats>,
+    pub sample_rows: u64,
+}
+
+pub(super) const MIN_RUNTIME_FILTER_REDUCTION_PERCENT: u64 = 5;
+
+pub(super) fn runtime_filter_sample_rows(build_rows: usize) -> u64 {
+    const MIN_SAMPLE_ROWS: u64 = 1_000_000;
+    const MAX_SAMPLE_ROWS: u64 = 8_000_000;
+
+    (build_rows as u64)
+        .saturating_mul(2)
+        .clamp(MIN_SAMPLE_ROWS, MAX_SAMPLE_ROWS)
 }
 
 pub struct ReadState {
@@ -121,6 +133,7 @@ impl ReadState {
                     column_index,
                     filter: bloom.filter,
                     stats: entry.stats,
+                    sample_rows: runtime_filter_sample_rows(entry.build_rows),
                 })
             })
             .collect();
@@ -163,7 +176,7 @@ impl ReadState {
     }
 
     pub fn runtime_filter(
-        &self,
+        &mut self,
         block: &DataBlock,
         _num_rows: usize,
     ) -> Result<Option<MutableBitmap>> {
@@ -171,8 +184,22 @@ impl ReadState {
 
         let mut bitmaps = vec![];
         for runtime_filter in &self.runtime_filters {
+            if runtime_filter.stats.bloom_disabled() {
+                continue;
+            }
+
+            let filter_start = Instant::now();
             let probe_column = block.get_by_offset(runtime_filter.column_index).to_column();
             let bitmap = ExprBloomFilter::new(&runtime_filter.filter).apply(probe_column)?;
+            runtime_filter.stats.record_bloom(
+                filter_start.elapsed().as_nanos() as u64,
+                bitmap.null_count() as u64,
+                bitmap.len() as u64,
+            );
+            runtime_filter.stats.disable_bloom_if_unselective(
+                runtime_filter.sample_rows,
+                MIN_RUNTIME_FILTER_REDUCTION_PERCENT,
+            );
             bitmaps.push(bitmap);
         }
 
