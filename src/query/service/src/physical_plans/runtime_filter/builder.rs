@@ -235,7 +235,7 @@ pub async fn build_runtime_filter(
         build_key,
         probe_key,
         scan_id,
-        _table_index,
+        probe_table_index,
         column_idx,
         is_null_equal,
         build_table_index,
@@ -269,6 +269,8 @@ pub async fn build_runtime_filter(
 
         let build_table_rows =
             get_build_table_rows(ctx.clone(), metadata, build_table_index).await?;
+        let probe_table_rows =
+            get_build_table_rows(ctx.clone(), metadata, Some(probe_table_index)).await?;
 
         let data_type = build_key
             .as_expr(&BUILTIN_FUNCTIONS)
@@ -290,6 +292,7 @@ pub async fn build_runtime_filter(
             build_key: build_key.clone(),
             probe_targets,
             build_table_rows,
+            probe_table_rows,
             enable_bloom_runtime_filter,
             enable_inlist_runtime_filter,
             enable_min_max_runtime_filter,

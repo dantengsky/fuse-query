@@ -23,35 +23,71 @@ pub(super) fn should_enable_runtime_filter(
         return false;
     }
 
-    let Some(build_table_rows) = desc.build_table_rows else {
+    let has_table_statistics = desc.build_table_rows.is_some_and(|rows| rows != 0)
+        || desc.probe_table_rows.is_some_and(|rows| rows != 0);
+    if !has_table_statistics {
         log::info!(
-            "RUNTIME-FILTER: Disable bloom runtime filter {} - no build table statistics available",
+            "RUNTIME-FILTER: Disable bloom runtime filter {} - no table statistics available",
             desc.id
         );
         return false;
-    };
+    }
 
-    let selectivity_pct = (build_num_rows as f64 / build_table_rows as f64) * 100.0;
-
-    if selectivity_pct < selectivity_threshold as f64 {
+    let enabled =
+        selectivity_below_threshold(build_num_rows, desc.build_table_rows, selectivity_threshold)
+            || selectivity_below_threshold(
+                build_num_rows,
+                desc.probe_table_rows,
+                selectivity_threshold,
+            );
+    if enabled {
         log::info!(
-            "RUNTIME-FILTER: Enable bloom runtime filter {} - low selectivity: {:.2}% < {}% (build_rows={}, build_table_rows={})",
+            "RUNTIME-FILTER: Enable bloom runtime filter {} - selective against build or probe table (threshold={}%, build_rows={}, build_table_rows={:?}, probe_table_rows={:?})",
             desc.id,
-            selectivity_pct,
             selectivity_threshold,
             build_num_rows,
-            build_table_rows
+            desc.build_table_rows,
+            desc.probe_table_rows,
         );
         true
     } else {
         log::info!(
-            "RUNTIME-FILTER: Disable bloom runtime filter {} - high selectivity: {:.2}% >= {}% (build_rows={}, build_table_rows={})",
+            "RUNTIME-FILTER: Disable bloom runtime filter {} - unselective against build and probe tables (threshold={}%, build_rows={}, build_table_rows={:?}, probe_table_rows={:?})",
             desc.id,
-            selectivity_pct,
             selectivity_threshold,
             build_num_rows,
-            build_table_rows
+            desc.build_table_rows,
+            desc.probe_table_rows,
         );
         false
+    }
+}
+
+fn selectivity_below_threshold(
+    build_num_rows: usize,
+    table_rows: Option<u64>,
+    threshold_percent: u64,
+) -> bool {
+    table_rows.is_some_and(|table_rows| {
+        table_rows != 0
+            && (build_num_rows as u128) * 100
+                < u128::from(table_rows) * u128::from(threshold_percent)
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selectivity_can_use_probe_table_size() {
+        assert!(!selectivity_below_threshold(200_000, Some(200_000), 10));
+        assert!(selectivity_below_threshold(200_000, Some(20_000_000), 10));
+    }
+
+    #[test]
+    fn selectivity_rejects_missing_and_zero_statistics() {
+        assert!(!selectivity_below_threshold(1, None, 10));
+        assert!(!selectivity_below_threshold(1, Some(0), 10));
     }
 }
