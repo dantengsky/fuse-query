@@ -15,6 +15,7 @@
 use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
@@ -89,6 +90,8 @@ pub struct RuntimeFilterSpatial {
 pub struct RuntimeFilterStats {
     bloom_time_ns: AtomicU64,
     bloom_rows_filtered: AtomicU64,
+    bloom_rows_checked: AtomicU64,
+    bloom_disabled: AtomicBool,
     inlist_min_max_time_ns: AtomicU64,
     min_max_rows_filtered: AtomicU64,
     min_max_partitions_pruned: AtomicU64,
@@ -102,10 +105,45 @@ impl RuntimeFilterStats {
         Self::default()
     }
 
-    pub fn record_bloom(&self, time_ns: u64, rows_filtered: u64) {
+    pub fn record_bloom(&self, time_ns: u64, rows_filtered: u64, rows_checked: u64) {
         self.bloom_time_ns.fetch_add(time_ns, Ordering::Relaxed);
         self.bloom_rows_filtered
-            .fetch_add(rows_filtered, Ordering::Relaxed);
+            .fetch_add(rows_filtered, Ordering::SeqCst);
+        self.bloom_rows_checked
+            .fetch_add(rows_checked, Ordering::SeqCst);
+    }
+
+    pub fn bloom_disabled(&self) -> bool {
+        self.bloom_disabled.load(Ordering::SeqCst)
+    }
+
+    /// Stop paying the row-level bloom cost when a shared sample shows little reduction.
+    ///
+    /// Disabling a runtime filter is always safe: subsequent rows continue to the join instead of
+    /// being discarded early. The decision is shared by all scan workers using this filter.
+    pub fn disable_bloom_if_unselective(
+        &self,
+        sample_rows: u64,
+        min_filtered_percent: u64,
+    ) -> bool {
+        if self.bloom_disabled() {
+            return true;
+        }
+
+        let rows_checked = self.bloom_rows_checked.load(Ordering::SeqCst);
+        if rows_checked < sample_rows {
+            return false;
+        }
+
+        let rows_filtered = self.bloom_rows_filtered.load(Ordering::SeqCst);
+        if u128::from(rows_filtered) * 100
+            >= u128::from(rows_checked) * u128::from(min_filtered_percent)
+        {
+            return false;
+        }
+
+        self.bloom_disabled.store(true, Ordering::SeqCst);
+        true
     }
 
     pub fn record_inlist_min_max(&self, time_ns: u64, rows_filtered: u64, partitions_pruned: u64) {
@@ -129,6 +167,8 @@ impl RuntimeFilterStats {
         RuntimeFilterStatsSnapshot {
             bloom_time_ns: self.bloom_time_ns.load(Ordering::Relaxed),
             bloom_rows_filtered: self.bloom_rows_filtered.load(Ordering::Relaxed),
+            bloom_rows_checked: self.bloom_rows_checked.load(Ordering::SeqCst),
+            bloom_disabled: self.bloom_disabled.load(Ordering::SeqCst),
             inlist_min_max_time_ns: self.inlist_min_max_time_ns.load(Ordering::Relaxed),
             min_max_rows_filtered: self.min_max_rows_filtered.load(Ordering::Relaxed),
             min_max_partitions_pruned: self.min_max_partitions_pruned.load(Ordering::Relaxed),
@@ -143,6 +183,8 @@ impl RuntimeFilterStats {
 pub struct RuntimeFilterStatsSnapshot {
     pub bloom_time_ns: u64,
     pub bloom_rows_filtered: u64,
+    pub bloom_rows_checked: u64,
+    pub bloom_disabled: bool,
     pub inlist_min_max_time_ns: u64,
     pub min_max_rows_filtered: u64,
     pub min_max_partitions_pruned: u64,
@@ -173,5 +215,32 @@ impl Default for RuntimeFilterReady {
             runtime_filter_watcher: watcher,
             _runtime_filter_dummy_receiver: dummy_receiver,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bloom_filter_stays_enabled_until_sample_is_large_enough() {
+        let stats = RuntimeFilterStats::new();
+        stats.record_bloom(10, 0, 999);
+
+        assert!(!stats.disable_bloom_if_unselective(1_000, 5));
+        assert!(!stats.bloom_disabled());
+    }
+
+    #[test]
+    fn bloom_filter_disables_only_for_low_reduction() {
+        let unselective = RuntimeFilterStats::new();
+        unselective.record_bloom(10, 49, 1_000);
+        assert!(unselective.disable_bloom_if_unselective(1_000, 5));
+        assert!(unselective.bloom_disabled());
+
+        let selective = RuntimeFilterStats::new();
+        selective.record_bloom(10, 50, 1_000);
+        assert!(!selective.disable_bloom_if_unselective(1_000, 5));
+        assert!(!selective.bloom_disabled());
     }
 }
