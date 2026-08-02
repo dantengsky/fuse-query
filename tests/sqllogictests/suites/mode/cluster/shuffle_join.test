@@ -505,14 +505,16 @@ insert into multi_key_scatter_probe values
     ('AbC', 1, 10, 100, 'matched-1'),
     ('DEF', 2, 20, 200, 'unmatched-2'),
     ('ghi', 3, 30, 300, 'matched-3'),
-    ('Jkl', 4, 40, 400, 'unmatched-4')
+    ('Jkl', 4, 40, 400, 'unmatched-4'),
+    ('Mno', 5, 50, 500, 'derived-key-mismatch')
 
 statement ok
 insert into multi_key_scatter_build values
     ('abc', 'AbC', 1, 10, 100),
     ('def', 'DEF', 2, 20, 999),
     ('ghi', 'ghi', 3, 30, 300),
-    ('jkl', 'Jkl', 4, 999, 400)
+    ('jkl', 'Jkl', 4, 999, 400),
+    ('not-mno', 'Mno', 5, 50, 500)
 
 query TT
 select p.address, p.payload
@@ -530,6 +532,7 @@ order by p.address
 ----
 DEF unmatched-2
 Jkl unmatched-4
+Mno derived-key-mismatch
 
 statement ok
 drop table multi_key_scatter_probe
