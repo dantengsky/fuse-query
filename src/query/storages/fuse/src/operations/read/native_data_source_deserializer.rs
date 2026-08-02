@@ -65,6 +65,8 @@ use roaring::RoaringTreemap;
 
 use super::native_data_source::NativeDataSource;
 use super::read_data_source::ReadDataSource;
+use super::read_state::MIN_RUNTIME_FILTER_REDUCTION_PERCENT;
+use super::read_state::runtime_filter_sample_rows;
 use super::util::add_data_block_meta;
 use crate::DEFAULT_ROW_PER_PAGE;
 use crate::fuse_part::FuseBlockPartInfo;
@@ -241,6 +243,7 @@ struct BloomRuntimeFilterRef {
     filter_id: usize,
     filter: RuntimeBloomFilter,
     stats: Arc<RuntimeFilterStats>,
+    sample_rows: u64,
 }
 
 impl NativeDeserializeDataTransform {
@@ -643,6 +646,10 @@ impl NativeDeserializeDataTransform {
         if let Some(bloom_runtime_filter) = self.bloom_runtime_filter.as_ref() {
             let mut bitmaps = Vec::with_capacity(bloom_runtime_filter.len());
             for runtime_filter in bloom_runtime_filter.iter() {
+                if runtime_filter.stats.bloom_disabled() {
+                    continue;
+                }
+
                 let start = std::time::Instant::now();
                 let column = if let Some((_, column)) = self
                     .read_state
@@ -668,9 +675,15 @@ impl NativeDeserializeDataTransform {
 
                 let unset_bits = bitmap.null_count();
                 let elapsed = start.elapsed();
-                runtime_filter
-                    .stats
-                    .record_bloom(elapsed.as_nanos() as u64, unset_bits as u64);
+                runtime_filter.stats.record_bloom(
+                    elapsed.as_nanos() as u64,
+                    unset_bits as u64,
+                    bitmap.len() as u64,
+                );
+                runtime_filter.stats.disable_bloom_if_unselective(
+                    runtime_filter.sample_rows,
+                    MIN_RUNTIME_FILTER_REDUCTION_PERCENT,
+                );
                 if unset_bits == bitmap.len() {
                     // skip current page.
                     return Ok(false);
@@ -756,6 +769,7 @@ impl NativeDeserializeDataTransform {
                 .into_iter()
                 .filter_map(|entry| {
                     let filter_id = entry.id;
+                    let sample_rows = runtime_filter_sample_rows(entry.build_rows);
                     let RuntimeFilterEntry { bloom, stats, .. } = entry;
                     let bloom = bloom?;
                     let column_index = self.src_schema.index_of(bloom.column_name.as_str()).ok()?;
@@ -764,6 +778,7 @@ impl NativeDeserializeDataTransform {
                         filter_id,
                         filter: bloom.filter.clone(),
                         stats,
+                        sample_rows,
                     })
                 })
                 .collect::<Vec<_>>();
