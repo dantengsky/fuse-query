@@ -49,6 +49,12 @@ pub struct PhysicalRuntimeFilter {
 
     pub build_table_rows: Option<u64>,
 
+    /// Rows in the probe table that originally supplied `probe_targets`.
+    ///
+    /// This lets the runtime filter account for joins where the build input covers most of its
+    /// own table but is still tiny compared with the probe table.
+    pub probe_table_rows: Option<u64>,
+
     /// Enable bloom filter for this runtime filter
     pub enable_bloom_runtime_filter: bool,
 
