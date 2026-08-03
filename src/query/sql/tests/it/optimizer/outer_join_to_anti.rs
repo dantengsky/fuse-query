@@ -125,6 +125,24 @@ LEFT JOIN (
 WHERE d.marker IS NULL",
         },
         SqlTestCase {
+            name: "null_masking_right_equi_expression_is_not_anti",
+            description: "A right equi-key expression that maps NULL to a value must not become a left anti join.",
+            setup_sqls: &[LEFT_TABLE, RIGHT_TABLE],
+            sql: "SELECT l.k
+FROM outer_to_anti_left AS l
+LEFT JOIN outer_to_anti_right AS r ON l.k = IF(r.k IS NULL, 0, r.k)
+WHERE IF(r.k IS NULL, 0, r.k) IS NULL",
+        },
+        SqlTestCase {
+            name: "null_masking_left_equi_expression_is_not_anti",
+            description: "A left equi-key expression that maps NULL to a value must not become a right anti join.",
+            setup_sqls: &[LEFT_TABLE, RIGHT_TABLE],
+            sql: "SELECT r.k
+FROM outer_to_anti_left AS l
+RIGHT JOIN outer_to_anti_right AS r ON IF(l.k IS NULL, 0, l.k) = r.k
+WHERE IF(l.k IS NULL, 0, l.k) IS NULL",
+        },
+        SqlTestCase {
             name: "null_safe_condition_keeps_outer_join",
             description: "A null-equal join key must not be rewritten as an anti join.",
             setup_sqls: &[LEFT_TABLE, RIGHT_TABLE],

@@ -28,7 +28,7 @@ use crate::plans::ScalarExpr;
 use crate::plans::ScalarItem;
 
 /// Convert an outer-join exclusion filter to the corresponding anti join when
-/// the null-tested expression is a regular equi-key on the null-extended side.
+/// the null-tested expression is a direct regular equi-key on the null-extended side.
 pub fn outer_join_to_anti_join(s_expr: &SExpr, metadata: MetadataRef) -> Result<Option<SExpr>> {
     let filter = s_expr.plan().as_filter().unwrap();
     let join_expr = s_expr.unary_child();
@@ -57,15 +57,20 @@ pub fn outer_join_to_anti_join(s_expr: &SExpr, metadata: MetadataRef) -> Result<
             continue;
         };
 
-        let is_regular_equi_key = join.equi_conditions.iter().any(|condition| {
-            !condition.is_null_equal
-                && match join.join_type {
-                    JoinType::Left => condition.right == *null_tested_expr,
-                    JoinType::Right => condition.left == *null_tested_expr,
-                    _ => unreachable!(),
-                }
-        });
-        if is_regular_equi_key {
+        // A regular equi-join cannot match a NULL direct key, so testing that
+        // key for NULL selects exactly the null-extended rows. The same is not
+        // true for an arbitrary equi-key expression: it may map its null-extended
+        // inputs to a non-NULL value (for example, IF(col IS NULL, 0, col)).
+        let is_direct_regular_equi_key = matches!(null_tested_expr, ScalarExpr::BoundColumnRef(_))
+            && join.equi_conditions.iter().any(|condition| {
+                !condition.is_null_equal
+                    && match join.join_type {
+                        JoinType::Left => condition.right == *null_tested_expr,
+                        JoinType::Right => condition.left == *null_tested_expr,
+                        _ => unreachable!(),
+                    }
+            });
+        if is_direct_regular_equi_key {
             predicate_index = Some(index);
             break;
         }

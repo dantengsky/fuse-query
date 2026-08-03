@@ -444,6 +444,92 @@ EvalScalar
             ├── order by: []
             └── limit: NONE
 
+=== null_masking_right_equi_expression_is_not_anti ===
+description: A right equi-key expression that maps NULL to a value must not become a left anti join.
+sql: SELECT l.k
+FROM outer_to_anti_left AS l
+LEFT JOIN outer_to_anti_right AS r ON l.k = IF(r.k IS NULL, 0, r.k)
+WHERE IF(r.k IS NULL, 0, r.k) IS NULL
+raw_plan:
+EvalScalar
+├── scalars: [outer_to_anti_left.k (#0) AS (#0)]
+└── Filter
+    ├── filters: [not(is_not_null(if(not(is_not_null(outer_to_anti_right.k (#3))), 0, outer_to_anti_right.k (#3))))]
+    └── Join(Left)
+        ├── build keys: [if(not(is_not_null(outer_to_anti_right.k (#3))), 0, outer_to_anti_right.k (#3))]
+        ├── probe keys: [outer_to_anti_left.k (#0)]
+        ├── other filters: []
+        ├── Scan
+        │   ├── table: default.outer_to_anti_right (#1)
+        │   ├── filters: []
+        │   ├── order by: []
+        │   └── limit: NONE
+        └── Scan
+            ├── table: default.outer_to_anti_left (#0)
+            ├── filters: []
+            ├── order by: []
+            └── limit: NONE
+optimized_plan:
+EvalScalar
+├── scalars: [outer_to_anti_left.k (#0) AS (#0), outer_to_anti_right.k (#3) AS (#6)]
+└── Join(Inner)
+    ├── build keys: [if(not(is_not_null(outer_to_anti_right.k (#3))), 0, outer_to_anti_right.k (#3))]
+    ├── probe keys: [outer_to_anti_left.k (#0)]
+    ├── other filters: []
+    ├── Scan
+    │   ├── table: default.outer_to_anti_right (#1)
+    │   ├── filters: [not(is_not_null(if(not(is_not_null(outer_to_anti_right.k (#3))), 0, outer_to_anti_right.k (#3))))]
+    │   ├── order by: []
+    │   └── limit: NONE
+    └── Scan
+        ├── table: default.outer_to_anti_left (#0)
+        ├── filters: []
+        ├── order by: []
+        └── limit: NONE
+
+=== null_masking_left_equi_expression_is_not_anti ===
+description: A left equi-key expression that maps NULL to a value must not become a right anti join.
+sql: SELECT r.k
+FROM outer_to_anti_left AS l
+RIGHT JOIN outer_to_anti_right AS r ON IF(l.k IS NULL, 0, l.k) = r.k
+WHERE IF(l.k IS NULL, 0, l.k) IS NULL
+raw_plan:
+EvalScalar
+├── scalars: [outer_to_anti_right.k (#3) AS (#3)]
+└── Filter
+    ├── filters: [not(is_not_null(if(not(is_not_null(outer_to_anti_left.k (#0))), 0, outer_to_anti_left.k (#0))))]
+    └── Join(Right)
+        ├── build keys: [outer_to_anti_right.k (#3)]
+        ├── probe keys: [if(not(is_not_null(outer_to_anti_left.k (#0))), 0, outer_to_anti_left.k (#0))]
+        ├── other filters: []
+        ├── Scan
+        │   ├── table: default.outer_to_anti_right (#1)
+        │   ├── filters: []
+        │   ├── order by: []
+        │   └── limit: NONE
+        └── Scan
+            ├── table: default.outer_to_anti_left (#0)
+            ├── filters: []
+            ├── order by: []
+            └── limit: NONE
+optimized_plan:
+EvalScalar
+├── scalars: [outer_to_anti_right.k (#3) AS (#3), outer_to_anti_left.k (#0) AS (#6)]
+└── Join(Inner)
+    ├── build keys: [outer_to_anti_right.k (#3)]
+    ├── probe keys: [if(not(is_not_null(outer_to_anti_left.k (#0))), 0, outer_to_anti_left.k (#0))]
+    ├── other filters: []
+    ├── Scan
+    │   ├── table: default.outer_to_anti_right (#1)
+    │   ├── filters: []
+    │   ├── order by: []
+    │   └── limit: NONE
+    └── Scan
+        ├── table: default.outer_to_anti_left (#0)
+        ├── filters: [not(is_not_null(if(not(is_not_null(outer_to_anti_left.k (#0))), 0, outer_to_anti_left.k (#0))))]
+        ├── order by: []
+        └── limit: NONE
+
 === null_safe_condition_keeps_outer_join ===
 description: A null-equal join key must not be rewritten as an anti join.
 sql: SELECT l.k, r.k
