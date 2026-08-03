@@ -22,6 +22,33 @@ use databend_common_version::BUILD_INFO;
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_set_settings() {
     let settings = Settings::create(Tenant::new_literal("test"));
+
+    assert!(
+        !settings
+            .get_enable_probe_side_bloom_runtime_filter()
+            .unwrap()
+    );
+    settings
+        .set_setting(
+            "enable_probe_side_bloom_runtime_filter".to_string(),
+            "1".to_string(),
+        )
+        .unwrap();
+    assert!(
+        settings
+            .get_enable_probe_side_bloom_runtime_filter()
+            .unwrap()
+    );
+
+    assert_eq!(settings.get_runtime_filter_wait_timeout_ms().unwrap(), 0);
+    settings
+        .set_setting(
+            "runtime_filter_wait_timeout_ms".to_string(),
+            "250".to_string(),
+        )
+        .unwrap();
+    assert_eq!(settings.get_runtime_filter_wait_timeout_ms().unwrap(), 250);
+
     // Number range.
     {
         settings.set_max_threads(2).unwrap();

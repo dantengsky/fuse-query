@@ -138,6 +138,8 @@ impl TransformHashJoinBuild {
                 settings.get_bloom_runtime_filter_threshold()? as usize,
                 settings.get_min_max_runtime_filter_threshold()? as usize,
                 settings.get_spatial_runtime_filter_threshold()? as usize,
+                settings.get_join_runtime_filter_selectivity_threshold()?,
+                build_state.runtime_filter_build_rows.clone(),
             )?
         };
 
