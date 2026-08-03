@@ -450,6 +450,14 @@ impl Settings {
         Ok(self.try_get_u64("enable_join_runtime_filter")? != 0)
     }
 
+    pub fn get_enable_probe_side_bloom_runtime_filter(&self) -> Result<bool> {
+        Ok(self.try_get_u64("enable_probe_side_bloom_runtime_filter")? != 0)
+    }
+
+    pub fn get_runtime_filter_wait_timeout_ms(&self) -> Result<u64> {
+        self.try_get_u64("runtime_filter_wait_timeout_ms")
+    }
+
     pub fn get_join_runtime_filter_selectivity_threshold(&self) -> Result<u64> {
         self.try_get_u64("join_runtime_filter_selectivity_threshold")
     }
