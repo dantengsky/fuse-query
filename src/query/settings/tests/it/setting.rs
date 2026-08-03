@@ -25,6 +25,23 @@ async fn test_set_settings() {
 
     assert!(
         !settings
+            .get_enable_legacy_single_key_hash_join_shuffle()
+            .unwrap()
+    );
+    settings
+        .set_setting(
+            "enable_legacy_single_key_hash_join_shuffle".to_string(),
+            "1".to_string(),
+        )
+        .unwrap();
+    assert!(
+        settings
+            .get_enable_legacy_single_key_hash_join_shuffle()
+            .unwrap()
+    );
+
+    assert!(
+        !settings
             .get_enable_probe_side_bloom_runtime_filter()
             .unwrap()
     );
