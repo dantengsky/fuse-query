@@ -72,6 +72,8 @@ pub struct DeserializeDataTransform {
 
     prewhere_info: Option<PrewhereInfo>,
     read_state: Option<ReadState>,
+    loaded_bloom_runtime_filters: usize,
+    runtime_filters_finalized: bool,
 }
 
 unsafe impl Send for DeserializeDataTransform {}
@@ -129,8 +131,53 @@ impl DeserializeDataTransform {
             block_meta_options: plan.block_meta_options.clone(),
             prewhere_info,
             read_state: None,
+            loaded_bloom_runtime_filters: 0,
+            runtime_filters_finalized: false,
         })))
     }
+
+    fn refresh_read_state(&mut self) -> Result<()> {
+        if self.runtime_filters_finalized && self.read_state.is_some() {
+            return Ok(());
+        }
+
+        let runtime_filter_ready = self.ctx.get_runtime_filter_ready(self.scan_id);
+        let runtime_filters_finalized = runtime_filter_ready.iter().all(|ready| {
+            let receiver = ready.runtime_filter_watcher.subscribe();
+            let value = *receiver.borrow();
+            value.is_some()
+        });
+        let bloom_runtime_filters = self
+            .ctx
+            .get_runtime_filters(self.scan_id)
+            .iter()
+            .filter(|entry| entry.bloom.is_some())
+            .count();
+
+        if should_refresh_read_state(
+            self.read_state.is_some(),
+            self.loaded_bloom_runtime_filters,
+            bloom_runtime_filters,
+        ) {
+            self.read_state = Some(ReadState::create(
+                self.ctx.clone(),
+                self.scan_id,
+                self.prewhere_info.as_ref(),
+                self.block_reader.clone(),
+            )?);
+            self.loaded_bloom_runtime_filters = bloom_runtime_filters;
+        }
+        self.runtime_filters_finalized = runtime_filters_finalized;
+        Ok(())
+    }
+}
+
+fn should_refresh_read_state(
+    read_state_exists: bool,
+    loaded_bloom_runtime_filters: usize,
+    bloom_runtime_filters: usize,
+) -> bool {
+    !read_state_exists || bloom_runtime_filters > loaded_bloom_runtime_filters
 }
 
 #[async_trait::async_trait]
@@ -221,14 +268,10 @@ impl Processor for DeserializeDataTransform {
                     let columns_chunks = data.columns_chunks()?;
                     let part = FuseBlockPartInfo::from_part(&part)?;
 
-                    if self.read_state.is_none() {
-                        self.read_state = Some(ReadState::create(
-                            self.ctx.clone(),
-                            self.scan_id,
-                            self.prewhere_info.as_ref(),
-                            self.block_reader.clone(),
-                        )?);
-                    }
+                    // A scan may start before its runtime filters are ready. Rebuild the Parquet
+                    // read state when a late bloom filter arrives so subsequent blocks can move
+                    // its probe column into prewhere and apply it without restarting the scan.
+                    self.refresh_read_state()?;
 
                     let (mut data_block, row_selection, bitmap_selection) = self
                         .read_state
@@ -293,5 +336,19 @@ impl Processor for DeserializeDataTransform {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_refresh_read_state;
+
+    #[test]
+    fn test_refresh_read_state_for_late_bloom_runtime_filter() {
+        assert!(should_refresh_read_state(false, 0, 0));
+        assert!(should_refresh_read_state(true, 0, 1));
+        assert!(should_refresh_read_state(true, 1, 2));
+        assert!(!should_refresh_read_state(true, 1, 1));
+        assert!(!should_refresh_read_state(true, 2, 1));
     }
 }

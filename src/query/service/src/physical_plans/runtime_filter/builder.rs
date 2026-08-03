@@ -212,6 +212,10 @@ pub async fn build_runtime_filter(
         return Ok(Default::default());
     }
 
+    let enable_probe_side_bloom_runtime_filter = ctx
+        .get_settings()
+        .get_enable_probe_side_bloom_runtime_filter()?;
+
     let build_side = s_expr.build_side_child();
     let build_side_data_distribution = build_side.get_data_distribution()?;
     if build_side_data_distribution.as_ref().is_some_and(|e| {
@@ -269,8 +273,11 @@ pub async fn build_runtime_filter(
 
         let build_table_rows =
             get_build_table_rows(ctx.clone(), metadata, build_table_index).await?;
-        let probe_table_rows =
-            get_build_table_rows(ctx.clone(), metadata, Some(probe_table_index)).await?;
+        let probe_table_rows = if enable_probe_side_bloom_runtime_filter {
+            get_build_table_rows(ctx.clone(), metadata, Some(probe_table_index)).await?
+        } else {
+            None
+        };
 
         let data_type = build_key
             .as_expr(&BUILTIN_FUNCTIONS)
