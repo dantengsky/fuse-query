@@ -1,0 +1,63 @@
+# The legacy single-key mode changes only hash-shuffle distribution. The complete equi-join key
+# set must still be used for exact matching in a distributed Parquet Fuse join.
+
+statement ok
+set enforce_shuffle_join = 1
+
+statement ok
+set enable_legacy_single_key_hash_join_shuffle = 1
+
+statement ok
+drop table if exists legacy_single_key_shuffle_l
+
+statement ok
+drop table if exists legacy_single_key_shuffle_r
+
+statement ok
+create table legacy_single_key_shuffle_l (
+    k1 int null,
+    k2 int,
+    value string
+) storage_format = 'parquet'
+
+statement ok
+create table legacy_single_key_shuffle_r (
+    k1 int null,
+    k2 int,
+    value string
+) storage_format = 'parquet'
+
+statement ok
+insert into legacy_single_key_shuffle_l values
+    (1, 10, 'l1'),
+    (1, 20, 'l2'),
+    (2, 10, 'l3'),
+    (null, 10, 'ln')
+
+statement ok
+insert into legacy_single_key_shuffle_r values
+    (1, 10, 'r1'),
+    (1, 30, 'r2'),
+    (2, 10, 'r3'),
+    (null, 10, 'rn')
+
+query TT rowsort
+select l.value, r.value
+from legacy_single_key_shuffle_l l
+join legacy_single_key_shuffle_r r
+    on l.k1 = r.k1 and l.k2 = r.k2
+----
+l1 r1
+l3 r3
+
+statement ok
+drop table legacy_single_key_shuffle_l
+
+statement ok
+drop table legacy_single_key_shuffle_r
+
+statement ok
+unset enable_legacy_single_key_hash_join_shuffle
+
+statement ok
+unset enforce_shuffle_join
