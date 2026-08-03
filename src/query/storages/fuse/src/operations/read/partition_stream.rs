@@ -15,6 +15,7 @@
 use std::any::Any;
 use std::sync::Arc;
 use std::task::Poll;
+use std::time::Duration;
 
 use async_channel::Receiver;
 use databend_common_catalog::plan::PartInfoPtr;
@@ -219,6 +220,12 @@ impl Processor for PartitionStreamSource {
                     &self.output,
                     waiter.ctx.get_abort_notify(),
                     ready,
+                    Duration::from_millis(
+                        waiter
+                            .ctx
+                            .get_settings()
+                            .get_runtime_filter_wait_timeout_ms()?,
+                    ),
                 )
                 .await?;
             }

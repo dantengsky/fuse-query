@@ -69,6 +69,7 @@ pub struct RuntimeFilterEntry {
     pub stats: Arc<RuntimeFilterStats>,
     pub build_rows: usize,
     pub build_table_rows: Option<u64>,
+    pub adaptive_bloom: bool,
     pub enabled: bool,
 }
 
@@ -105,7 +106,13 @@ impl RuntimeFilterStats {
         Self::default()
     }
 
-    pub fn record_bloom(&self, time_ns: u64, rows_filtered: u64, rows_checked: u64) {
+    pub fn record_bloom(&self, time_ns: u64, rows_filtered: u64) {
+        self.bloom_time_ns.fetch_add(time_ns, Ordering::Relaxed);
+        self.bloom_rows_filtered
+            .fetch_add(rows_filtered, Ordering::Relaxed);
+    }
+
+    pub fn record_adaptive_bloom(&self, time_ns: u64, rows_filtered: u64, rows_checked: u64) {
         self.bloom_time_ns.fetch_add(time_ns, Ordering::Relaxed);
         self.bloom_rows_filtered
             .fetch_add(rows_filtered, Ordering::SeqCst);
@@ -225,7 +232,7 @@ mod tests {
     #[test]
     fn bloom_filter_stays_enabled_until_sample_is_large_enough() {
         let stats = RuntimeFilterStats::new();
-        stats.record_bloom(10, 0, 999);
+        stats.record_adaptive_bloom(10, 0, 999);
 
         assert!(!stats.disable_bloom_if_unselective(1_000, 5));
         assert!(!stats.bloom_disabled());
@@ -234,12 +241,12 @@ mod tests {
     #[test]
     fn bloom_filter_disables_only_for_low_reduction() {
         let unselective = RuntimeFilterStats::new();
-        unselective.record_bloom(10, 49, 1_000);
+        unselective.record_adaptive_bloom(10, 49, 1_000);
         assert!(unselective.disable_bloom_if_unselective(1_000, 5));
         assert!(unselective.bloom_disabled());
 
         let selective = RuntimeFilterStats::new();
-        selective.record_bloom(10, 50, 1_000);
+        selective.record_adaptive_bloom(10, 50, 1_000);
         assert!(!selective.disable_bloom_if_unselective(1_000, 5));
         assert!(!selective.bloom_disabled());
     }

@@ -23,7 +23,6 @@ use databend_common_exception::Result;
 use databend_common_pipeline::core::OutputPort;
 use databend_common_sql::IndexType;
 
-const RUNTIME_FILTER_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
 const RUNTIME_FILTER_WAIT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 pub async fn wait_runtime_filters(
@@ -31,14 +30,21 @@ pub async fn wait_runtime_filters(
     output: &Arc<OutputPort>,
     abort_notify: Arc<WatchNotify>,
     runtime_filter_ready: &[Arc<RuntimeFilterReady>],
+    wait_timeout: Duration,
 ) -> Result<()> {
+    if wait_timeout.is_zero() {
+        return Ok(());
+    }
+
+    // Share one budget across all runtime filters for this scan. Waiting the full timeout for
+    // each filter serially can otherwise multiply the scan stall when several joins target it.
+    let deadline = Instant::now() + wait_timeout;
     for runtime_filter_ready in runtime_filter_ready {
         let mut rx = runtime_filter_ready.runtime_filter_watcher.subscribe();
         if (*rx.borrow()).is_some() {
             continue;
         }
 
-        let deadline = Instant::now() + RUNTIME_FILTER_WAIT_TIMEOUT;
         loop {
             if output.is_finished() {
                 return Ok(());
@@ -48,10 +54,10 @@ pub async fn wait_runtime_filters(
             if now >= deadline {
                 log::warn!(
                     "Runtime filter wait timeout after {:?} for scan_id: {}",
-                    RUNTIME_FILTER_WAIT_TIMEOUT,
+                    wait_timeout,
                     scan_id
                 );
-                break;
+                return Ok(());
             }
 
             let wait_duration = (deadline - now).min(RUNTIME_FILTER_WAIT_POLL_INTERVAL);
@@ -99,7 +105,7 @@ mod tests {
 
         tokio::time::timeout(
             Duration::from_millis(300),
-            wait_runtime_filters(0, &output, abort_notify, &[ready]),
+            wait_runtime_filters(0, &output, abort_notify, &[ready], Duration::from_secs(30)),
         )
         .await
         .expect("runtime filter wait should stop after branch finish")
@@ -120,7 +126,7 @@ mod tests {
 
         let err = tokio::time::timeout(
             Duration::from_millis(300),
-            wait_runtime_filters(0, &output, abort_notify, &[ready]),
+            wait_runtime_filters(0, &output, abort_notify, &[ready], Duration::from_secs(30)),
         )
         .await
         .expect("runtime filter wait should stop after query abort")
@@ -146,10 +152,47 @@ mod tests {
 
         tokio::time::timeout(
             Duration::from_millis(300),
-            wait_runtime_filters(0, &output, abort_notify, &[ready]),
+            wait_runtime_filters(0, &output, abort_notify, &[ready], Duration::from_secs(30)),
         )
         .await
         .expect("runtime filter wait should stop after filter notification")
         .expect("filter notification should not return an error");
+    }
+
+    #[tokio::test]
+    async fn test_zero_timeout_does_not_block_scan() {
+        let output = OutputPort::create();
+        let ready = Arc::new(RuntimeFilterReady::default());
+        let abort_notify = Arc::new(WatchNotify::new());
+
+        tokio::time::timeout(
+            Duration::from_millis(100),
+            wait_runtime_filters(0, &output, abort_notify, &[ready], Duration::ZERO),
+        )
+        .await
+        .expect("zero timeout should return immediately")
+        .expect("zero timeout should not return an error");
+    }
+
+    #[tokio::test]
+    async fn test_runtime_filters_share_one_wait_budget() {
+        let output = OutputPort::create();
+        let first = Arc::new(RuntimeFilterReady::default());
+        let second = Arc::new(RuntimeFilterReady::default());
+        let abort_notify = Arc::new(WatchNotify::new());
+
+        tokio::time::timeout(
+            Duration::from_millis(180),
+            wait_runtime_filters(
+                0,
+                &output,
+                abort_notify,
+                &[first, second],
+                Duration::from_millis(100),
+            ),
+        )
+        .await
+        .expect("two filters should share one 100ms wait budget")
+        .expect("wait timeout should not return an error");
     }
 }

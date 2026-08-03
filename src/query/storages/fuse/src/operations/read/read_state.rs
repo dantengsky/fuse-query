@@ -50,6 +50,7 @@ pub struct BloomRuntimeFilterRef {
     pub filter: RuntimeBloomFilter,
     pub stats: Arc<RuntimeFilterStats>,
     pub sample_rows: u64,
+    pub adaptive: bool,
 }
 
 pub(super) const MIN_RUNTIME_FILTER_REDUCTION_PERCENT: u64 = 5;
@@ -134,6 +135,7 @@ impl ReadState {
                     filter: bloom.filter,
                     stats: entry.stats,
                     sample_rows: runtime_filter_sample_rows(entry.build_rows),
+                    adaptive: entry.adaptive_bloom,
                 })
             })
             .collect();
@@ -184,22 +186,29 @@ impl ReadState {
 
         let mut bitmaps = vec![];
         for runtime_filter in &self.runtime_filters {
-            if runtime_filter.stats.bloom_disabled() {
+            if runtime_filter.adaptive && runtime_filter.stats.bloom_disabled() {
                 continue;
             }
 
             let filter_start = Instant::now();
             let probe_column = block.get_by_offset(runtime_filter.column_index).to_column();
             let bitmap = ExprBloomFilter::new(&runtime_filter.filter).apply(probe_column)?;
-            runtime_filter.stats.record_bloom(
-                filter_start.elapsed().as_nanos() as u64,
-                bitmap.null_count() as u64,
-                bitmap.len() as u64,
-            );
-            runtime_filter.stats.disable_bloom_if_unselective(
-                runtime_filter.sample_rows,
-                MIN_RUNTIME_FILTER_REDUCTION_PERCENT,
-            );
+            if runtime_filter.adaptive {
+                runtime_filter.stats.record_adaptive_bloom(
+                    filter_start.elapsed().as_nanos() as u64,
+                    bitmap.null_count() as u64,
+                    bitmap.len() as u64,
+                );
+                runtime_filter.stats.disable_bloom_if_unselective(
+                    runtime_filter.sample_rows,
+                    MIN_RUNTIME_FILTER_REDUCTION_PERCENT,
+                );
+            } else {
+                runtime_filter.stats.record_bloom(
+                    filter_start.elapsed().as_nanos() as u64,
+                    bitmap.null_count() as u64,
+                );
+            }
             bitmaps.push(bitmap);
         }
 
