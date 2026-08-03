@@ -93,7 +93,7 @@ async fn run_prewhere_test_with_threshold(
     )?;
 
     // Create ReadState which combines prewhere and runtime filter logic
-    let read_state = ReadState::create(
+    let mut read_state = ReadState::create(
         ctx.clone(),
         scan_id,
         Some(&prewhere_info),
@@ -368,6 +368,7 @@ async fn prepare_prewhere_data() -> Result<PrewhereTestSetup> {
                 stats: Arc::new(RuntimeFilterStats::default()),
                 build_rows: 1,
                 build_table_rows: None,
+                adaptive_bloom: false,
                 enabled: true,
             },
             RuntimeFilterEntry {
@@ -388,6 +389,7 @@ async fn prepare_prewhere_data() -> Result<PrewhereTestSetup> {
                 stats: Arc::new(RuntimeFilterStats::default()),
                 build_rows: 1,
                 build_table_rows: None,
+                adaptive_bloom: false,
                 enabled: true,
             },
         ],

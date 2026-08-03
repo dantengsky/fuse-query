@@ -1,0 +1,84 @@
+# A distributed Fuse Parquet scan must stay correct when it starts without waiting for
+# runtime filters. This also exercises a probe-side adaptive bloom without ANALYZE TABLE.
+
+statement ok
+set enforce_shuffle_join = 1
+
+statement ok
+set disable_join_reorder = 1
+
+statement ok
+set enable_join_runtime_filter = 1
+
+statement ok
+set runtime_filter_wait_timeout_ms = 0
+
+statement ok
+set enable_probe_side_bloom_runtime_filter = 1
+
+statement ok
+drop table if exists rf_wait_build
+
+statement ok
+drop table if exists rf_wait_probe
+
+statement ok
+create table rf_wait_build (k int null, address string) storage_format = 'parquet'
+
+statement ok
+create table rf_wait_probe (
+    k int,
+    address_raw string,
+    address_lower string
+) storage_format = 'parquet'
+
+statement ok
+insert into rf_wait_build values
+    (0, 'addr0'),
+    (1, 'addr1'),
+    (2, 'addr2'),
+    (3, 'addr3'),
+    (null, 'null-key')
+
+statement ok
+insert into rf_wait_probe
+select
+    number % 3,
+    concat('addr', to_string(number % 3)),
+    lower(concat('addr', to_string(number % 3)))
+from numbers(10000)
+
+query I rowsort
+select b.k
+from rf_wait_build b
+where not exists (
+    select 1
+    from rf_wait_probe p
+    where b.k = p.k
+      and b.address = p.address_raw
+      and lower(b.address) = p.address_lower
+)
+----
+3
+NULL
+
+statement ok
+drop table rf_wait_build
+
+statement ok
+drop table rf_wait_probe
+
+statement ok
+unset enable_probe_side_bloom_runtime_filter
+
+statement ok
+unset runtime_filter_wait_timeout_ms
+
+statement ok
+unset enable_join_runtime_filter
+
+statement ok
+unset disable_join_reorder
+
+statement ok
+unset enforce_shuffle_join
