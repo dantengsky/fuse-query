@@ -106,6 +106,7 @@ pub struct HashJoinBuildState {
     pub(crate) concat_buffer: Mutex<ConcatBuffer>,
     pub(crate) broadcast_id: Option<u32>,
     pub(crate) is_runtime_filter_added: AtomicBool,
+    pub(crate) runtime_filter_build_rows: Arc<AtomicUsize>,
     runtime_filter_packets: Mutex<Vec<JoinRuntimeFilterPacket>>,
 }
 
@@ -164,6 +165,7 @@ impl HashJoinBuildState {
             concat_buffer: Mutex::new(ConcatBuffer::new(concat_threshold)),
             broadcast_id,
             is_runtime_filter_added: AtomicBool::new(false),
+            runtime_filter_build_rows: Arc::new(AtomicUsize::new(0)),
             runtime_filter_packets: Mutex::new(Vec::new()),
         }))
     }

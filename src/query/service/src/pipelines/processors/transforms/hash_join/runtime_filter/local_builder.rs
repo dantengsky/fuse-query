@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
+
 use databend_common_exception::Result;
 use databend_common_expression::BlockEntry;
 use databend_common_expression::Column;
@@ -65,6 +69,7 @@ impl SingleFilterBuilder {
         bloom_threshold: usize,
         min_max_threshold: usize,
         spatial_threshold: usize,
+        selectivity_threshold: u64,
     ) -> Result<Self> {
         let data_type = desc.build_key.data_type().clone();
         let bloom_data_type = data_type.remove_nullable();
@@ -94,7 +99,7 @@ impl SingleFilterBuilder {
             },
             bloom_hashes: None,
             bloom_threshold: if desc.enable_bloom_runtime_filter {
-                bloom_threshold
+                bloom_threshold.min(bloom_selectivity_row_limit(desc, selectivity_threshold))
             } else {
                 0
             },
@@ -282,7 +287,8 @@ impl SingleFilterBuilder {
 pub struct RuntimeFilterLocalBuilder {
     func_ctx: FunctionContext,
     builders: Vec<SingleFilterBuilder>,
-    total_rows: usize,
+    local_rows: usize,
+    observed_build_rows: Arc<AtomicUsize>,
     runtime_filters: Vec<RuntimeFilterDesc>,
 }
 
@@ -294,6 +300,8 @@ impl RuntimeFilterLocalBuilder {
         bloom_threshold: usize,
         min_max_threshold: usize,
         spatial_threshold: usize,
+        selectivity_threshold: u64,
+        observed_build_rows: Arc<AtomicUsize>,
     ) -> Result<Option<Self>> {
         if descs.is_empty() {
             return Ok(None);
@@ -307,13 +315,15 @@ impl RuntimeFilterLocalBuilder {
                 bloom_threshold,
                 min_max_threshold,
                 spatial_threshold,
+                selectivity_threshold,
             )?);
         }
 
         Ok(Some(Self {
             func_ctx: func_ctx.clone(),
             builders,
-            total_rows: 0,
+            local_rows: 0,
+            observed_build_rows,
             runtime_filters: descs,
         }))
     }
@@ -324,20 +334,23 @@ impl RuntimeFilterLocalBuilder {
         }
 
         let evaluator = Evaluator::new(block, &self.func_ctx, &BUILTIN_FUNCTIONS);
+        let previous_build_rows = self
+            .observed_build_rows
+            .fetch_add(block.num_rows(), Ordering::Relaxed);
 
         for (builder, desc) in self.builders.iter_mut().zip(self.runtime_filters.iter()) {
             let column = evaluator
                 .run(&desc.build_key)?
                 .convert_to_full_column(desc.build_key.data_type(), block.num_rows());
-            builder.add_column(&column, self.total_rows)?;
+            builder.add_column(&column, previous_build_rows)?;
         }
 
-        self.total_rows += block.num_rows();
+        self.local_rows += block.num_rows();
         Ok(())
     }
 
     pub fn finish(self, spill_happened: bool) -> Result<JoinRuntimeFilterPacket> {
-        let total_rows = self.total_rows;
+        let total_rows = self.local_rows;
 
         if spill_happened {
             return Ok(JoinRuntimeFilterPacket::disable_all(total_rows));
@@ -361,6 +374,20 @@ impl RuntimeFilterLocalBuilder {
             total_rows,
         ))
     }
+}
+
+fn bloom_selectivity_row_limit(desc: &RuntimeFilterDesc, threshold_percent: u64) -> usize {
+    [desc.build_table_rows, desc.probe_table_rows]
+        .into_iter()
+        .flatten()
+        .filter(|rows| *rows != 0)
+        .map(|rows| {
+            let upper_bound = u128::from(rows) * u128::from(threshold_percent);
+            let max_enabled_rows = upper_bound.saturating_sub(1) / 100;
+            max_enabled_rows.min(usize::MAX as u128) as usize
+        })
+        .max()
+        .unwrap_or(0)
 }
 
 fn dedup_column(
@@ -416,7 +443,7 @@ mod tests {
             spatial_mode: None,
         };
 
-        let mut builder = SingleFilterBuilder::new(&desc, 10, 0, 0, 0)?;
+        let mut builder = SingleFilterBuilder::new(&desc, 10, 0, 0, 0, 10)?;
         let column = StringType::from_opt_data(vec![Some("a"), Some("b")]);
         builder.add_column(&column, 0)?;
 
@@ -424,6 +451,117 @@ mod tests {
         let inlist = packet.inlist.unwrap();
         assert_eq!(inlist.data_type(), DataType::String);
         assert_eq!(inlist.len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn test_bloom_selectivity_row_limit_matches_runtime_decision() {
+        let desc = RuntimeFilterDesc {
+            id: 0,
+            build_key: Expr::ColumnRef(ColumnRef {
+                span: None,
+                id: 0,
+                data_type: DataType::String,
+                display_name: "build_key".to_string(),
+            }),
+            probe_targets: vec![],
+            build_table_rows: Some(1_000),
+            probe_table_rows: Some(20_000),
+            enable_bloom_runtime_filter: true,
+            enable_inlist_runtime_filter: false,
+            enable_min_max_runtime_filter: false,
+            spatial_mode: None,
+        };
+
+        // The runtime decision uses a strict comparison: build_rows * 100 < table_rows * 10.
+        assert_eq!(bloom_selectivity_row_limit(&desc, 10), 1_999);
+
+        let no_statistics = RuntimeFilterDesc {
+            build_table_rows: None,
+            probe_table_rows: None,
+            ..desc
+        };
+        assert_eq!(bloom_selectivity_row_limit(&no_statistics, 10), 0);
+    }
+
+    #[test]
+    fn test_bloom_row_threshold_is_inclusive() -> Result<()> {
+        let desc = RuntimeFilterDesc {
+            id: 0,
+            build_key: Expr::ColumnRef(ColumnRef {
+                span: None,
+                id: 0,
+                data_type: DataType::String,
+                display_name: "build_key".to_string(),
+            }),
+            probe_targets: vec![],
+            build_table_rows: Some(1_000),
+            probe_table_rows: None,
+            enable_bloom_runtime_filter: true,
+            enable_inlist_runtime_filter: false,
+            enable_min_max_runtime_filter: false,
+            spatial_mode: None,
+        };
+        let mut builder = SingleFilterBuilder::new(&desc, 0, 5, 0, 0, 10)?;
+        let column = StringType::from_data(vec!["a", "b", "c", "d", "e"]);
+
+        builder.add_column(&column, 0)?;
+
+        assert!(builder.finish(&FunctionContext::default())?.bloom.is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn test_shared_build_rows_stop_unusable_bloom_collection() -> Result<()> {
+        let desc = RuntimeFilterDesc {
+            id: 0,
+            build_key: Expr::ColumnRef(ColumnRef {
+                span: None,
+                id: 0,
+                data_type: DataType::String,
+                display_name: "build_key".to_string(),
+            }),
+            probe_targets: vec![],
+            build_table_rows: Some(100),
+            probe_table_rows: None,
+            enable_bloom_runtime_filter: true,
+            enable_inlist_runtime_filter: false,
+            enable_min_max_runtime_filter: false,
+            spatial_mode: None,
+        };
+        let observed_build_rows = Arc::new(AtomicUsize::new(0));
+        let mut first = RuntimeFilterLocalBuilder::try_create(
+            &FunctionContext::default(),
+            vec![desc.clone()],
+            0,
+            100,
+            0,
+            0,
+            10,
+            observed_build_rows.clone(),
+        )?
+        .unwrap();
+        let mut second = RuntimeFilterLocalBuilder::try_create(
+            &FunctionContext::default(),
+            vec![desc],
+            0,
+            100,
+            0,
+            0,
+            10,
+            observed_build_rows,
+        )?
+        .unwrap();
+        let block =
+            DataBlock::new_from_columns(vec![StringType::from_data(vec!["a", "b", "c", "d", "e"])]);
+
+        first.add_block(&block)?;
+        second.add_block(&block)?;
+
+        let first_packet = first.finish(false)?.packets.unwrap().remove(&0).unwrap();
+        let second_packet = second.finish(false)?.packets.unwrap().remove(&0).unwrap();
+        assert!(first_packet.bloom.is_some());
+        assert!(second_packet.bloom.is_none());
         Ok(())
     }
 }
