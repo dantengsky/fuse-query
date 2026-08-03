@@ -14,9 +14,13 @@
 
 use std::any::Any;
 use std::collections::HashMap;
+use std::sync::Arc;
 
+use databend_common_catalog::plan::DataSourceInfo;
 use databend_common_catalog::plan::DataSourcePlan;
 use databend_common_catalog::plan::NUM_ROW_ID_PREFIX_BITS;
+use databend_common_catalog::runtime_filter_info::RuntimeLimitFilter;
+use databend_common_catalog::table_context::TableContextRuntimeFilter;
 use databend_common_exception::ErrorCode;
 use databend_common_exception::Result;
 use databend_common_expression::ColumnRef;
@@ -36,6 +40,7 @@ use databend_common_sql::ColumnSet;
 use databend_common_sql::IndexType;
 use databend_common_sql::Symbol;
 use databend_common_sql::executor::physical_plans::FragmentKind;
+use databend_common_sql::executor::physical_plans::SortDesc;
 use databend_common_sql::optimizer::ir::SExpr;
 
 use crate::physical_plans::Exchange;
@@ -48,6 +53,7 @@ use crate::physical_plans::physical_plan::IPhysicalPlan;
 use crate::physical_plans::physical_plan::PhysicalPlan;
 use crate::physical_plans::physical_plan::PhysicalPlanCast;
 use crate::physical_plans::physical_plan::PhysicalPlanMeta;
+use crate::physical_plans::physical_plan::runtime_scan_data_source;
 use crate::physical_plans::physical_row_fetch::RowFetch;
 use crate::physical_plans::physical_sort::SortStep;
 use crate::pipelines::PipelineBuilder;
@@ -124,20 +130,37 @@ impl IPhysicalPlan for Limit {
     }
 
     fn build_pipeline2(&self, builder: &mut PipelineBuilder) -> Result<()> {
+        let runtime_limit_filter = match &self.limit {
+            None => None,
+            Some(_) => match runtime_scan_data_source(&self.input) {
+                None => None,
+                Some(source) => match &source.source_info {
+                    DataSourceInfo::TableSource(table_info) if table_info.engine() == "FUSE" => {
+                        let ctx = &builder.ctx;
+                        let scan_id = source.scan_id;
+                        let limit_filter = Arc::new(RuntimeLimitFilter::new());
+                        ctx.register_runtime_scan_filter(scan_id, limit_filter.clone());
+                        Some(limit_filter)
+                    }
+                    _ => None,
+                },
+            },
+        };
+
         self.input.build_pipeline(builder)?;
 
         if self.limit.is_some() || self.offset != 0 {
             builder.main_pipeline.try_resize(1)?;
-            return builder.main_pipeline.add_transform(|input, output| {
+            builder.main_pipeline.add_transform(|input, output| {
                 Ok(ProcessorPtr::create(TransformLimit::try_create(
                     self.limit,
                     self.offset,
                     input,
                     output,
+                    runtime_limit_filter.clone(),
                 )?))
-            });
+            })?;
         }
-
         Ok(())
     }
 }
@@ -204,25 +227,39 @@ impl PhysicalPlanBuilder {
 
         // 2. Build physical plan.
         let input_plan = self.build(s_expr.child(0)?, required).await?;
-        if limit.before_exchange || limit.lazy_columns.is_empty() || !support_lazy_materialize {
-            return Ok(PhysicalPlan::new(Limit {
-                input: input_plan,
-                limit: limit.limit,
-                offset: limit.offset,
-                stat_info: Some(stat_info),
-                meta: PhysicalPlanMeta::new("Limit"),
-            }));
-        }
-
-        // If `lazy_columns` is not empty, build a `RowFetch` plan on top of the `Limit` plan.
+        // A distributed `RowFetch` reshuffles by row id, so the input ordering has to be
+        // captured before `input_plan` is moved in order to restore it afterwards.
         let order_by = Sort::from_physical_plan(&input_plan).map(|sort| sort.order_by.clone());
-        let mut plan = PhysicalPlan::new(Limit {
-            meta: PhysicalPlanMeta::new("Limit"),
+        let plan = PhysicalPlan::new(Limit {
             input: input_plan,
             limit: limit.limit,
             offset: limit.offset,
             stat_info: Some(stat_info.clone()),
+            meta: PhysicalPlanMeta::new("Limit"),
         });
+        if limit.before_exchange || limit.lazy_columns.is_empty() || !support_lazy_materialize {
+            return Ok(plan);
+        }
+
+        self.build_row_fetch_for_lazy_columns(
+            plan,
+            &limit.lazy_columns,
+            limit.limit,
+            order_by,
+            stat_info,
+        )
+    }
+
+    /// Build the `RowFetch` chain shared by row-limiting operators after lazy
+    /// columns have been excluded from their input plans.
+    pub(crate) fn build_row_fetch_for_lazy_columns(
+        &self,
+        mut plan: PhysicalPlan,
+        lazy_columns: &ColumnSet,
+        row_limit: Option<usize>,
+        order_by: Option<Vec<SortDesc>>,
+        stat_info: PlanStatsInfo,
+    ) -> Result<PhysicalPlan> {
         let input_schema = plan.output_schema()?;
 
         // Lazy materialization is enabled.
@@ -232,7 +269,7 @@ impl PhysicalPlanBuilder {
         // See the case in tests/sqllogictests/suites/crdb/limit:
         // SELECT * FROM (SELECT * FROM t_47283 ORDER BY k LIMIT 4) WHERE a > 5 LIMIT 1
         let mut lazy_columns_by_table: HashMap<IndexType, Vec<Symbol>> = HashMap::new();
-        for index in limit.lazy_columns.iter() {
+        for index in lazy_columns.iter() {
             if input_schema.has_field(&index.to_string()) {
                 continue;
             }
@@ -277,9 +314,7 @@ impl PhysicalPlanBuilder {
         // cluster round trip for small limits, where all possible blocks fit in only a few
         // local I/O waves. The runtime metrics below let us tune this conservative guard.
         let distribute_row_fetch = table_indexes.len() == 1
-            && limit
-                .limit
-                .is_some_and(|rows| rows > max_threads.saturating_mul(4))
+            && row_limit.is_some_and(|rows| rows > max_threads.saturating_mul(4))
             && !self.ctx.get_cluster().is_empty()
             && Self::contains_merge_exchange(&plan);
 

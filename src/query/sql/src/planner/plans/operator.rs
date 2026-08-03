@@ -49,6 +49,7 @@ use crate::plans::OptimizeCompactBlock as CompactBlock;
 use crate::plans::ProjectSet;
 use crate::plans::Scan;
 use crate::plans::Sort;
+use crate::plans::TopN;
 use crate::plans::Udf;
 use crate::plans::UnionAll;
 use crate::plans::Window;
@@ -115,6 +116,7 @@ pub enum RelOp {
     Aggregate,
     Sort,
     Limit,
+    TopN,
     Exchange,
     UnionAll,
     DummyTableScan,
@@ -152,6 +154,7 @@ pub enum RelOperator {
     Aggregate(Aggregate),
     Sort(Sort),
     Limit(Limit),
+    TopN(TopN),
     Exchange(Exchange),
     UnionAll(UnionAll),
     DummyTableScan(DummyTableScan),
@@ -256,6 +259,7 @@ impl_try_from_rel_operator! {
     Aggregate,
     Sort,
     Limit,
+    TopN,
     Exchange,
     UnionAll,
     DummyTableScan,

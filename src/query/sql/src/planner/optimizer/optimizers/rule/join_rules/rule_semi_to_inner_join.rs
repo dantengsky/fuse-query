@@ -138,6 +138,7 @@ fn find_group_by_keys(
         }
         RelOperator::Sort(_)
         | RelOperator::Limit(_)
+        | RelOperator::TopN(_)
         | RelOperator::Exchange(_)
         | RelOperator::UnionAll(_)
         | RelOperator::DummyTableScan(_)

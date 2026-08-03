@@ -424,7 +424,6 @@ AggregateFinal
             ├── virtual columns: [v['b']['c']]
             └── estimated rows: 1.00
 
-
 statement ok
 CREATE OR REPLACE TABLE data_source_a (
     entity_id VARCHAR,
