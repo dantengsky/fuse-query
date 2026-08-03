@@ -66,6 +66,22 @@ where r.k is null;
 3 NULL
 NULL NULL
 
+# An equi-key expression that masks a null-extended input is not an anti-join signal.
+query I rowsort
+select l.k
+from outer_to_anti_left l
+left join outer_to_anti_right r on l.k = if(r.k is null, 0, r.k)
+where if(r.k is null, 0, r.k) is null;
+----
+
+# Cover the symmetric right outer join as well.
+query I rowsort
+select r.k
+from outer_to_anti_left l
+right join outer_to_anti_right r on if(l.k is null, 0, l.k) = r.k
+where if(l.k is null, 0, l.k) is null;
+----
+
 statement ok
 drop table outer_to_anti_left;
 
