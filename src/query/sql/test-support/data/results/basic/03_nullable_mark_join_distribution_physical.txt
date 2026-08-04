@@ -57,3 +57,4 @@ Exchange
                 ├── partitions scanned: 0
                 ├── push downs: [filters: [], limit: NONE]
                 └── estimated rows: 10000.00
+
