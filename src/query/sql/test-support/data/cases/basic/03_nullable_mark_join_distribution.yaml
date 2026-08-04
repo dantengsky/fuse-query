@@ -1,0 +1,21 @@
+name: "03_nullable_mark_join_distribution"
+description: "Nullable mark joins broadcast only the subquery side and retain a non-broadcast probe"
+
+sql: |
+  SELECT
+      p.a,
+      p.a IN (SELECT b.a FROM nullable_mark_build AS b) AS in_match,
+      p.a NOT IN (SELECT b.a FROM nullable_mark_build AS b) AS not_in_match
+  FROM nullable_mark_probe AS p;
+
+node_num: 3
+
+table_statistics:
+  nullable_mark_probe:
+    num_rows: 10000
+  nullable_mark_build:
+    num_rows: 10
+
+tables:
+  nullable_mark_probe: basic/03_nullable_mark_probe.sql
+  nullable_mark_build: basic/03_nullable_mark_build.sql
