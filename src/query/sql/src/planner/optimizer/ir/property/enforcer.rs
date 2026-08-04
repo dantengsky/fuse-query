@@ -70,7 +70,7 @@ impl Enforcer for DistributionEnforcer {
         match &self.0 {
             Distribution::Serial => Ok(Exchange::Merge.into()),
             Distribution::Broadcast => Ok(Exchange::Broadcast.into()),
-            Distribution::NodeToNodeHash(hash_keys) => {
+            Distribution::NonBroadcast(hash_keys) | Distribution::NodeToNodeHash(hash_keys) => {
                 Ok(Exchange::NodeToNodeHash(hash_keys.clone()).into())
             }
             Distribution::GlobalHash(hash_keys) => {
@@ -218,5 +218,21 @@ impl PropertyEnforcer {
         let result = SExpr::create_unary(Arc::new(exchange_op), Arc::new(s_expr.clone()));
 
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_non_broadcast_enforcer_uses_hash_exchange() {
+        let enforcer = DistributionEnforcer::new(Distribution::NonBroadcast(vec![]));
+
+        let RelOperator::Exchange(Exchange::NodeToNodeHash(keys)) = enforcer.enforce().unwrap()
+        else {
+            panic!("non-broadcast enforcement should use a hash exchange");
+        };
+        assert!(keys.is_empty());
     }
 }

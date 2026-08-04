@@ -1,0 +1,28 @@
+Exchange(Merge)
+└── EvalScalar
+    ├── scalars: [nullable_mark_probe.a (#0) AS (#0), in_match (#3) AS (#3), not(marker (#5)) AS (#4)]
+    └── Join(RightMark)
+        ├── build keys: [nullable_mark_build.a (#2)]
+        ├── probe keys: [nullable_mark_probe.a (#0)]
+        ├── other filters: []
+        ├── Exchange(Broadcast)
+        │   └── Scan
+        │       ├── table: default.nullable_mark_build (#2)
+        │       ├── filters: []
+        │       ├── order by: []
+        │       └── limit: NONE
+        └── Join(RightMark)
+            ├── build keys: [nullable_mark_build.a (#1)]
+            ├── probe keys: [nullable_mark_probe.a (#0)]
+            ├── other filters: []
+            ├── Exchange(Broadcast)
+            │   └── Scan
+            │       ├── table: default.nullable_mark_build (#1)
+            │       ├── filters: []
+            │       ├── order by: []
+            │       └── limit: NONE
+            └── Scan
+                ├── table: default.nullable_mark_probe (#0)
+                ├── filters: []
+                ├── order by: []
+                └── limit: NONE
