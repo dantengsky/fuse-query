@@ -118,6 +118,10 @@ pub enum Distribution {
     Random,
     Serial,
     Broadcast,
+    /// Accept any distribution that does not duplicate rows across nodes. If the delivered
+    /// distribution is Broadcast, enforce a node-to-node hash exchange with these fallback keys.
+    /// This is a required-only property and must not be derived as a physical distribution.
+    NonBroadcast(Vec<ScalarExpr>),
     NodeToNodeHash(Vec<ScalarExpr>),
     GlobalHash(Vec<ScalarExpr>),
 }
@@ -139,6 +143,14 @@ impl Distribution {
             | (Distribution::Serial, Distribution::Serial)
             | (Distribution::Broadcast, Distribution::Broadcast) => true,
 
+            (
+                Distribution::NonBroadcast(_),
+                Distribution::Random
+                | Distribution::Serial
+                | Distribution::NodeToNodeHash(_)
+                | Distribution::GlobalHash(_),
+            ) => true,
+
             (Distribution::NodeToNodeHash(keys), Distribution::NodeToNodeHash(other_keys)) => {
                 keys == other_keys
             }
@@ -158,6 +170,14 @@ impl Display for Distribution {
             Distribution::Random => write!(f, "Random"),
             Distribution::Serial => write!(f, "Serial"),
             Distribution::Broadcast => write!(f, "Broadcast"),
+            Distribution::NonBroadcast(keys) => write!(
+                f,
+                "NonBroadcast(Hash({}))",
+                keys.iter()
+                    .map(|s| s.as_raw_expr().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
             Distribution::NodeToNodeHash(keys) => write!(
                 f,
                 "Hash({})",
@@ -175,5 +195,22 @@ impl Display for Distribution {
                     .join(", ")
             ),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_non_broadcast_distribution_satisfaction() {
+        let required = Distribution::NonBroadcast(vec![]);
+
+        assert!(required.satisfied_by(&Distribution::Random));
+        assert!(required.satisfied_by(&Distribution::Serial));
+        assert!(required.satisfied_by(&Distribution::NodeToNodeHash(vec![])));
+        assert!(required.satisfied_by(&Distribution::GlobalHash(vec![])));
+        assert!(!required.satisfied_by(&Distribution::Broadcast));
+        assert!(!required.satisfied_by(&Distribution::Any));
     }
 }

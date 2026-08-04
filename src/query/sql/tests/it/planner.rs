@@ -66,6 +66,12 @@ const LITE_REPLAY_CASE_SPECS: &[LiteReplayCaseSpec] = &[
         default_node_num: 1,
     },
     LiteReplayCaseSpec {
+        name: "03_nullable_mark_join_distribution",
+        warehouse_distribution: true,
+        optimizer_skip_list: &[],
+        default_node_num: 3,
+    },
+    LiteReplayCaseSpec {
         name: "01_multi_join_avg_case_expression",
         warehouse_distribution: true,
         optimizer_skip_list: &[],
