@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -19,6 +20,7 @@ use databend_common_base::base::GlobalInstance;
 use databend_common_catalog::catalog::CATALOG_DEFAULT;
 use databend_common_catalog::catalog::Catalog;
 use databend_common_catalog::plan::DataSourceInfo;
+use databend_common_catalog::session_type::SessionType;
 use databend_common_config::GlobalConfig;
 use databend_common_exception::ErrorCode;
 use databend_common_exception::Result;
@@ -56,6 +58,7 @@ use databend_common_users::UserApiProvider;
 use databend_enterprise_resources_management::ResourcesManagement;
 use databend_meta_client::types::SeqV;
 use databend_storages_common_table_meta::table::OPT_KEY_TEMP_PREFIX;
+use parking_lot::Mutex;
 
 use crate::history_tables::session::get_history_log_user;
 use crate::interpreters::access::AccessChecker;
@@ -70,6 +73,13 @@ use crate::sql::plans::Plan;
 
 pub struct PrivilegeAccess {
     ctx: Arc<QueryContext>,
+    cache: QueryAccessCache,
+}
+
+#[derive(Default)]
+struct QueryAccessCache {
+    database_ids: Mutex<HashMap<(String, String), u64>>,
+    ownership_checks: Mutex<HashMap<(OwnershipObject, bool), bool>>,
 }
 
 enum ObjectId {
@@ -80,9 +90,115 @@ enum ObjectId {
 // table functions that need `Super` privilege
 const SYSTEM_TABLE_FUNCTIONS: [&str; 2] = ["fuse_amend", "set_cache_capacity"];
 
+type TableAccessKey<'a> = (&'a str, &'a str, &'a str, u64);
+
+fn mark_table_access_checked<'a>(
+    checked_tables: &mut HashSet<TableAccessKey<'a>>,
+    catalog: &'a str,
+    database: &'a str,
+    table: &'a str,
+    table_id: u64,
+) -> bool {
+    checked_tables.insert((catalog, database, table, table_id))
+}
+
 impl PrivilegeAccess {
     pub fn create(ctx: Arc<QueryContext>) -> Box<dyn AccessChecker> {
-        Box::new(PrivilegeAccess { ctx })
+        Box::new(PrivilegeAccess {
+            ctx,
+            cache: QueryAccessCache::default(),
+        })
+    }
+
+    async fn get_database_id(
+        &self,
+        tenant: &Tenant,
+        catalog_name: &str,
+        catalog: &Arc<dyn Catalog>,
+        database_name: &str,
+    ) -> Result<u64> {
+        let key = (catalog_name.to_string(), database_name.to_string());
+        if let Some(db_id) = self.cache.database_ids.lock().get(&key) {
+            return Ok(*db_id);
+        }
+
+        let db_id = catalog
+            .get_database(tenant, database_name)
+            .await?
+            .get_db_info()
+            .database_id
+            .db_id;
+        self.cache.database_ids.lock().insert(key, db_id);
+        Ok(db_id)
+    }
+
+    async fn has_ownership_cached(
+        &self,
+        session: &Arc<Session>,
+        object: &OwnershipObject,
+        check_current_role_only: bool,
+    ) -> Result<bool> {
+        let key = (object.clone(), check_current_role_only);
+        if let Some(has_ownership) = self.cache.ownership_checks.lock().get(&key) {
+            return Ok(*has_ownership);
+        }
+
+        let has_ownership = session
+            .has_ownership(object, check_current_role_only)
+            .await?;
+        self.cache
+            .ownership_checks
+            .lock()
+            .insert(key, has_ownership);
+        Ok(has_ownership)
+    }
+
+    async fn prefetch_ownerships(&self, objects: &[OwnershipObject]) -> Result<()> {
+        if objects.is_empty() {
+            return Ok(());
+        }
+
+        let session = self.ctx.get_current_session();
+        if matches!(session.get_type(), SessionType::Local) {
+            return Ok(());
+        }
+
+        let tenant = self.ctx.get_tenant();
+        let user_api = UserApiProvider::instance();
+        let ownerships = user_api.mget_ownerships(&tenant, objects).await?;
+        let effective_role_names = session
+            .get_all_effective_roles()
+            .await?
+            .into_iter()
+            .map(|role| role.name)
+            .collect::<HashSet<_>>();
+        let mut role_exists = HashMap::new();
+
+        for (object, ownership) in objects.iter().cloned().zip(ownerships) {
+            let owner_role = match ownership {
+                Some(owner) => {
+                    let exists = match role_exists.get(&owner.role) {
+                        Some(exists) => *exists,
+                        None => {
+                            let exists = user_api.exists_role(&tenant, owner.role.clone()).await?;
+                            role_exists.insert(owner.role.clone(), exists);
+                            exists
+                        }
+                    };
+                    if exists {
+                        owner.role
+                    } else {
+                        BUILTIN_ROLE_ACCOUNT_ADMIN.to_string()
+                    }
+                }
+                None => BUILTIN_ROLE_ACCOUNT_ADMIN.to_string(),
+            };
+            self.cache
+                .ownership_checks
+                .lock()
+                .insert((object, false), effective_role_names.contains(&owner_role));
+        }
+        Ok(())
     }
 
     // PrivilegeAccess checks the privilege by names, we'd need to convert the GrantObject to
@@ -100,15 +216,10 @@ impl PrivilegeAccess {
                 if db_name.to_lowercase() == "system" {
                     return Ok(None);
                 }
+                let catalog = self.ctx.get_catalog(catalog_name).await?;
                 let db_id = self
-                    .ctx
-                    .get_catalog(catalog_name)
-                    .await?
-                    .get_database(&tenant, db_name)
-                    .await?
-                    .get_db_info()
-                    .database_id
-                    .db_id;
+                    .get_database_id(&tenant, catalog_name, &catalog, db_name)
+                    .await?;
                 OwnershipObject::Database {
                     catalog_name: catalog_name.clone(),
                     db_id,
@@ -126,12 +237,9 @@ impl PrivilegeAccess {
                         .await?
                         .disable_table_info_refresh()?
                 };
-                let db_id = catalog
-                    .get_database(&tenant, db_name)
-                    .await?
-                    .get_db_info()
-                    .database_id
-                    .db_id;
+                let db_id = self
+                    .get_database_id(&tenant, catalog_name, &catalog, db_name)
+                    .await?;
                 let table_id = if !disable_table_info_refresh {
                     self.ctx
                         .get_table(catalog_name, db_name, table_name)
@@ -717,34 +825,40 @@ impl PrivilegeAccess {
                 _ => Err(e.add_message("error on check has_ownership")),
             })?;
         if let Some(object) = &owner_object {
-            if let OwnershipObject::Table {
-                catalog_name,
-                db_id,
-                ..
-            } = object
-            {
-                let database_owner = OwnershipObject::Database {
-                    catalog_name: catalog_name.to_string(),
-                    db_id: *db_id,
-                };
-                // If Table ownership check fails, check for Database ownership
-                if session
-                    .has_ownership(object, check_current_role_only)
-                    .await?
-                    || session
-                        .has_ownership(&database_owner, check_current_role_only)
-                        .await?
-                {
-                    return Ok(true);
-                }
-            } else if session
-                .has_ownership(object, check_current_role_only)
-                .await?
-            {
-                return Ok(true);
-            }
+            return self
+                .has_owner_object(session, object, check_current_role_only)
+                .await;
         }
         Ok(false)
+    }
+
+    async fn has_owner_object(
+        &self,
+        session: &Arc<Session>,
+        object: &OwnershipObject,
+        check_current_role_only: bool,
+    ) -> Result<bool> {
+        if let OwnershipObject::Table {
+            catalog_name,
+            db_id,
+            ..
+        } = object
+        {
+            let database_owner = OwnershipObject::Database {
+                catalog_name: catalog_name.to_string(),
+                db_id: *db_id,
+            };
+            // If Table ownership check fails, check for Database ownership
+            return Ok(self
+                .has_ownership_cached(session, object, check_current_role_only)
+                .await?
+                || self
+                    .has_ownership_cached(session, &database_owner, check_current_role_only)
+                    .await?);
+        }
+
+        self.has_ownership_cached(session, object, check_current_role_only)
+            .await
     }
 
     async fn validate_access(
@@ -1169,12 +1283,10 @@ impl PrivilegeAccess {
         disable_table_info_refresh: bool,
     ) -> Result<ObjectId> {
         let cat = catalog.clone();
-        let db_id = cat
-            .get_database(tenant, database_name)
-            .await?
-            .get_db_info()
-            .database_id
-            .db_id;
+        let catalog_name = cat.name();
+        let db_id = self
+            .get_database_id(tenant, &catalog_name, &cat, database_name)
+            .await?;
         if let Some(table_name) = table_name {
             let table_id = if !disable_table_info_refresh {
                 self.ctx
@@ -1357,6 +1469,60 @@ impl AccessChecker for PrivilegeAccess {
                 }
 
                 let metadata = metadata.read().clone();
+                let mut ownership_objects = Vec::new();
+                let mut prepared_ownerships = HashSet::new();
+                let mut prepared_keys = HashSet::new();
+                for table in metadata.tables() {
+                    if table.is_source_of_view()
+                        || table.is_source_of_stage()
+                        || table.table().is_temp()
+                    {
+                        continue;
+                    }
+
+                    let catalog_name = table.catalog();
+                    let database = table.database();
+                    let table_name = table.name();
+                    let table_id = table.table().get_id();
+                    let key = (
+                        catalog_name.to_string(),
+                        database.to_string(),
+                        table_name.to_string(),
+                        table_id,
+                    );
+                    if !prepared_keys.insert(key) {
+                        continue;
+                    }
+
+                    if database == "information_schema" || database == "system" {
+                        continue;
+                    }
+
+                    let catalog = self.ctx.get_catalog(catalog_name).await?;
+                    if catalog.exists_table_function(table_name) {
+                        continue;
+                    }
+                    let db_id = self
+                        .get_database_id(&tenant, catalog_name, &catalog, database)
+                        .await?;
+                    let database_owner = OwnershipObject::Database {
+                        catalog_name: catalog_name.to_string(),
+                        db_id,
+                    };
+                    if prepared_ownerships.insert(database_owner.clone()) {
+                        ownership_objects.push(database_owner);
+                    }
+                    let table_owner = OwnershipObject::Table {
+                        catalog_name: catalog_name.to_string(),
+                        db_id,
+                        table_id,
+                    };
+                    if prepared_ownerships.insert(table_owner.clone()) {
+                        ownership_objects.push(table_owner);
+                    }
+                }
+                self.prefetch_ownerships(&ownership_objects).await?;
+                let mut checked_tables = HashSet::new();
 
                 for table in metadata.tables() {
                     if enable_experimental_rbac_check && table.is_source_of_stage() {
@@ -1381,7 +1547,18 @@ impl AccessChecker for PrivilegeAccess {
                     // like this sql: copy into t from (select * from @s3); will bind a mock table with name `system.read_parquet(s3)`
                     // this is no means to check table `system.read_parquet(s3)` privilege
                     if !table.is_source_of_stage() {
-                        self.validate_table_access(catalog_name, table.database(), table.name(), UserPrivilegeType::Select, false, false).await?
+                        let database = table.database();
+                        let table_name = table.name();
+                        let table_id = table.table().get_id();
+                        if mark_table_access_checked(
+                            &mut checked_tables,
+                            catalog_name,
+                            database,
+                            table_name,
+                            table_id,
+                        ) {
+                            self.validate_table_access(catalog_name, database, table_name, UserPrivilegeType::Select, false, false).await?
+                        }
                     }
                 }
             }
@@ -2204,6 +2381,33 @@ impl AccessChecker for PrivilegeAccess {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use super::mark_table_access_checked;
+
+    #[test]
+    fn test_mark_table_access_checked() {
+        let accesses = [
+            ("default", "db", "t1", 1),
+            ("default", "db", "t1", 1),
+            ("default", "db", "t1", 2),
+            ("default", "db", "t2", 3),
+            ("default", "db", "t2", 3),
+            ("default", "other_db", "t1", 1),
+        ];
+        let mut checked_tables = HashSet::new();
+        let checked_count = accesses
+            .into_iter()
+            .filter(|(catalog, database, table, table_id)| {
+                mark_table_access_checked(&mut checked_tables, catalog, database, table, *table_id)
+            })
+            .count();
+        assert_eq!(checked_count, 4);
     }
 }
 
