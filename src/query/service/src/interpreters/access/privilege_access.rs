@@ -90,6 +90,14 @@ enum ObjectId {
 // table functions that need `Super` privilege
 const SYSTEM_TABLE_FUNCTIONS: [&str; 2] = ["fuse_amend", "set_cache_capacity"];
 
+/// Bound each ownership MGet to avoid oversized Meta RPC payloads for queries
+/// that reference many tables.
+const MGET_OWNERSHIP_BATCH_SIZE: usize = 256;
+
+fn ownership_batches(objects: &[OwnershipObject]) -> std::slice::Chunks<'_, OwnershipObject> {
+    objects.chunks(MGET_OWNERSHIP_BATCH_SIZE)
+}
+
 type TableAccessKey<'a> = (&'a str, &'a str, &'a str, u64);
 
 fn mark_table_access_checked<'a>(
@@ -165,7 +173,6 @@ impl PrivilegeAccess {
 
         let tenant = self.ctx.get_tenant();
         let user_api = UserApiProvider::instance();
-        let ownerships = user_api.mget_ownerships(&tenant, objects).await?;
         let effective_role_names = session
             .get_all_effective_roles()
             .await?
@@ -174,29 +181,33 @@ impl PrivilegeAccess {
             .collect::<HashSet<_>>();
         let mut role_exists = HashMap::new();
 
-        for (object, ownership) in objects.iter().cloned().zip(ownerships) {
-            let owner_role = match ownership {
-                Some(owner) => {
-                    let exists = match role_exists.get(&owner.role) {
-                        Some(exists) => *exists,
-                        None => {
-                            let exists = user_api.exists_role(&tenant, owner.role.clone()).await?;
-                            role_exists.insert(owner.role.clone(), exists);
-                            exists
+        for objects in ownership_batches(objects) {
+            let ownerships = user_api.mget_ownerships(&tenant, objects).await?;
+            for (object, ownership) in objects.iter().cloned().zip(ownerships) {
+                let owner_role = match ownership {
+                    Some(owner) => {
+                        let exists = match role_exists.get(&owner.role) {
+                            Some(exists) => *exists,
+                            None => {
+                                let exists =
+                                    user_api.exists_role(&tenant, owner.role.clone()).await?;
+                                role_exists.insert(owner.role.clone(), exists);
+                                exists
+                            }
+                        };
+                        if exists {
+                            owner.role
+                        } else {
+                            BUILTIN_ROLE_ACCOUNT_ADMIN.to_string()
                         }
-                    };
-                    if exists {
-                        owner.role
-                    } else {
-                        BUILTIN_ROLE_ACCOUNT_ADMIN.to_string()
                     }
-                }
-                None => BUILTIN_ROLE_ACCOUNT_ADMIN.to_string(),
-            };
-            self.cache
-                .ownership_checks
-                .lock()
-                .insert((object, false), effective_role_names.contains(&owner_role));
+                    None => BUILTIN_ROLE_ACCOUNT_ADMIN.to_string(),
+                };
+                self.cache
+                    .ownership_checks
+                    .lock()
+                    .insert((object, false), effective_role_names.contains(&owner_role));
+            }
         }
         Ok(())
     }
@@ -2388,7 +2399,11 @@ impl AccessChecker for PrivilegeAccess {
 mod tests {
     use std::collections::HashSet;
 
+    use databend_common_meta_app::principal::OwnershipObject;
+
+    use super::MGET_OWNERSHIP_BATCH_SIZE;
     use super::mark_table_access_checked;
+    use super::ownership_batches;
 
     #[test]
     fn test_mark_table_access_checked() {
@@ -2408,6 +2423,21 @@ mod tests {
             })
             .count();
         assert_eq!(checked_count, 4);
+    }
+
+    #[test]
+    fn test_ownership_prefetch_batch_size() {
+        let objects = (0..MGET_OWNERSHIP_BATCH_SIZE * 2 + 1)
+            .map(|db_id| OwnershipObject::Database {
+                catalog_name: "default".to_string(),
+                db_id: db_id as u64,
+            })
+            .collect::<Vec<_>>();
+
+        let batch_sizes = ownership_batches(&objects)
+            .map(<[_]>::len)
+            .collect::<Vec<_>>();
+        assert_eq!(batch_sizes, vec![256, 256, 1]);
     }
 }
 
