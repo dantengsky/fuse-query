@@ -204,27 +204,42 @@ impl IPhysicalPlan for EvalScalar {
     }
 }
 
+fn prune_eval_scalar_items(
+    items: &[ScalarItem],
+    required: ColumnSet,
+) -> (Vec<ScalarItem>, ColumnSet) {
+    let defined = items.iter().map(|item| item.index).collect::<ColumnSet>();
+    let used = items
+        .iter()
+        .filter(|item| required.contains(&item.index))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    // All EvalScalar items read from the same child input. Remove the columns
+    // produced by this operator before adding expression inputs so an input
+    // that shares an index with another output is not removed again.
+    let mut child_required = required
+        .difference(&defined)
+        .copied()
+        .collect::<ColumnSet>();
+    for item in &used {
+        child_required.extend(item.scalar.used_columns());
+    }
+
+    (used, child_required)
+}
+
 impl PhysicalPlanBuilder {
     pub async fn build_eval_scalar(
         &mut self,
         s_expr: &SExpr,
         eval_scalar: &databend_common_sql::plans::EvalScalar,
-        mut required: ColumnSet,
+        required: ColumnSet,
         stat_info: PlanStatsInfo,
     ) -> Result<PhysicalPlan> {
         // 1. Prune unused Columns.
         let column_projections = required.clone();
-        let mut used = vec![];
-        // Only keep columns needed by parent plan.
-        for s in eval_scalar.items.iter() {
-            if !required.contains(&s.index) {
-                continue;
-            }
-            used.push(s.clone());
-            s.scalar.used_columns().iter().for_each(|c| {
-                required.insert(*c);
-            })
-        }
+        let (used, required) = prune_eval_scalar_items(&eval_scalar.items, required);
         // 2. Build physical plan.
         if used.is_empty() {
             self.build(s_expr.child(0)?, required).await
@@ -425,5 +440,62 @@ impl<'a> Visitor<'a> for FlattenColumnsVisitor {
             self.visit(expr)?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use databend_common_expression::types::DataType;
+    use databend_common_expression::types::NumberDataType;
+    use databend_common_sql::ColumnBindingBuilder;
+    use databend_common_sql::Visibility;
+    use databend_common_sql::plans::BoundColumnRef;
+
+    use super::*;
+
+    fn column_item(index: Symbol, input: Symbol) -> ScalarItem {
+        let column = ColumnBindingBuilder::new(
+            input.to_string(),
+            input,
+            Box::new(DataType::Number(NumberDataType::Int64)),
+            Visibility::Visible,
+        )
+        .build();
+        ScalarItem {
+            index,
+            scalar: BoundColumnRef { span: None, column }.into(),
+        }
+    }
+
+    #[test]
+    fn prune_eval_scalar_items_is_order_independent() {
+        let output = Symbol::new(6);
+        let dependency = Symbol::new(5);
+        let unrelated_input = Symbol::new(4);
+        let passthrough = Symbol::new(7);
+        let items = vec![
+            column_item(output, dependency),
+            column_item(dependency, unrelated_input),
+        ];
+        let required = ColumnSet::from([output, passthrough]);
+
+        let (used, child_required) = prune_eval_scalar_items(&items, required.clone());
+        assert_eq!(
+            used.iter().map(|item| item.index).collect::<Vec<_>>(),
+            vec![output]
+        );
+        assert_eq!(child_required, ColumnSet::from([dependency, passthrough]));
+
+        let mut reversed = items;
+        reversed.reverse();
+        let (reversed_used, reversed_required) = prune_eval_scalar_items(&reversed, required);
+        assert_eq!(
+            reversed_used
+                .iter()
+                .map(|item| item.index)
+                .collect::<Vec<_>>(),
+            vec![output]
+        );
+        assert_eq!(reversed_required, child_required);
     }
 }
