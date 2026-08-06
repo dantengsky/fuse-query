@@ -31,6 +31,7 @@ use crate::optimizer::optimizers::rule::can_filter_null;
 use crate::optimizer::optimizers::rule::constant::false_constant;
 use crate::optimizer::optimizers::rule::constant::is_falsy;
 use crate::optimizer::optimizers::rule::convert_mark_to_semi_join;
+use crate::optimizer::optimizers::rule::outer_join_to_anti_join;
 use crate::optimizer::optimizers::rule::outer_join_to_inner_join;
 use crate::optimizer::optimizers::rule::rewrite_predicates;
 use crate::plans::ComparisonOp;
@@ -78,10 +79,17 @@ impl Rule for RulePushDownFilterJoin {
     }
 
     fn apply(&self, s_expr: &SExpr, state: &mut TransformResult) -> Result<()> {
-        // First, try to convert outer join to inner join
+        // First, try to convert an outer-join exclusion filter to an anti join.
+        if let Some(mut result) = outer_join_to_anti_join(s_expr, self.metadata.clone())? {
+            result.set_applied_rule(&self.id);
+            state.add_result(result);
+            return Ok(());
+        }
+
+        // Second, try to convert outer join to inner join
         let (s_expr, outer_to_inner) = outer_join_to_inner_join(s_expr, self.metadata.clone())?;
 
-        // Second, check if can convert mark join to semi join
+        // Third, check if can convert mark join to semi join
         let (s_expr, mark_to_semi) = convert_mark_to_semi_join(&s_expr, self.metadata.clone())?;
         if s_expr.plan().rel_op() != RelOp::Filter {
             state.add_result(s_expr);

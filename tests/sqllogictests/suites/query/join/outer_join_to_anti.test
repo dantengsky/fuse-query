@@ -1,0 +1,89 @@
+statement ok
+create or replace table outer_to_anti_left(k int, payload int);
+
+statement ok
+create or replace table outer_to_anti_right(k int, payload int);
+
+statement ok
+insert into outer_to_anti_left values (null, 90), (1, 10), (2, 20), (3, 30);
+
+statement ok
+insert into outer_to_anti_right values (null, null), (1, null), (1, 10), (2, 20);
+
+query III rowsort
+select l.k, r.k, r.payload
+from outer_to_anti_left l
+left join outer_to_anti_right r on l.k = r.k
+where r.k is null;
+----
+3 NULL NULL
+NULL NULL NULL
+
+query I rowsort
+select l.k
+from outer_to_anti_left l
+left join outer_to_anti_right r on l.k = r.k
+where r.k is null and l.k is not null;
+----
+3
+
+query III rowsort
+select l.k, l.payload, r.k
+from outer_to_anti_left l
+right join outer_to_anti_right r on l.k = r.k
+where l.k is null;
+----
+NULL NULL NULL
+
+query III rowsort
+select l.k, r.k, r.payload
+from outer_to_anti_left l
+left join outer_to_anti_right r on l.k = r.k
+where r.payload is null;
+----
+1 1 NULL
+3 NULL NULL
+NULL NULL NULL
+
+# A non-nullable derived payload can only be NULL after null extension.
+query I rowsort
+select l.k
+from outer_to_anti_left l
+left join (
+    select k, 'present' as marker from outer_to_anti_right
+) r on l.k = r.k
+where r.marker is null;
+----
+3
+NULL
+
+query II rowsort
+select l.k, r.k
+from outer_to_anti_left l
+left join outer_to_anti_right r on l.k is not distinct from r.k
+where r.k is null;
+----
+3 NULL
+NULL NULL
+
+# An equi-key expression that masks a null-extended input is not an anti-join signal.
+query I rowsort
+select l.k
+from outer_to_anti_left l
+left join outer_to_anti_right r on l.k = if(r.k is null, 0, r.k)
+where if(r.k is null, 0, r.k) is null;
+----
+
+# Cover the symmetric right outer join as well.
+query I rowsort
+select r.k
+from outer_to_anti_left l
+right join outer_to_anti_right r on if(l.k is null, 0, l.k) = r.k
+where if(l.k is null, 0, l.k) is null;
+----
+
+statement ok
+drop table outer_to_anti_left;
+
+statement ok
+drop table outer_to_anti_right;
