@@ -1,0 +1,60 @@
+Exchange
+├── output columns: [p.a (#0), in_match (#3), not_in_match (#4)]
+├── exchange type: Merge
+└── EvalScalar
+    ├── output columns: [p.a (#0), in_match (#3), not_in_match (#4)]
+    ├── expressions: [NOT 5 (#5)]
+    ├── estimated rows: 10000.00
+    └── HashJoin
+        ├── output columns: [p.a (#0), in_match (#3), marker (#5)]
+        ├── join type: RIGHT MARK
+        ├── build keys: [subquery_2 (#2)]
+        ├── probe keys: [p.a (#0)]
+        ├── keys is null equal: [true]
+        ├── filters: []
+        ├── estimated rows: 10000.00
+        ├── Exchange(Build)
+        │   ├── output columns: [b.a (#2)]
+        │   ├── exchange type: Broadcast
+        │   └── TableScan
+        │       ├── table: default.default.nullable_mark_build
+        │       ├── scan id: 2
+        │       ├── output columns: [a (#2)]
+        │       ├── read rows: 0
+        │       ├── read size: 0
+        │       ├── partitions total: 0
+        │       ├── partitions scanned: 0
+        │       ├── push downs: [filters: [], limit: NONE]
+        │       └── estimated rows: 0.00
+        └── HashJoin(Probe)
+            ├── output columns: [p.a (#0), in_match (#3)]
+            ├── join type: RIGHT MARK
+            ├── build keys: [subquery_1 (#1)]
+            ├── probe keys: [p.a (#0)]
+            ├── keys is null equal: [true]
+            ├── filters: []
+            ├── estimated rows: 10000.00
+            ├── Exchange(Build)
+            │   ├── output columns: [b.a (#1)]
+            │   ├── exchange type: Broadcast
+            │   └── TableScan
+            │       ├── table: default.default.nullable_mark_build
+            │       ├── scan id: 1
+            │       ├── output columns: [a (#1)]
+            │       ├── read rows: 0
+            │       ├── read size: 0
+            │       ├── partitions total: 0
+            │       ├── partitions scanned: 0
+            │       ├── push downs: [filters: [], limit: NONE]
+            │       └── estimated rows: 0.00
+            └── TableScan(Probe)
+                ├── table: default.default.nullable_mark_probe
+                ├── scan id: 0
+                ├── output columns: [a (#0)]
+                ├── read rows: 0
+                ├── read size: 0
+                ├── partitions total: 0
+                ├── partitions scanned: 0
+                ├── push downs: [filters: [], limit: NONE]
+                └── estimated rows: 10000.00
+

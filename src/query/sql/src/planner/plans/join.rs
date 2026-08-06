@@ -361,6 +361,28 @@ impl Join {
             .any(|condition| condition.is_null_equal)
     }
 
+    fn nullable_mark_join_distributions(&self) -> Option<(Distribution, Distribution)> {
+        if !self.join_type.is_mark_join()
+            || self.equi_conditions.len() != 1
+            || !self.has_null_equi_condition()
+        {
+            return None;
+        }
+
+        let condition = &self.equi_conditions[0];
+        if matches!(self.join_type, JoinType::LeftMark) {
+            Some((
+                Distribution::Broadcast,
+                non_broadcast_join_distribution(vec![condition.right.clone()]),
+            ))
+        } else {
+            Some((
+                non_broadcast_join_distribution(vec![condition.left.clone()]),
+                Distribution::Broadcast,
+            ))
+        }
+    }
+
     pub fn derive_join_stats(
         &self,
         left_stat_info: Arc<StatInfo>,
@@ -740,6 +762,21 @@ impl Operator for Join {
             return Ok(required);
         }
 
+        // A nullable mark join must broadcast its subquery side so every node observes both the
+        // matching values and whether the subquery contains NULL. The other side can retain any
+        // non-broadcast distribution; only an already-broadcast input needs a hash exchange to
+        // avoid producing duplicate rows.
+        if let Some((left_distribution, right_distribution)) =
+            self.nullable_mark_join_distributions()
+        {
+            required.distribution = if child_index == 0 {
+                left_distribution
+            } else {
+                right_distribution
+            };
+            return Ok(required);
+        }
+
         // Try to use broadcast join
         if !matches!(
             self.join_type,
@@ -807,43 +844,17 @@ impl Operator for Join {
         let mut children_required = vec![];
 
         // For mark join with nullable eq comparison, ensure to use broadcast for subquery side
-        if self.join_type.is_mark_join()
-            && self.equi_conditions.len() == 1
-            && self.has_null_equi_condition()
+        if let Some((left_distribution, right_distribution)) =
+            self.nullable_mark_join_distributions()
         {
-            // subquery as left probe side
-            if matches!(self.join_type, JoinType::LeftMark) {
-                let conditions = self
-                    .equi_conditions
-                    .iter()
-                    .map(|condition| condition.right.clone())
-                    .collect();
-
-                children_required.push(vec![
-                    RequiredProperty {
-                        distribution: Distribution::Broadcast,
-                    },
-                    RequiredProperty {
-                        distribution: hash_join_distribution(conditions),
-                    },
-                ]);
-            } else {
-                // subquery as right build side
-                let conditions = self
-                    .equi_conditions
-                    .iter()
-                    .map(|condition| condition.left.clone())
-                    .collect();
-
-                children_required.push(vec![
-                    RequiredProperty {
-                        distribution: hash_join_distribution(conditions),
-                    },
-                    RequiredProperty {
-                        distribution: Distribution::Broadcast,
-                    },
-                ]);
-            }
+            children_required.push(vec![
+                RequiredProperty {
+                    distribution: left_distribution,
+                },
+                RequiredProperty {
+                    distribution: right_distribution,
+                },
+            ]);
             return Ok(children_required);
         }
 
@@ -920,6 +931,10 @@ impl Operator for Join {
 
 fn hash_join_distribution(keys: Vec<ScalarExpr>) -> Distribution {
     Distribution::NodeToNodeHash(keys)
+}
+
+fn non_broadcast_join_distribution(fallback_keys: Vec<ScalarExpr>) -> Distribution {
+    Distribution::NonBroadcast(fallback_keys)
 }
 
 fn hash_join_distributions(conditions: &[JoinEquiCondition]) -> (Distribution, Distribution) {
@@ -2028,6 +2043,71 @@ mod tests {
             panic!("hash joins should use node-to-node shuffle");
         };
         assert_eq!(actual, keys);
+    }
+
+    #[test]
+    fn test_non_broadcast_join_uses_hash_fallback() {
+        let keys = vec![column(0, DataType::Number(NumberDataType::UInt64))];
+
+        let Distribution::NonBroadcast(actual) = non_broadcast_join_distribution(keys.clone())
+        else {
+            panic!("non-broadcast joins should retain hash fallback keys");
+        };
+        assert_eq!(actual, keys);
+    }
+
+    #[test]
+    fn test_nullable_right_mark_join_keeps_probe_non_broadcast() {
+        let condition = JoinEquiCondition::new(
+            column(
+                0,
+                DataType::Nullable(Box::new(DataType::Number(NumberDataType::UInt64))),
+            ),
+            column(
+                1,
+                DataType::Nullable(Box::new(DataType::Number(NumberDataType::UInt64))),
+            ),
+            true,
+        );
+        let join = Join {
+            equi_conditions: vec![condition.clone()],
+            join_type: JoinType::RightMark,
+            ..Default::default()
+        };
+
+        let Some((Distribution::NonBroadcast(keys), Distribution::Broadcast)) =
+            join.nullable_mark_join_distributions()
+        else {
+            panic!("right mark joins should broadcast only the build side");
+        };
+        assert_eq!(keys, vec![condition.left]);
+    }
+
+    #[test]
+    fn test_nullable_left_mark_join_keeps_output_side_non_broadcast() {
+        let condition = JoinEquiCondition::new(
+            column(
+                0,
+                DataType::Nullable(Box::new(DataType::Number(NumberDataType::UInt64))),
+            ),
+            column(
+                1,
+                DataType::Nullable(Box::new(DataType::Number(NumberDataType::UInt64))),
+            ),
+            true,
+        );
+        let join = Join {
+            equi_conditions: vec![condition.clone()],
+            join_type: JoinType::LeftMark,
+            ..Default::default()
+        };
+
+        let Some((Distribution::Broadcast, Distribution::NonBroadcast(keys))) =
+            join.nullable_mark_join_distributions()
+        else {
+            panic!("left mark joins should broadcast only the subquery side");
+        };
+        assert_eq!(keys, vec![condition.right]);
     }
 
     #[test]
