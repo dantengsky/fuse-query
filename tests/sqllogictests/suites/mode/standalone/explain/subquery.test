@@ -626,7 +626,7 @@ EvalScalar
     │               ├── output columns: []
     │               ├── limit: 1
     │               ├── offset: 0
-    │               ├── estimated rows: 0.00
+    │               ├── estimated rows: 0.80
     │               └── TableScan
     │                   ├── table: default.default.t
     │                   ├── scan id: 1
@@ -637,7 +637,7 @@ EvalScalar
     │                   ├── partitions scanned: 0
     │                   ├── pruning stats: [segments: <range pruning: 1 to 0 cost: <slt:ignore>>]
     │                   ├── push downs: [filters: [is_true(t.i (#1) > 10)], limit: 1]
-    │                   └── estimated rows: 0.00
+    │                   └── estimated rows: 0.80
     └── TableScan(Probe)
         ├── table: default.default.t
         ├── scan id: 0

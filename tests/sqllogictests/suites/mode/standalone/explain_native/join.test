@@ -100,7 +100,7 @@ HashJoin
 ├── probe keys: []
 ├── keys is null equal: []
 ├── filters: []
-├── estimated rows: 0.00
+├── estimated rows: 1.60
 ├── TableScan(Build)
 │   ├── table: default.default.t
 │   ├── scan id: 0
@@ -111,7 +111,7 @@ HashJoin
 │   ├── partitions scanned: 0
 │   ├── pruning stats: [segments: <range pruning: 1 to 0 cost: <slt:ignore>>]
 │   ├── push downs: [filters: [t.number (#0) > 1], limit: NONE]
-│   └── estimated rows: 0.00
+│   └── estimated rows: 0.20
 └── TableScan(Probe)
     ├── table: default.default.t1
     ├── scan id: 1
@@ -175,7 +175,7 @@ HashJoin
 ├── filters: []
 ├── build join filters:
 │   └── filter id:0, build key:t1.number (#1), probe targets:[t2.number (#2)@scan2], filter type:bloom,inlist,min_max
-├── estimated rows: 0.00
+├── estimated rows: 10.00
 ├── HashJoin(Build)
 │   ├── output columns: [t1.number (#1), t.number (#0)]
 │   ├── join type: CROSS
@@ -183,7 +183,7 @@ HashJoin
 │   ├── probe keys: []
 │   ├── keys is null equal: []
 │   ├── filters: []
-│   ├── estimated rows: 0.00
+│   ├── estimated rows: 2.00
 │   ├── TableScan(Build)
 │   │   ├── table: default.default.t
 │   │   ├── scan id: 0
@@ -194,7 +194,7 @@ HashJoin
 │   │   ├── partitions scanned: 0
 │   │   ├── pruning stats: [segments: <range pruning: 1 to 0 cost: <slt:ignore>>]
 │   │   ├── push downs: [filters: [t.number (#0) = 1], limit: NONE]
-│   │   └── estimated rows: 0.00
+│   │   └── estimated rows: 0.20
 │   └── TableScan(Probe)
 │       ├── table: default.default.t1
 │       ├── scan id: 1
