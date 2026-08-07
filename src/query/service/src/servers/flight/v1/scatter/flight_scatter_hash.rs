@@ -243,11 +243,11 @@ fn get_hash_values(
             _ => unreachable!(),
         },
         Value::Column(c) => {
-            if let Ok(column) = NumberType::<u64>::try_downcast_column(&c) {
-                return Ok(column);
+            if c.as_nullable().is_none() {
+                return NumberType::<u64>::try_downcast_column(&c);
             }
 
-            let mut column = NullableType::<NumberType<u64>>::try_downcast_column(&c).unwrap();
+            let mut column = NullableType::<NumberType<u64>>::try_downcast_column(&c)?;
             let null_map = column.validity;
             if null_map.null_count() == 0 {
                 return Ok(column.column);
@@ -397,6 +397,37 @@ mod tests {
                 &non_nullable_block,
             )?;
             assert_eq!(nullable, non_nullable);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn hashes_nullable_single_key_without_losing_nulls() -> Result<()> {
+        let nullable_block =
+            DataBlock::new_from_columns(vec![StringType::from_data_with_validity(
+                vec!["alpha", "ignored", "gamma", "ignored"],
+                vec![true, false, true, false],
+            )]);
+        let non_nullable_block = DataBlock::new_from_columns(vec![StringType::from_data(vec![
+            "alpha", "beta", "gamma", "delta",
+        ])]);
+
+        for partitions in [3, 4, 8] {
+            let nullable = scatter_indices(
+                block_hash_keys(&nullable_block),
+                partitions,
+                &nullable_block,
+            )?;
+            let non_nullable = scatter_indices(
+                block_hash_keys(&non_nullable_block),
+                partitions,
+                &non_nullable_block,
+            )?;
+
+            assert_eq!(nullable[0], non_nullable[0]);
+            assert_eq!(nullable[2], non_nullable[2]);
+            assert_eq!(nullable[1], 0);
+            assert_eq!(nullable[3], 0);
         }
         Ok(())
     }
