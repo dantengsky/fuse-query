@@ -380,9 +380,11 @@ impl Join {
             &left_statistics,
             &right_statistics,
         );
-        let risk_cardinality_upper_bound = self.semantic_cardinality_upper_bound(
+        let risk_cardinality_upper_bound = self.confident_cardinality_upper_bound(
             left_stat_info.max_cardinality.max(left_cardinality),
             right_stat_info.max_cardinality.max(right_cardinality),
+            &left_statistics,
+            &right_statistics,
         );
         // Evaluating join cardinality using histograms.
         // If histogram is None, will evaluate using NDV.
@@ -413,8 +415,9 @@ impl Join {
             JoinType::RightSingle | JoinType::LeftMark | JoinType::RightAnti => right_cardinality,
         };
         // Unlike a one-sided NDV selectivity guess, a unique join key can cap
-        // expected fan-out. Uniqueness is inferred from statistics, so keep it
-        // out of the conservative risk bound used for distribution decisions.
+        // fan-out. The expected estimate accepts bounded NDV statistics; the
+        // distribution risk bound additionally rejects NDV that had to be
+        // repaired against its discrete value domain.
         let cardinality = expected_cardinality_upper_bound
             .map(|bound| cardinality.min(bound))
             .unwrap_or(cardinality);
@@ -443,7 +446,7 @@ impl Join {
                         .max(right_stat_info.max_cardinality)
                         .max(left_cardinality)
                         .max(right_cardinality)
-            }),
+                }),
             statistics: Statistics {
                 precise_cardinality: None,
                 column_stats,
@@ -458,6 +461,39 @@ impl Join {
         left_statistics: &Statistics,
         right_statistics: &Statistics,
     ) -> Option<f64> {
+        self.cardinality_upper_bound(
+            left_max_cardinality,
+            right_max_cardinality,
+            left_statistics,
+            right_statistics,
+            is_unique_join_key,
+        )
+    }
+
+    fn confident_cardinality_upper_bound(
+        &self,
+        left_max_cardinality: f64,
+        right_max_cardinality: f64,
+        left_statistics: &Statistics,
+        right_statistics: &Statistics,
+    ) -> Option<f64> {
+        self.cardinality_upper_bound(
+            left_max_cardinality,
+            right_max_cardinality,
+            left_statistics,
+            right_statistics,
+            is_confident_unique_join_key,
+        )
+    }
+
+    fn cardinality_upper_bound(
+        &self,
+        left_max_cardinality: f64,
+        right_max_cardinality: f64,
+        left_statistics: &Statistics,
+        right_statistics: &Statistics,
+        is_unique: fn(&ColumnStat, f64, bool) -> bool,
+    ) -> Option<f64> {
         let semantic_bound =
             self.semantic_cardinality_upper_bound(left_max_cardinality, right_max_cardinality);
 
@@ -470,13 +506,13 @@ impl Join {
                         .column_stats
                         .get(&columns.left)
                         .is_some_and(|stat| {
-                            is_unique_join_key(stat, left_max_cardinality, condition.is_null_equal)
+                            is_unique(stat, left_max_cardinality, condition.is_null_equal)
                         });
                 let right_unique = right_statistics
                     .column_stats
                     .get(&columns.right)
                     .is_some_and(|stat| {
-                        is_unique_join_key(stat, right_max_cardinality, condition.is_null_equal)
+                        is_unique(stat, right_max_cardinality, condition.is_null_equal)
                     });
 
                 match self.join_type {
@@ -1023,6 +1059,17 @@ fn is_unique_join_key(stat: &ColumnStat, cardinality: f64, null_equal: bool) -> 
         (cardinality - join_key_null_count_for_cardinality(stat, cardinality)).max(0.0);
     let (bounded_ndv, _) = bound_ndv_by_discrete_domain(stat.ndv, &stat.min, &stat.max);
     bounded_ndv.lower >= non_null_cardinality
+}
+
+fn is_confident_unique_join_key(stat: &ColumnStat, cardinality: f64, null_equal: bool) -> bool {
+    if null_equal && stat.null_count.upper() > 1.0 {
+        return false;
+    }
+    let non_null_cardinality =
+        (cardinality - join_key_null_count_for_cardinality(stat, cardinality)).max(0.0);
+    let (bounded_ndv, ndv_exceeded_domain) =
+        bound_ndv_by_discrete_domain(stat.ndv, &stat.min, &stat.max);
+    !ndv_exceeded_domain && bounded_ndv.lower >= non_null_cardinality
 }
 
 #[derive(Clone, Copy)]
@@ -1972,7 +2019,7 @@ mod tests {
         let stat = join.derive_join_stats(left_stat, right_stat)?;
 
         assert_eq!(stat.cardinality, 5_000.0);
-        assert_eq!(stat.max_cardinality, 1_000_000.0);
+        assert_eq!(stat.max_cardinality, 5_000.0);
         assert!(is_safe_broadcast_build(
             &stat,
             DEFAULT_MAX_BROADCAST_BUILD_ROWS,
@@ -1981,7 +2028,7 @@ mod tests {
     }
 
     #[test]
-    fn test_unique_join_bound_preserves_input_risk_cardinality() -> Result<()> {
+    fn test_confident_unique_join_bounds_output_risk() -> Result<()> {
         let left_stat = Arc::new(StatInfo {
             cardinality: 1_000_000.0,
             max_cardinality: 1_000_000.0,
@@ -2010,12 +2057,12 @@ mod tests {
         let stat = join.derive_join_stats(left_stat, right_stat)?;
 
         assert_eq!(stat.cardinality, 5_000.0);
-        assert_eq!(stat.max_cardinality, 1_000_000.0);
+        assert_eq!(stat.max_cardinality, 100_000.0);
         Ok(())
     }
 
     #[test]
-    fn test_statistical_unique_key_does_not_make_large_input_safe_to_broadcast() -> Result<()> {
+    fn test_confident_unique_key_makes_small_join_output_safe_to_broadcast() -> Result<()> {
         let user_info_stat = Arc::new(StatInfo {
             cardinality: 200_000_000.0,
             max_cardinality: 200_000_000.0,
@@ -2046,8 +2093,8 @@ mod tests {
         let stat = join.derive_join_stats(user_info_stat, union_stat)?;
 
         assert_eq!(stat.cardinality, 5_000.0);
-        assert_eq!(stat.max_cardinality, 200_000_000.0);
-        assert!(!is_safe_broadcast_build(
+        assert_eq!(stat.max_cardinality, 100_000.0);
+        assert!(is_safe_broadcast_build(
             &stat,
             DEFAULT_MAX_BROADCAST_BUILD_ROWS,
         ));
@@ -2118,5 +2165,4 @@ mod tests {
         assert!(is_unique_join_key(&stat, 1_002.0, false));
         assert!(!is_unique_join_key(&stat, 1_002.0, true));
     }
-
 }
