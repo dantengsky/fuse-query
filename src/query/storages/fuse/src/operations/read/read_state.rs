@@ -176,7 +176,7 @@ impl ReadState {
     }
 
     pub fn runtime_filter(
-        &mut self,
+        &self,
         block: &DataBlock,
         _num_rows: usize,
     ) -> Result<Option<MutableBitmap>> {
