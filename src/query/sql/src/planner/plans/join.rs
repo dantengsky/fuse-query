@@ -774,20 +774,12 @@ impl Operator for Join {
         }
 
         // Otherwise, use hash shuffle
+        let (left_distribution, right_distribution) =
+            hash_join_distributions(&self.equi_conditions);
         if child_index == 0 {
-            let left_conditions = self
-                .equi_conditions
-                .iter()
-                .map(|condition| condition.left.clone())
-                .collect();
-            required.distribution = Distribution::GlobalHash(left_conditions);
+            required.distribution = left_distribution;
         } else {
-            let right_conditions = self
-                .equi_conditions
-                .iter()
-                .map(|condition| condition.right.clone())
-                .collect();
-            required.distribution = Distribution::GlobalHash(right_conditions);
+            required.distribution = right_distribution;
         }
 
         Ok(required)
@@ -844,25 +836,17 @@ impl Operator for Join {
 
         let settings = ctx.get_settings();
         if !matches!(self.join_type, JoinType::Cross) && !settings.get_enforce_broadcast_join()? {
-            // (Hash, Hash) – use full equi-join key set to avoid single-column hash shuffle
-            let left_keys: Vec<_> = self
-                .equi_conditions
-                .iter()
-                .map(|condition| condition.left.clone())
-                .collect();
-            let right_keys: Vec<_> = self
-                .equi_conditions
-                .iter()
-                .map(|condition| condition.right.clone())
-                .collect();
-
-            if !left_keys.is_empty() {
+            // (Hash, Hash) – retain multiple independent equi-join keys to avoid skew, while
+            // omitting derived expressions that repeat work already covered by a direct key.
+            if !self.equi_conditions.is_empty() {
+                let (left_distribution, right_distribution) =
+                    hash_join_distributions(&self.equi_conditions);
                 children_required.push(vec![
                     RequiredProperty {
-                        distribution: Distribution::GlobalHash(left_keys),
+                        distribution: left_distribution,
                     },
                     RequiredProperty {
-                        distribution: Distribution::GlobalHash(right_keys),
+                        distribution: right_distribution,
                     },
                 ]);
             }
@@ -919,6 +903,76 @@ impl Operator for Join {
 
         Ok(children_required)
     }
+}
+
+fn hash_join_distribution(keys: Vec<ScalarExpr>) -> Distribution {
+    Distribution::GlobalHash(keys)
+}
+
+fn hash_join_distributions(conditions: &[JoinEquiCondition]) -> (Distribution, Distribution) {
+    let mut selected = conditions
+        .iter()
+        .enumerate()
+        .filter_map(|(index, condition)| {
+            (!is_redundant_shuffle_expr(index, &condition.left, conditions, Side::Left)
+                && !is_redundant_shuffle_expr(index, &condition.right, conditions, Side::Right))
+            .then_some(index)
+        })
+        .collect::<Vec<_>>();
+
+    // A single partition key can be badly skewed. If the join supplies multiple keys, retain at
+    // least two even when the second one is a derived expression.
+    if conditions.len() >= 2 && selected.len() < 2 {
+        for index in 0..conditions.len() {
+            if !selected.contains(&index) {
+                selected.push(index);
+                if selected.len() == 2 {
+                    break;
+                }
+            }
+        }
+        selected.sort_unstable();
+    }
+
+    let left = selected
+        .iter()
+        .map(|&index| conditions[index].left.clone())
+        .collect();
+    let right = selected
+        .iter()
+        .map(|&index| conditions[index].right.clone())
+        .collect();
+    (hash_join_distribution(left), hash_join_distribution(right))
+}
+
+fn is_redundant_shuffle_expr(
+    index: usize,
+    expr: &ScalarExpr,
+    conditions: &[JoinEquiCondition],
+    side: Side,
+) -> bool {
+    if matches!(expr, ScalarExpr::BoundColumnRef(_)) {
+        return false;
+    }
+
+    let used_columns = expr.used_columns();
+    if used_columns.len() != 1 {
+        return false;
+    }
+    let column = used_columns.iter().next().unwrap();
+
+    conditions
+        .iter()
+        .enumerate()
+        .any(|(other_index, condition)| {
+            if index == other_index {
+                return false;
+            }
+            matches!(
+                side.join_condition(condition),
+                ScalarExpr::BoundColumnRef(column_ref) if column_ref.column.index == *column
+            )
+        })
 }
 
 fn is_safe_broadcast_build(stat_info: &StatInfo, max_build_rows: u64) -> bool {
@@ -1937,6 +1991,74 @@ mod tests {
             max_cardinality,
             statistics: Statistics::default(),
         })
+    }
+
+    #[test]
+    fn test_hash_join_shuffle_omits_redundant_derived_key() {
+        let string_type = DataType::String;
+        let number_type = DataType::Number(NumberDataType::UInt64);
+        let conditions = vec![
+            JoinEquiCondition::new(
+                function_call("lower", vec![column(0, string_type.clone())]),
+                column(10, string_type.clone()),
+                false,
+            ),
+            JoinEquiCondition::new(
+                column(0, string_type.clone()),
+                column(11, string_type),
+                false,
+            ),
+            JoinEquiCondition::new(
+                column(1, number_type.clone()),
+                column(12, number_type),
+                false,
+            ),
+        ];
+
+        let (Distribution::GlobalHash(left), Distribution::GlobalHash(right)) =
+            hash_join_distributions(&conditions)
+        else {
+            panic!("hash joins should retain global hash shuffle");
+        };
+        assert_eq!(left, vec![
+            conditions[1].left.clone(),
+            conditions[2].left.clone()
+        ]);
+        assert_eq!(right, vec![
+            conditions[1].right.clone(),
+            conditions[2].right.clone(),
+        ]);
+    }
+
+    #[test]
+    fn test_hash_join_shuffle_retains_two_keys() {
+        let string_type = DataType::String;
+        let conditions = vec![
+            JoinEquiCondition::new(
+                function_call("lower", vec![column(0, string_type.clone())]),
+                column(10, string_type.clone()),
+                false,
+            ),
+            JoinEquiCondition::new(
+                column(0, string_type.clone()),
+                column(11, string_type),
+                false,
+            ),
+        ];
+
+        let (Distribution::GlobalHash(left), Distribution::GlobalHash(right)) =
+            hash_join_distributions(&conditions)
+        else {
+            panic!("hash joins should retain global hash shuffle");
+        };
+        assert_eq!(left, vec![
+            conditions[0].left.clone(),
+            conditions[1].left.clone()
+        ]);
+        assert_eq!(right, vec![
+            conditions[0].right.clone(),
+            conditions[1].right.clone(),
+        ]);
     }
 
     #[test]
