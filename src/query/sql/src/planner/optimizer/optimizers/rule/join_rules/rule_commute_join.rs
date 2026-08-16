@@ -69,6 +69,16 @@ fn should_commute(join_type: JoinType, left: &StatInfo, right: &StatInfo) -> boo
         return false;
     }
 
+    if left.cardinality == 0.0 && matches!(join_type, JoinType::Left | JoinType::Right) {
+        let left_proven_empty = left.statistics.precise_cardinality == Some(0);
+        let right_proven_empty = right.statistics.precise_cardinality == Some(0);
+        if left_proven_empty != right_proven_empty {
+            // The right child is the hash-build side. Prefer the input that is
+            // known to be empty over one whose zero cardinality is only estimated.
+            return left_proven_empty;
+        }
+    }
+
     matches!(
         join_type,
         JoinType::Right | JoinType::RightSingle | JoinType::RightSemi | JoinType::RightAnti
@@ -157,8 +167,26 @@ impl Default for RuleCommuteJoin {
 
 #[cfg(test)]
 mod tests {
+    use databend_common_expression::Scalar;
+
     use super::*;
     use crate::optimizer::ir::Statistics;
+    use crate::plans::ConstantExpr;
+    use crate::plans::DummyTableScan;
+    use crate::plans::Filter;
+    use crate::plans::MutationSource;
+    use crate::plans::ScalarExpr;
+
+    fn empty_stat(precise: bool) -> StatInfo {
+        StatInfo {
+            cardinality: 0.0,
+            max_cardinality: 0.0,
+            statistics: Statistics {
+                precise_cardinality: precise.then_some(0),
+                column_stats: Default::default(),
+            },
+        }
+    }
 
     fn estimated_stat(cardinality: f64) -> StatInfo {
         StatInfo {
@@ -166,6 +194,18 @@ mod tests {
             max_cardinality: cardinality,
             statistics: Statistics::default(),
         }
+    }
+
+    fn proven_empty_expr() -> SExpr {
+        SExpr::create_unary(
+            Filter {
+                predicates: vec![ScalarExpr::ConstantExpr(ConstantExpr {
+                    span: None,
+                    value: Scalar::Boolean(false),
+                })],
+            },
+            SExpr::create_leaf(DummyTableScan::default()),
+        )
     }
 
     #[test]
@@ -198,6 +238,42 @@ mod tests {
     }
 
     #[test]
+    fn test_outer_join_zero_tie_prefers_proven_empty_build_side() {
+        let proven_empty = empty_stat(true);
+        let estimated_empty = empty_stat(false);
+
+        assert!(should_commute(
+            JoinType::Left,
+            &proven_empty,
+            &estimated_empty
+        ));
+        assert!(!should_commute(
+            JoinType::Left,
+            &estimated_empty,
+            &proven_empty
+        ));
+        assert!(should_commute(
+            JoinType::Right,
+            &proven_empty,
+            &estimated_empty
+        ));
+        assert!(!should_commute(
+            JoinType::Right,
+            &estimated_empty,
+            &proven_empty
+        ));
+    }
+
+    #[test]
+    fn test_outer_join_zero_tie_preserves_existing_canonicalization() {
+        let left = empty_stat(false);
+        let right = empty_stat(false);
+
+        assert!(!should_commute(JoinType::Left, &left, &right));
+        assert!(should_commute(JoinType::Right, &left, &right));
+    }
+
+    #[test]
     fn test_outer_join_builds_smaller_nonzero_input() {
         let selective_preserved_input = estimated_stat(1.0);
         let stale_range_input = estimated_stat(20.0);
@@ -212,5 +288,52 @@ mod tests {
             &stale_range_input,
             &selective_preserved_input
         ));
+    }
+
+    #[test]
+    fn test_commute_join_builds_proven_empty_input() -> Result<()> {
+        let join = Join {
+            join_type: JoinType::Left,
+            ..Default::default()
+        };
+        let expr = SExpr::create_binary(
+            join,
+            proven_empty_expr(),
+            SExpr::create_leaf(MutationSource::default()),
+        );
+        let mut state = TransformResult::new();
+
+        RuleCommuteJoin::new().apply(&expr, &mut state)?;
+
+        assert_eq!(state.results().len(), 1);
+        let result_join: Join = state.results()[0].plan().clone().try_into()?;
+        assert_eq!(result_join.join_type, JoinType::Right);
+        assert_eq!(
+            RelExpr::with_s_expr(state.results()[0].child(1)?)
+                .derive_cardinality()?
+                .statistics
+                .precise_cardinality,
+            Some(0)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_commute_join_keeps_proven_empty_build_input() -> Result<()> {
+        let join = Join {
+            join_type: JoinType::Left,
+            ..Default::default()
+        };
+        let expr = SExpr::create_binary(
+            join,
+            SExpr::create_leaf(MutationSource::default()),
+            proven_empty_expr(),
+        );
+        let mut state = TransformResult::new();
+
+        RuleCommuteJoin::new().apply(&expr, &mut state)?;
+
+        assert!(state.results().is_empty());
+        Ok(())
     }
 }

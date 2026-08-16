@@ -366,6 +366,8 @@ impl Join {
         left_stat_info: Arc<StatInfo>,
         right_stat_info: Arc<StatInfo>,
     ) -> Result<Arc<StatInfo>> {
+        let left_proven_empty = left_stat_info.statistics.precise_cardinality == Some(0);
+        let right_proven_empty = right_stat_info.statistics.precise_cardinality == Some(0);
         let (left_cardinality, mut left_statistics) = (
             left_stat_info.cardinality,
             left_stat_info.statistics.clone(),
@@ -421,6 +423,17 @@ impl Join {
         let cardinality = expected_cardinality_upper_bound
             .map(|bound| cardinality.min(bound))
             .unwrap_or(cardinality);
+        let proven_empty = match self.join_type {
+            JoinType::Inner | JoinType::InnerAny | JoinType::Asof | JoinType::Cross => {
+                left_proven_empty || right_proven_empty
+            }
+            JoinType::Left | JoinType::LeftAny | JoinType::LeftAsof => left_proven_empty,
+            JoinType::Right | JoinType::RightAny | JoinType::RightAsof => right_proven_empty,
+            JoinType::Full => left_proven_empty && right_proven_empty,
+            JoinType::LeftSemi | JoinType::RightSemi => left_proven_empty || right_proven_empty,
+            JoinType::LeftSingle | JoinType::RightMark | JoinType::LeftAnti => left_proven_empty,
+            JoinType::RightSingle | JoinType::LeftMark | JoinType::RightAnti => right_proven_empty,
+        };
         // Derive column statistics
         let column_stats = if cardinality == 0.0 {
             HashMap::new()
@@ -448,7 +461,7 @@ impl Join {
                         .max(right_cardinality)
                 }),
             statistics: Statistics {
-                precise_cardinality: None,
+                precise_cardinality: proven_empty.then_some(0),
                 column_stats,
             },
         }))
@@ -2180,5 +2193,43 @@ mod tests {
 
         assert!(is_unique_join_key(&stat, 1_002.0, false));
         assert!(!is_unique_join_key(&stat, 1_002.0, true));
+    }
+
+    fn empty_stat(precise: bool) -> Arc<StatInfo> {
+        Arc::new(StatInfo {
+            cardinality: 0.0,
+            max_cardinality: 0.0,
+            statistics: Statistics {
+                precise_cardinality: precise.then_some(0),
+                column_stats: Default::default(),
+            },
+        })
+    }
+
+    #[test]
+    fn test_outer_join_propagates_proven_empty_from_preserved_side() -> Result<()> {
+        let proven_empty = empty_stat(true);
+        let estimated_empty = empty_stat(false);
+
+        let left_join = Join {
+            join_type: JoinType::Left,
+            ..Default::default()
+        };
+        let stat = left_join.derive_join_stats(proven_empty.clone(), estimated_empty.clone())?;
+        assert_eq!(stat.statistics.precise_cardinality, Some(0));
+
+        let stat = left_join.derive_join_stats(estimated_empty.clone(), proven_empty.clone())?;
+        assert_eq!(stat.statistics.precise_cardinality, None);
+
+        let right_join = Join {
+            join_type: JoinType::Right,
+            ..Default::default()
+        };
+        let stat = right_join.derive_join_stats(estimated_empty.clone(), proven_empty.clone())?;
+        assert_eq!(stat.statistics.precise_cardinality, Some(0));
+
+        let stat = right_join.derive_join_stats(proven_empty, estimated_empty)?;
+        assert_eq!(stat.statistics.precise_cardinality, None);
+        Ok(())
     }
 }

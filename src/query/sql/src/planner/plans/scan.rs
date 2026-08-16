@@ -369,6 +369,7 @@ impl Operator for Scan {
             .as_ref()
             .and_then(|stat| stat.num_rows);
 
+        let mut proven_empty = false;
         let cardinality = match (precise_cardinality, &self.prewhere) {
             (Some(precise_cardinality), Some(prewhere)) => {
                 // Derive cardinality
@@ -377,6 +378,7 @@ impl Operator for Scan {
                     StatCardinality::exact(precise_cardinality),
                 );
                 let cardinality = sb.apply(&prewhere.predicates)?;
+                proven_empty = sb.is_proven_empty();
                 column_stats = sb.into_column_stats();
                 cardinality
             }
@@ -385,7 +387,9 @@ impl Operator for Scan {
         };
 
         // If prewhere is not none, we can't get precise cardinality
-        let precise_cardinality = if self.prewhere.is_none() && self.sample.is_none() {
+        let precise_cardinality = if proven_empty {
+            Some(0)
+        } else if self.prewhere.is_none() && self.sample.is_none() {
             precise_cardinality
         } else {
             None
@@ -396,12 +400,16 @@ impl Operator for Scan {
         // join ordering), then suppress column statistics to prevent data
         // leakage through statistical inference.
         if self.secure_predicates.is_some() {
+            let mut proven_empty = precise_cardinality == Some(0);
             let cardinality = match &self.secure_predicates {
                 Some(preds) if !preds.is_empty() => {
                     let input_cardinality = precise_cardinality
                         .map(StatCardinality::exact)
                         .unwrap_or_else(|| StatCardinality::estimate(cardinality));
-                    SelectivityEstimator::new(column_stats, input_cardinality).apply(preds)?
+                    let mut estimator = SelectivityEstimator::new(column_stats, input_cardinality);
+                    let cardinality = estimator.apply(preds)?;
+                    proven_empty |= estimator.is_proven_empty();
+                    cardinality
                 }
                 _ => cardinality,
             };
@@ -409,7 +417,7 @@ impl Operator for Scan {
                 cardinality,
                 max_cardinality: cardinality,
                 statistics: OpStatistics {
-                    precise_cardinality: None,
+                    precise_cardinality: proven_empty.then_some(0),
                     column_stats: Default::default(),
                 },
             }));
