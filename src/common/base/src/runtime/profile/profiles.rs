@@ -87,6 +87,7 @@ pub enum ProfileStatisticsName {
     ExchangeIpcEncodeTime,
     ExchangeLz4CompressTime,
     ExchangeIpcDecodeTime,
+    ExchangeLz4DecompressTime,
     ExchangeArrowToBlockTime,
 
     /// Diagnostic phase timings for the experimental hash join processor.
@@ -520,6 +521,13 @@ pub fn get_statistics_desc() -> Arc<BTreeMap<ProfileStatisticsName, ProfileDesc>
                 display_name: "exchange IPC decode time",
                 desc: "Time spent decoding Flight IPC dictionaries and RecordBatches",
                 index: ProfileStatisticsName::ExchangeIpcDecodeTime as usize,
+                unit: StatisticsUnit::NanoSeconds,
+                plain_statistics: false,
+            }),
+            (ProfileStatisticsName::ExchangeLz4DecompressTime, ProfileDesc {
+                display_name: "exchange LZ4 decompress time",
+                desc: "Time spent applying the native Flight IPC LZ4 decompression path",
+                index: ProfileStatisticsName::ExchangeLz4DecompressTime as usize,
                 unit: StatisticsUnit::NanoSeconds,
                 plain_statistics: false,
             }),

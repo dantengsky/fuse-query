@@ -41,6 +41,7 @@ use databend_common_pipeline_transforms::processors::BlockMetaTransform;
 use databend_common_pipeline_transforms::processors::BlockMetaTransformer;
 use databend_common_pipeline_transforms::processors::UnknownMode;
 
+use crate::servers::flight::v1::ipc_compression::decompress_record_batch_lz4;
 use crate::servers::flight::v1::packets::DataPacket;
 use crate::servers::flight::v1::packets::FragmentData;
 
@@ -123,7 +124,29 @@ pub fn deserialize_block(
         }
     }
 
-    let batch = flight_data_to_arrow_batch(&fragment_data.data, arrow_schema, &dictionaries_by_id)?;
+    let native_lz4_started = Instant::now();
+    let native_lz4_data = decompress_record_batch_lz4(
+        &fragment_data.data.data_header,
+        &fragment_data.data.data_body,
+    )?;
+
+    let decoded_data;
+    let flight_data = if let Some(native_lz4_data) = native_lz4_data {
+        Profile::record_usize_profile(
+            ProfileStatisticsName::ExchangeLz4DecompressTime,
+            elapsed_nanos(native_lz4_started),
+        );
+        decoded_data = arrow_flight::FlightData {
+            data_header: native_lz4_data.ipc_message.into(),
+            data_body: native_lz4_data.arrow_data.into(),
+            ..fragment_data.data.clone()
+        };
+        &decoded_data
+    } else {
+        &fragment_data.data
+    };
+
+    let batch = flight_data_to_arrow_batch(flight_data, arrow_schema, &dictionaries_by_id)?;
     Profile::record_usize_profile(
         ProfileStatisticsName::ExchangeIpcDecodeTime,
         elapsed_nanos(ipc_decode_started),

@@ -303,6 +303,7 @@ mod tests {
     use databend_common_expression::types::UInt64Type;
 
     use super::*;
+    use crate::servers::flight::v1::ipc_compression::decompress_record_batch_lz4;
 
     #[test]
     fn test_exchange_lz4_string_view_roundtrip() {
@@ -334,8 +335,34 @@ mod tests {
         assert_eq!(compression.method(), BodyCompressionMethod::BUFFER);
         assert!(record_batch.variadicBufferCounts().is_some());
 
+        let decoded = flight_data_to_arrow_batch(
+            &batches[0],
+            Arc::new(arrow_schema.clone()),
+            &HashMap::new(),
+        )
+        .unwrap();
+        assert_eq!(decoded, original);
+
+        let decompressed =
+            decompress_record_batch_lz4(&batches[0].data_header, &batches[0].data_body)
+                .unwrap()
+                .unwrap();
+        let decompressed = FlightData {
+            data_header: decompressed.ipc_message.into(),
+            data_body: decompressed.arrow_data.into(),
+            ..batches[0].clone()
+        };
+        let message = root_as_message(&decompressed.data_header).unwrap();
+        assert!(
+            message
+                .header_as_record_batch()
+                .unwrap()
+                .compression()
+                .is_none()
+        );
+
         let decoded =
-            flight_data_to_arrow_batch(&batches[0], Arc::new(arrow_schema), &HashMap::new())
+            flight_data_to_arrow_batch(&decompressed, Arc::new(arrow_schema), &HashMap::new())
                 .unwrap();
         assert_eq!(decoded, original);
     }

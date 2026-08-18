@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::io::Read;
 use std::io::Write;
 
 use arrow_ipc::BodyCompressionBuilder;
@@ -79,6 +80,127 @@ fn compress_lz4_buffer(input: &[u8], output: &mut Vec<u8>) -> Result<usize, Arro
         output.extend_from_slice(input);
     }
     Ok(output.len() - start)
+}
+
+fn decompress_lz4_buffer(input: &[u8], output: &mut Vec<u8>) -> Result<usize, ArrowError> {
+    if input.is_empty() {
+        return Ok(0);
+    }
+    if input.len() < std::mem::size_of::<i64>() {
+        return Err(ipc_error("compressed IPC buffer has no length prefix"));
+    }
+
+    let start = output.len();
+    let uncompressed_len = i64::from_le_bytes(input[..8].try_into().unwrap());
+    match uncompressed_len {
+        -1 => output.extend_from_slice(&input[8..]),
+        0 => {}
+        len if len > 0 => {
+            let len = usize::try_from(len)
+                .map_err(|error| ipc_error(format!("invalid IPC buffer length: {error}")))?;
+            output.resize(
+                start
+                    .checked_add(len)
+                    .ok_or_else(|| ipc_error("decompressed IPC buffer length overflowed"))?,
+                0,
+            );
+            let mut decoder = lz4::Decoder::new(&input[8..])?;
+            decoder.read_exact(&mut output[start..])?;
+        }
+        len => return Err(ipc_error(format!("invalid IPC buffer length: {len}"))),
+    }
+    Ok(output.len() - start)
+}
+
+/// Arrow-rs decodes IPC LZ4 buffers through the pure-Rust `lz4_flex` path. For
+/// large exchange batches, rebuild an uncompressed IPC body with C liblz4 so
+/// the regular Arrow reader can construct arrays without decompressing again.
+pub(crate) fn decompress_record_batch_lz4(
+    data_header: &[u8],
+    data_body: &[u8],
+) -> Result<Option<EncodedData>, ArrowError> {
+    let message = root_as_message(data_header)
+        .map_err(|error| ipc_error(format!("invalid Flight IPC message: {error}")))?;
+    let batch = message
+        .header_as_record_batch()
+        .ok_or_else(|| ipc_error("Flight IPC message is not a RecordBatch"))?;
+    let Some(compression) = batch.compression() else {
+        return Ok(None);
+    };
+    if compression.codec() != CompressionType::LZ4_FRAME {
+        return Ok(None);
+    }
+    if compression.method() != BodyCompressionMethod::BUFFER {
+        return Err(ipc_error("unsupported Flight IPC compression method"));
+    }
+
+    let nodes = batch
+        .nodes()
+        .map(|nodes| nodes.iter().copied().collect::<Vec<_>>())
+        .unwrap_or_default();
+    let variadic_buffer_counts = batch
+        .variadicBufferCounts()
+        .map(|counts| counts.iter().collect::<Vec<_>>());
+    let source_buffers = batch
+        .buffers()
+        .ok_or_else(|| ipc_error("Flight IPC RecordBatch has no buffers"))?;
+
+    let mut arrow_data = Vec::with_capacity(data_body.len());
+    let mut buffers = Vec::with_capacity(source_buffers.len());
+    for source_buffer in source_buffers {
+        let source_offset = usize::try_from(source_buffer.offset())
+            .map_err(|error| ipc_error(format!("invalid IPC buffer offset: {error}")))?;
+        let source_len = usize::try_from(source_buffer.length())
+            .map_err(|error| ipc_error(format!("invalid IPC buffer length: {error}")))?;
+        let source_end = source_offset
+            .checked_add(source_len)
+            .ok_or_else(|| ipc_error("Flight IPC buffer range overflowed"))?;
+        let source = data_body
+            .get(source_offset..source_end)
+            .ok_or_else(|| ipc_error("Flight IPC buffer is outside its message body"))?;
+
+        let offset = i64::try_from(arrow_data.len())
+            .map_err(|error| ipc_error(format!("IPC body is too large: {error}")))?;
+        let len = i64::try_from(decompress_lz4_buffer(source, &mut arrow_data)?)
+            .map_err(|error| ipc_error(format!("decompressed IPC buffer is too large: {error}")))?;
+        buffers.push(IpcBuffer::new(offset, len));
+
+        let padding = (IPC_ALIGNMENT - arrow_data.len() % IPC_ALIGNMENT) % IPC_ALIGNMENT;
+        arrow_data.resize(arrow_data.len() + padding, 0);
+    }
+
+    let mut builder = FlatBufferBuilder::new();
+    let nodes = builder.create_vector(&nodes);
+    let buffers = builder.create_vector(&buffers);
+    let variadic_buffer_counts = variadic_buffer_counts
+        .as_ref()
+        .map(|counts| builder.create_vector(counts));
+    let record_batch = {
+        let mut record_batch = RecordBatchBuilder::new(&mut builder);
+        record_batch.add_length(batch.length());
+        record_batch.add_nodes(nodes);
+        record_batch.add_buffers(buffers);
+        if let Some(counts) = variadic_buffer_counts {
+            record_batch.add_variadicBufferCounts(counts);
+        }
+        record_batch.finish().as_union_value()
+    };
+    let message = {
+        let mut new_message = MessageBuilder::new(&mut builder);
+        new_message.add_version(message.version());
+        new_message.add_header_type(MessageHeader::RecordBatch);
+        new_message.add_header(record_batch);
+        let body_len = i64::try_from(arrow_data.len())
+            .map_err(|error| ipc_error(format!("IPC body is too large: {error}")))?;
+        new_message.add_bodyLength(body_len);
+        new_message.finish()
+    };
+    builder.finish(message, None);
+
+    Ok(Some(EncodedData {
+        ipc_message: builder.finished_data().to_vec(),
+        arrow_data,
+    }))
 }
 
 /// Arrow IPC compresses every body buffer independently. Rebuild the generated
