@@ -172,6 +172,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 serde_stacker = { workspace = true }
 sha2 = { workspace = true }
+simdutf8 = { workspace = true }
 socket2 = { workspace = true }
 sqlx = { workspace = true }
 sysinfo = { workspace = true }

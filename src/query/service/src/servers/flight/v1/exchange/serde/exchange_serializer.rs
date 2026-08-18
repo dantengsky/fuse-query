@@ -31,12 +31,12 @@ use databend_common_base::runtime::profile::Profile;
 use databend_common_base::runtime::profile::ProfileStatisticsName;
 use databend_common_exception::ErrorCode;
 use databend_common_exception::Result;
+use databend_common_expression::local_block_meta_serde;
 use databend_common_expression::BlockMetaInfo;
 use databend_common_expression::BlockMetaInfoPtr;
 use databend_common_expression::DataBlock;
-use databend_common_expression::local_block_meta_serde;
-use databend_common_io::prelude::BinaryWrite;
 use databend_common_io::prelude::bincode_serialize_into_buf;
+use databend_common_io::prelude::BinaryWrite;
 use databend_common_pipeline::core::InputPort;
 use databend_common_pipeline::core::OutputPort;
 use databend_common_pipeline::core::ProcessorPtr;
@@ -188,14 +188,12 @@ pub fn serialize_block(
         let (_, dict, values) = match data_block.is_empty() {
             true => batches_to_flight_data_with_options(
                 &ArrowSchema::empty(),
-                vec![
-                    RecordBatch::try_new_with_options(
-                        Arc::new(ArrowSchema::empty()),
-                        vec![],
-                        &RecordBatchOptions::new().with_row_count(Some(0)),
-                    )
-                    .unwrap(),
-                ],
+                vec![RecordBatch::try_new_with_options(
+                    Arc::new(ArrowSchema::empty()),
+                    vec![],
+                    &RecordBatchOptions::new().with_row_count(Some(0)),
+                )
+                .unwrap()],
                 options,
                 native_lz4,
             )?,
@@ -295,12 +293,12 @@ mod tests {
     use std::sync::Arc;
 
     use arrow_flight::utils::flight_data_to_arrow_batch;
+    use arrow_ipc::root_as_message;
     use arrow_ipc::BodyCompressionMethod;
     use arrow_ipc::CompressionType;
-    use arrow_ipc::root_as_message;
-    use databend_common_expression::FromData;
     use databend_common_expression::types::StringType;
     use databend_common_expression::types::UInt64Type;
+    use databend_common_expression::FromData;
 
     use super::*;
     use crate::servers::flight::v1::exchange::serde::exchange_deserializer::flight_data_to_arrow_batch_zero_copy;
@@ -309,7 +307,7 @@ mod tests {
     #[test]
     fn test_exchange_lz4_string_view_roundtrip() {
         let strings = StringType::from_data(vec![
-            "a repeated string value long enough to use an external StringView buffer";
+            "Databend 数据 🚀 repeated long enough to use an external StringView buffer";
             256
         ]);
         let numbers = UInt64Type::from_data((0..256_u64).collect::<Vec<_>>());
@@ -354,13 +352,11 @@ mod tests {
             ..batches[0].clone()
         };
         let message = root_as_message(&decompressed.data_header).unwrap();
-        assert!(
-            message
-                .header_as_record_batch()
-                .unwrap()
-                .compression()
-                .is_none()
-        );
+        assert!(message
+            .header_as_record_batch()
+            .unwrap()
+            .compression()
+            .is_none());
 
         let decoded = flight_data_to_arrow_batch_zero_copy(
             &decompressed,

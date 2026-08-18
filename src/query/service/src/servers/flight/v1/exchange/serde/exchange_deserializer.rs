@@ -19,24 +19,27 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use arrow_array::ArrayRef;
+use arrow_array::BinaryViewArray;
 use arrow_array::RecordBatch;
+use arrow_array::RecordBatchOptions;
 use arrow_buffer::Buffer;
 use arrow_flight::FlightData;
 use arrow_ipc::root_as_message;
 use arrow_schema::ArrowError;
+use arrow_schema::DataType;
 use arrow_schema::Schema as ArrowSchema;
 use databend_common_base::runtime::profile::Profile;
 use databend_common_base::runtime::profile::ProfileStatisticsName;
 use databend_common_exception::ErrorCode;
 use databend_common_exception::Result;
+use databend_common_expression::local_block_meta_serde;
 use databend_common_expression::BlockMetaInfo;
 use databend_common_expression::BlockMetaInfoPtr;
 use databend_common_expression::DataBlock;
 use databend_common_expression::DataSchema;
 use databend_common_expression::DataSchemaRef;
-use databend_common_expression::local_block_meta_serde;
-use databend_common_io::prelude::BinaryRead;
 use databend_common_io::prelude::bincode_deserialize_from_slice;
+use databend_common_io::prelude::BinaryRead;
 use databend_common_pipeline::core::InputPort;
 use databend_common_pipeline::core::OutputPort;
 use databend_common_pipeline::core::ProcessorPtr;
@@ -181,14 +184,96 @@ pub(crate) fn flight_data_to_arrow_batch_zero_copy(
     // slice first, which makes `Buffer::from(&[u8])` copy the entire IPC body.
     // Preserve the owning Bytes allocation so Arrow can slice it zero-copy.
     let body = Buffer::from(data.data_body.clone());
-    arrow_ipc::reader::read_record_batch(
+    let decode_schema = binary_view_decode_schema(&schema);
+    let batch = arrow_ipc::reader::read_record_batch(
         &body,
         batch,
-        schema,
+        decode_schema.clone().unwrap_or_else(|| schema.clone()),
         dictionaries_by_id,
         None,
         &message.version(),
+    )?;
+
+    if decode_schema.is_some() {
+        restore_string_views(batch, schema)
+    } else {
+        Ok(batch)
+    }
+}
+
+/// Decode top-level StringView fields as BinaryView first. Both use the same
+/// physical IPC representation, but BinaryView validation only checks view
+/// bounds and prefixes. This lets us perform the remaining UTF-8 validation
+/// with simdutf8, matching the Arrow2 path used by the legacy release.
+fn binary_view_decode_schema(schema: &Arc<ArrowSchema>) -> Option<Arc<ArrowSchema>> {
+    let mut replaced = false;
+    let fields = schema
+        .fields()
+        .iter()
+        .map(|field| {
+            if field.data_type() == &DataType::Utf8View {
+                replaced = true;
+                Arc::new(field.as_ref().clone().with_data_type(DataType::BinaryView))
+            } else {
+                field.clone()
+            }
+        })
+        .collect::<Vec<_>>();
+
+    replaced.then(|| {
+        Arc::new(ArrowSchema::new_with_metadata(
+            fields,
+            schema.metadata().clone(),
+        ))
+    })
+}
+
+fn restore_string_views(
+    batch: RecordBatch,
+    schema: Arc<ArrowSchema>,
+) -> std::result::Result<RecordBatch, ArrowError> {
+    let (_, columns, row_count) = batch.into_parts();
+    let columns = columns
+        .into_iter()
+        .zip(schema.fields())
+        .map(|(column, field)| {
+            if field.data_type() != &DataType::Utf8View {
+                return Ok(column);
+            }
+
+            let binary = column
+                .as_any()
+                .downcast_ref::<BinaryViewArray>()
+                .ok_or_else(|| {
+                    ArrowError::InvalidArgumentError(format!(
+                        "Expected BinaryView for StringView field {}",
+                        field.name()
+                    ))
+                })?;
+            validate_binary_view_utf8(binary)?;
+
+            // BinaryView and StringView have the same physical representation.
+            // The view bounds and prefixes were checked by the IPC decoder, and
+            // every value was checked as UTF-8 immediately above.
+            let string = unsafe { binary.clone().to_string_view_unchecked() };
+            Ok(Arc::new(string) as ArrayRef)
+        })
+        .collect::<std::result::Result<Vec<_>, ArrowError>>()?;
+
+    RecordBatch::try_new_with_options(
+        schema,
+        columns,
+        &RecordBatchOptions::new().with_row_count(Some(row_count)),
     )
+}
+
+fn validate_binary_view_utf8(array: &BinaryViewArray) -> std::result::Result<(), ArrowError> {
+    for index in 0..array.views().len() {
+        simdutf8::basic::from_utf8(array.value(index)).map_err(|_| {
+            ArrowError::InvalidArgumentError(format!("Encountered non-UTF-8 data at index {index}"))
+        })?;
+    }
+    Ok(())
 }
 
 fn elapsed_nanos(started: Instant) -> usize {
