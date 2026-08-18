@@ -25,6 +25,23 @@ async fn test_set_settings() {
 
     assert!(
         !settings
+            .get_enable_legacy_single_key_hash_join_shuffle()
+            .unwrap()
+    );
+    settings
+        .set_setting(
+            "enable_legacy_single_key_hash_join_shuffle".to_string(),
+            "1".to_string(),
+        )
+        .unwrap();
+    assert!(
+        settings
+            .get_enable_legacy_single_key_hash_join_shuffle()
+            .unwrap()
+    );
+
+    assert!(
+        !settings
             .get_enable_probe_side_bloom_runtime_filter()
             .unwrap()
     );
@@ -189,6 +206,17 @@ async fn test_set_settings() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_set_global_settings() {
     let settings = Settings::create(Tenant::new_literal("test"));
+    let result = settings
+        .set_global_setting(
+            "enable_legacy_single_key_hash_join_shuffle".to_string(),
+            "1".to_string(),
+        )
+        .await;
+    assert!(
+        result.is_err(),
+        "single-key shuffle must remain session-only"
+    );
+
     let result = settings
         .set_global_setting(
             "query_flight_compression_notfound".to_string(),

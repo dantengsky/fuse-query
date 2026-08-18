@@ -1,0 +1,71 @@
+# A query-local first-key hint changes only hash-shuffle distribution. The complete equi-join key
+# set must still be used for exact matching, and the hint must not leak into the session.
+
+statement ok
+set enforce_shuffle_join = 1
+
+statement ok
+drop table if exists single_key_shuffle_l
+
+statement ok
+drop table if exists single_key_shuffle_r
+
+statement ok
+create table single_key_shuffle_l (
+    k1 int null,
+    k2 int,
+    value string
+) storage_format = 'parquet'
+
+statement ok
+create table single_key_shuffle_r (
+    k1 int null,
+    k2 int,
+    value string
+) storage_format = 'parquet'
+
+statement ok
+insert into single_key_shuffle_l values
+    (1, 10, 'l1'),
+    (1, 20, 'l2'),
+    (2, 10, 'l3'),
+    (null, 10, 'ln')
+
+statement ok
+insert into single_key_shuffle_r values
+    (1, 10, 'r1'),
+    (1, 30, 'r2'),
+    (2, 10, 'r3'),
+    (null, 10, 'rn')
+
+query T
+select /*+ set_var(enable_legacy_single_key_hash_join_shuffle=1) */ value
+from system.settings
+where name = 'enable_legacy_single_key_hash_join_shuffle'
+----
+1
+
+query TT rowsort
+select /*+ set_var(enable_legacy_single_key_hash_join_shuffle=1) */ l.value, r.value
+from single_key_shuffle_l l
+join single_key_shuffle_r r
+    on l.k1 = r.k1 and l.k2 = r.k2
+----
+l1 r1
+l3 r3
+
+query T
+select value
+from system.settings
+where name = 'enable_legacy_single_key_hash_join_shuffle'
+----
+0
+
+statement ok
+drop table single_key_shuffle_l
+
+statement ok
+drop table single_key_shuffle_r
+
+statement ok
+unset enforce_shuffle_join

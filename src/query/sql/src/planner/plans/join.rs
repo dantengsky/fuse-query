@@ -824,8 +824,11 @@ impl Operator for Join {
         }
 
         // Otherwise, use hash shuffle
+        let legacy_single_key = ctx
+            .get_settings()
+            .get_enable_legacy_single_key_hash_join_shuffle()?;
         let (left_distribution, right_distribution) =
-            hash_join_distributions(&self.equi_conditions);
+            hash_join_distributions(&self.equi_conditions, legacy_single_key);
         if child_index == 0 {
             required.distribution = left_distribution;
         } else {
@@ -863,8 +866,10 @@ impl Operator for Join {
             // (Hash, Hash) – retain multiple independent equi-join keys to avoid skew, while
             // omitting derived expressions that repeat work already covered by a direct key.
             if !self.equi_conditions.is_empty() {
+                let legacy_single_key =
+                    settings.get_enable_legacy_single_key_hash_join_shuffle()?;
                 let (left_distribution, right_distribution) =
-                    hash_join_distributions(&self.equi_conditions);
+                    hash_join_distributions(&self.equi_conditions, legacy_single_key);
                 children_required.push(vec![
                     RequiredProperty {
                         distribution: left_distribution,
@@ -937,20 +942,27 @@ fn non_broadcast_join_distribution(fallback_keys: Vec<ScalarExpr>) -> Distributi
     Distribution::NonBroadcast(fallback_keys)
 }
 
-fn hash_join_distributions(conditions: &[JoinEquiCondition]) -> (Distribution, Distribution) {
-    let mut selected = conditions
-        .iter()
-        .enumerate()
-        .filter_map(|(index, condition)| {
-            (!is_redundant_shuffle_expr(index, &condition.left, conditions, Side::Left)
-                && !is_redundant_shuffle_expr(index, &condition.right, conditions, Side::Right))
-            .then_some(index)
-        })
-        .collect::<Vec<_>>();
+fn hash_join_distributions(
+    conditions: &[JoinEquiCondition],
+    legacy_single_key: bool,
+) -> (Distribution, Distribution) {
+    let mut selected = if legacy_single_key && !conditions.is_empty() {
+        vec![0]
+    } else {
+        conditions
+            .iter()
+            .enumerate()
+            .filter_map(|(index, condition)| {
+                (!is_redundant_shuffle_expr(index, &condition.left, conditions, Side::Left)
+                    && !is_redundant_shuffle_expr(index, &condition.right, conditions, Side::Right))
+                .then_some(index)
+            })
+            .collect::<Vec<_>>()
+    };
 
     // A single partition key can be badly skewed. If the join supplies multiple keys, retain at
     // least two even when the second one is a derived expression.
-    if conditions.len() >= 2 && selected.len() < 2 {
+    if !legacy_single_key && conditions.len() >= 2 && selected.len() < 2 {
         for index in 0..conditions.len() {
             if !selected.contains(&index) {
                 selected.push(index);
@@ -2133,7 +2145,7 @@ mod tests {
         ];
 
         let (Distribution::NodeToNodeHash(left), Distribution::NodeToNodeHash(right)) =
-            hash_join_distributions(&conditions)
+            hash_join_distributions(&conditions, false)
         else {
             panic!("hash joins should use node-to-node shuffle");
         };
@@ -2164,7 +2176,7 @@ mod tests {
         ];
 
         let (Distribution::NodeToNodeHash(left), Distribution::NodeToNodeHash(right)) =
-            hash_join_distributions(&conditions)
+            hash_join_distributions(&conditions, false)
         else {
             panic!("hash joins should use node-to-node shuffle");
         };
@@ -2176,6 +2188,37 @@ mod tests {
             conditions[0].right.clone(),
             conditions[1].right.clone(),
         ]);
+    }
+
+    #[test]
+    fn test_hash_join_shuffle_legacy_mode_uses_first_condition() {
+        let string_type = DataType::String;
+        let number_type = DataType::Number(NumberDataType::UInt64);
+        let conditions = vec![
+            JoinEquiCondition::new(
+                function_call("lower", vec![column(0, string_type.clone())]),
+                column(10, string_type.clone()),
+                false,
+            ),
+            JoinEquiCondition::new(
+                column(0, string_type.clone()),
+                column(11, string_type),
+                false,
+            ),
+            JoinEquiCondition::new(
+                column(1, number_type.clone()),
+                column(12, number_type),
+                false,
+            ),
+        ];
+
+        let (Distribution::NodeToNodeHash(left), Distribution::NodeToNodeHash(right)) =
+            hash_join_distributions(&conditions, true)
+        else {
+            panic!("hash joins should use node-to-node shuffle");
+        };
+        assert_eq!(left, vec![conditions[0].left.clone()]);
+        assert_eq!(right, vec![conditions[0].right.clone()]);
     }
 
     #[test]

@@ -659,6 +659,13 @@ impl DefaultSettings {
                     scope: SettingScope::Both,
                     range: Some(SettingRange::Numeric(0..=1)),
                 }),
+                ("enable_legacy_single_key_hash_join_shuffle", DefaultSettingValue {
+                    value: UserSettingValue::UInt64(0),
+                    desc: "Uses only the first equi-join key for hash join shuffle. Prefer a query-local SET_VAR hint because this setting may cause data skew. Default 0 uses the selected multi-key distribution.",
+                    mode: SettingMode::Both,
+                    scope: SettingScope::Session,
+                    range: Some(SettingRange::Numeric(0..=1)),
+                }),
                 ("grouping_sets_to_union", DefaultSettingValue {
                     value: UserSettingValue::UInt64(0),
                     desc: "Enables grouping sets to union.",
