@@ -303,6 +303,7 @@ mod tests {
     use databend_common_expression::types::UInt64Type;
 
     use super::*;
+    use crate::servers::flight::v1::exchange::serde::exchange_deserializer::flight_data_to_arrow_batch_zero_copy;
     use crate::servers::flight::v1::ipc_compression::decompress_record_batch_lz4;
 
     #[test]
@@ -361,9 +362,12 @@ mod tests {
                 .is_none()
         );
 
-        let decoded =
-            flight_data_to_arrow_batch(&decompressed, Arc::new(arrow_schema), &HashMap::new())
-                .unwrap();
+        let decoded = flight_data_to_arrow_batch_zero_copy(
+            &decompressed,
+            Arc::new(arrow_schema),
+            &HashMap::new(),
+        )
+        .unwrap();
         assert_eq!(decoded, original);
     }
 }

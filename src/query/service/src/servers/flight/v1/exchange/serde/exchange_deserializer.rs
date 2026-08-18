@@ -18,9 +18,12 @@ use std::fmt::Formatter;
 use std::sync::Arc;
 use std::time::Instant;
 
+use arrow_array::ArrayRef;
+use arrow_array::RecordBatch;
 use arrow_buffer::Buffer;
-use arrow_flight::utils::flight_data_to_arrow_batch;
+use arrow_flight::FlightData;
 use arrow_ipc::root_as_message;
+use arrow_schema::ArrowError;
 use arrow_schema::Schema as ArrowSchema;
 use databend_common_base::runtime::profile::Profile;
 use databend_common_base::runtime::profile::ProfileStatisticsName;
@@ -146,7 +149,8 @@ pub fn deserialize_block(
         &fragment_data.data
     };
 
-    let batch = flight_data_to_arrow_batch(flight_data, arrow_schema, &dictionaries_by_id)?;
+    let batch =
+        flight_data_to_arrow_batch_zero_copy(flight_data, arrow_schema, &dictionaries_by_id)?;
     Profile::record_usize_profile(
         ProfileStatisticsName::ExchangeIpcDecodeTime,
         elapsed_nanos(ipc_decode_started),
@@ -159,6 +163,32 @@ pub fn deserialize_block(
         elapsed_nanos(arrow_to_block_started),
     );
     Ok(data_block)
+}
+
+pub(crate) fn flight_data_to_arrow_batch_zero_copy(
+    data: &FlightData,
+    schema: Arc<ArrowSchema>,
+    dictionaries_by_id: &HashMap<i64, ArrayRef>,
+) -> std::result::Result<RecordBatch, ArrowError> {
+    let message = root_as_message(&data.data_header).map_err(|error| {
+        ArrowError::ParseError(format!("Unable to get root as message: {error:?}"))
+    })?;
+    let batch = message.header_as_record_batch().ok_or_else(|| {
+        ArrowError::ParseError("Unable to convert flight data header to a record batch".to_string())
+    })?;
+
+    // `arrow_flight::flight_data_to_arrow_batch` converts the body to a byte
+    // slice first, which makes `Buffer::from(&[u8])` copy the entire IPC body.
+    // Preserve the owning Bytes allocation so Arrow can slice it zero-copy.
+    let body = Buffer::from(data.data_body.clone());
+    arrow_ipc::reader::read_record_batch(
+        &body,
+        batch,
+        schema,
+        dictionaries_by_id,
+        None,
+        &message.version(),
+    )
 }
 
 fn elapsed_nanos(started: Instant) -> usize {
