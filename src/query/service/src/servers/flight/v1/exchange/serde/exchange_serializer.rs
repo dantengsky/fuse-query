@@ -264,6 +264,7 @@ mod tests {
     use databend_common_expression::types::UInt64Type;
 
     use super::*;
+    use crate::servers::flight::v1::exchange::serde::exchange_deserializer::flight_data_to_arrow_batch_zero_copy;
 
     #[test]
     fn test_exchange_lz4_string_view_roundtrip() {
@@ -295,9 +296,20 @@ mod tests {
         assert_eq!(compression.method(), BodyCompressionMethod::BUFFER);
         assert!(record_batch.variadicBufferCounts().is_some());
 
-        let decoded =
-            flight_data_to_arrow_batch(&batches[0], Arc::new(arrow_schema), &HashMap::new())
-                .unwrap();
+        let decoded = flight_data_to_arrow_batch(
+            &batches[0],
+            Arc::new(arrow_schema.clone()),
+            &HashMap::new(),
+        )
+        .unwrap();
+        assert_eq!(decoded, original);
+
+        let decoded = flight_data_to_arrow_batch_zero_copy(
+            &batches[0],
+            Arc::new(arrow_schema),
+            &HashMap::new(),
+        )
+        .unwrap();
         assert_eq!(decoded, original);
     }
 }
