@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::time::Instant;
+
+use databend_common_base::runtime::profile::Profile;
+use databend_common_base::runtime::profile::ProfileStatisticsName;
 use databend_common_exception::Result;
 use databend_common_expression::BlockEntry;
 use databend_common_expression::DataBlock;
@@ -127,12 +131,23 @@ impl FlightScatter for OneHashKeyFlightScatter {
     }
 
     fn execute(&self, data_block: DataBlock) -> Result<Vec<DataBlock>> {
+        let hash_started = Instant::now();
         let evaluator = Evaluator::new(&data_block, &self.func_ctx, &BUILTIN_FUNCTIONS);
         let num = data_block.num_rows();
 
         let indices = evaluator.run(&self.indices_scalar).unwrap();
         let indices = get_hash_values(indices, num, self.default_scatter_index)?;
+        Profile::record_usize_profile(
+            ProfileStatisticsName::ExchangeSingleKeyHashTime,
+            elapsed_nanos(hash_started),
+        );
+
+        let partition_started = Instant::now();
         let data_blocks = DataBlock::scatter(&data_block, &indices, self.scatter_size)?;
+        Profile::record_usize_profile(
+            ProfileStatisticsName::ExchangePartitionTime,
+            elapsed_nanos(partition_started),
+        );
 
         let block_meta = data_block.get_meta();
         let mut res = Vec::with_capacity(data_blocks.len());
@@ -144,10 +159,15 @@ impl FlightScatter for OneHashKeyFlightScatter {
     }
 
     fn scatter_indices(&self, data_block: &DataBlock) -> Result<Option<Vec<u64>>> {
+        let hash_started = Instant::now();
         let evaluator = Evaluator::new(data_block, &self.func_ctx, &BUILTIN_FUNCTIONS);
         let num = data_block.num_rows();
         let indices = evaluator.run(&self.indices_scalar).unwrap();
         let indices = get_hash_values(indices, num, self.default_scatter_index)?;
+        Profile::record_usize_profile(
+            ProfileStatisticsName::ExchangeSingleKeyHashTime,
+            elapsed_nanos(hash_started),
+        );
         Ok(Some(indices.to_vec()))
     }
 }
@@ -161,7 +181,12 @@ impl FlightScatter for HashFlightScatter {
         let indices = self.build_scatter_indices(&data_block)?;
 
         let block_meta = data_block.get_meta();
+        let partition_started = Instant::now();
         let data_blocks = DataBlock::scatter(&data_block, &indices, self.scatter_size)?;
+        Profile::record_usize_profile(
+            ProfileStatisticsName::ExchangePartitionTime,
+            elapsed_nanos(partition_started),
+        );
 
         let mut res = Vec::with_capacity(data_blocks.len());
         for data_block in data_blocks {
@@ -184,6 +209,7 @@ impl HashFlightScatter {
         }
 
         let evaluator = Evaluator::new(data_block, &self.func_ctx, &BUILTIN_FUNCTIONS);
+        let evaluation_started = Instant::now();
         let hash_keys = self
             .hash_key
             .iter()
@@ -193,7 +219,12 @@ impl HashFlightScatter {
                 }))
             })
             .collect::<Result<Vec<_>>>()?;
+        Profile::record_usize_profile(
+            ProfileStatisticsName::ExchangeHashKeyEvalTime,
+            elapsed_nanos(evaluation_started),
+        );
 
+        let combine_started = Instant::now();
         let mut hashes = vec![0; num_rows];
         group_hash_entries(ProjectedBlock::from(&hash_keys), &mut hashes);
 
@@ -201,8 +232,16 @@ impl HashFlightScatter {
         for hash in &mut hashes {
             *hash %= scatter_size;
         }
+        Profile::record_usize_profile(
+            ProfileStatisticsName::ExchangeHashCombineTime,
+            elapsed_nanos(combine_started),
+        );
         Ok(hashes)
     }
+}
+
+fn elapsed_nanos(started: Instant) -> usize {
+    usize::try_from(started.elapsed().as_nanos()).unwrap_or(usize::MAX)
 }
 
 fn shuffle_by_block_id_in_merge_into(expr: &RemoteExpr) -> bool {

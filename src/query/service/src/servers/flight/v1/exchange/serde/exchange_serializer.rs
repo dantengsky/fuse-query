@@ -15,6 +15,7 @@
 use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::sync::Arc;
+use std::time::Instant;
 
 use arrow_array::RecordBatch;
 use arrow_array::RecordBatchOptions;
@@ -170,56 +171,70 @@ pub fn serialize_block(
     options: &IpcWriteOptions,
     native_lz4: bool,
 ) -> Result<DataBlock> {
-    if data_block.is_empty() && data_block.get_meta().is_none() {
-        return Ok(DataBlock::empty_with_meta(ExchangeSerializeMeta::create(
-            block_num,
-            vec![],
-        )));
-    }
-
-    let mut meta = vec![];
-    meta.write_scalar_own(data_block.num_rows() as u32)?;
-    bincode_serialize_into_buf(&mut meta, &data_block.get_meta())
-        .map_err(|_| ErrorCode::BadBytes("block meta serialize error when exchange"))?;
-
-    let (_, dict, values) = match data_block.is_empty() {
-        true => batches_to_flight_data_with_options(
-            &ArrowSchema::empty(),
-            vec![
-                RecordBatch::try_new_with_options(
-                    Arc::new(ArrowSchema::empty()),
-                    vec![],
-                    &RecordBatchOptions::new().with_row_count(Some(0)),
-                )
-                .unwrap(),
-            ],
-            options,
-            native_lz4,
-        )?,
-        false => {
-            let schema = data_block.infer_schema();
-            let arrow_schema = ArrowSchema::from(&schema);
-            let batch = data_block.to_record_batch_with_dataschema(&schema)?;
-            batches_to_flight_data_with_options(&arrow_schema, vec![batch], options, native_lz4)?
+    let serialize_started = Instant::now();
+    let result = (|| {
+        if data_block.is_empty() && data_block.get_meta().is_none() {
+            return Ok(DataBlock::empty_with_meta(ExchangeSerializeMeta::create(
+                block_num,
+                vec![],
+            )));
         }
-    };
 
-    let mut packet = Vec::with_capacity(dict.len() + values.len());
-    for dict_flight in dict {
-        packet.push(DataPacket::Dictionary(dict_flight));
-    }
+        let mut meta = vec![];
+        meta.write_scalar_own(data_block.num_rows() as u32)?;
+        bincode_serialize_into_buf(&mut meta, &data_block.get_meta())
+            .map_err(|_| ErrorCode::BadBytes("block meta serialize error when exchange"))?;
 
-    let meta: Bytes = meta.into();
-    for value in values {
-        packet.push(DataPacket::FragmentData(FragmentData::create(
-            meta.clone(),
-            value,
-        )));
-    }
+        let (_, dict, values) = match data_block.is_empty() {
+            true => batches_to_flight_data_with_options(
+                &ArrowSchema::empty(),
+                vec![
+                    RecordBatch::try_new_with_options(
+                        Arc::new(ArrowSchema::empty()),
+                        vec![],
+                        &RecordBatchOptions::new().with_row_count(Some(0)),
+                    )
+                    .unwrap(),
+                ],
+                options,
+                native_lz4,
+            )?,
+            false => {
+                let schema = data_block.infer_schema();
+                let arrow_schema = ArrowSchema::from(&schema);
+                let batch = data_block.to_record_batch_with_dataschema(&schema)?;
+                batches_to_flight_data_with_options(
+                    &arrow_schema,
+                    vec![batch],
+                    options,
+                    native_lz4,
+                )?
+            }
+        };
 
-    Ok(DataBlock::empty_with_meta(ExchangeSerializeMeta::create(
-        block_num, packet,
-    )))
+        let mut packet = Vec::with_capacity(dict.len() + values.len());
+        for dict_flight in dict {
+            packet.push(DataPacket::Dictionary(dict_flight));
+        }
+
+        let meta: Bytes = meta.into();
+        for value in values {
+            packet.push(DataPacket::FragmentData(FragmentData::create(
+                meta.clone(),
+                value,
+            )));
+        }
+
+        Ok(DataBlock::empty_with_meta(ExchangeSerializeMeta::create(
+            block_num, packet,
+        )))
+    })();
+
+    Profile::record_usize_profile(
+        ProfileStatisticsName::ExchangeSerializeTime,
+        usize::try_from(serialize_started.elapsed().as_nanos()).unwrap_or(usize::MAX),
+    );
+    result
 }
 
 /// Convert `RecordBatch`es to wire protocol `FlightData`s

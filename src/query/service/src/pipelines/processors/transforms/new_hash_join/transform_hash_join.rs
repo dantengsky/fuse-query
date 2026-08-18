@@ -21,6 +21,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use databend_common_base::base::Barrier;
+use databend_common_base::runtime::profile::Profile;
+use databend_common_base::runtime::profile::ProfileStatisticsName;
 use databend_common_exception::Result;
 use databend_common_expression::DataBlock;
 use databend_common_pipeline::core::Event;
@@ -149,7 +151,15 @@ impl Processor for TransformHashJoin {
     }
 
     fn process(&mut self) -> Result<()> {
-        match &mut self.stage {
+        let phase = match &self.stage {
+            Stage::Build(_) => Some(ProfileStatisticsName::HashJoinBuildTime),
+            Stage::BuildFinal(_) => Some(ProfileStatisticsName::HashJoinBuildFinalizeTime),
+            Stage::Probe(_) => Some(ProfileStatisticsName::HashJoinProbeTime),
+            Stage::ProbeFinal(_) => Some(ProfileStatisticsName::HashJoinProbeFinalizeTime),
+            Stage::Finished => None,
+        };
+        let phase_started = Instant::now();
+        let result = (|| match &mut self.stage {
             Stage::Finished => Ok(()),
             Stage::Build(state) => {
                 let Some(data_block) = state.build_data.take() else {
@@ -217,7 +227,15 @@ impl Processor for TransformHashJoin {
 
                 Ok(())
             }
+        })();
+
+        if let Some(phase) = phase {
+            Profile::record_usize_profile(
+                phase,
+                usize::try_from(phase_started.elapsed().as_nanos()).unwrap_or(usize::MAX),
+            );
         }
+        result
     }
 
     async fn async_process(&mut self) -> Result<()> {

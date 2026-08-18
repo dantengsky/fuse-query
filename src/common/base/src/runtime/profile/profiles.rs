@@ -76,6 +76,19 @@ pub enum ProfileStatisticsName {
 
     RowFetchInputBatches,
     RowFetchAffinityReassignedBlocks,
+
+    /// Diagnostic phase timings for distributed hash exchange.
+    ExchangeSingleKeyHashTime,
+    ExchangeHashKeyEvalTime,
+    ExchangeHashCombineTime,
+    ExchangePartitionTime,
+    ExchangeSerializeTime,
+
+    /// Diagnostic phase timings for the experimental hash join processor.
+    HashJoinBuildTime,
+    HashJoinBuildFinalizeTime,
+    HashJoinProbeTime,
+    HashJoinProbeFinalizeTime,
 }
 
 #[derive(Clone, Hash, Eq, PartialEq, serde::Serialize, serde::Deserialize, Debug)]
@@ -442,6 +455,87 @@ pub fn get_statistics_desc() -> Arc<BTreeMap<ProfileStatisticsName, ProfileDesc>
                 unit: StatisticsUnit::Count,
                 plain_statistics: true,
             }),
+            (ProfileStatisticsName::ExchangeSingleKeyHashTime, ProfileDesc {
+                display_name: "exchange single-key hash time",
+                desc: "Time spent evaluating a single exchange hash key and producing partition indices",
+                index: ProfileStatisticsName::ExchangeSingleKeyHashTime as usize,
+                unit: StatisticsUnit::NanoSeconds,
+                plain_statistics: false,
+            }),
+            (ProfileStatisticsName::ExchangeHashKeyEvalTime, ProfileDesc {
+                display_name: "exchange hash-key evaluation time",
+                desc: "Time spent evaluating multiple exchange hash-key expressions",
+                index: ProfileStatisticsName::ExchangeHashKeyEvalTime as usize,
+                unit: StatisticsUnit::NanoSeconds,
+                plain_statistics: false,
+            }),
+            (ProfileStatisticsName::ExchangeHashCombineTime, ProfileDesc {
+                display_name: "exchange hash-combine time",
+                desc: "Time spent combining multiple exchange keys and producing partition indices",
+                index: ProfileStatisticsName::ExchangeHashCombineTime as usize,
+                unit: StatisticsUnit::NanoSeconds,
+                plain_statistics: false,
+            }),
+            (ProfileStatisticsName::ExchangePartitionTime, ProfileDesc {
+                display_name: "exchange partition time",
+                desc: "Time spent partitioning exchange blocks after hash indices are available",
+                index: ProfileStatisticsName::ExchangePartitionTime as usize,
+                unit: StatisticsUnit::NanoSeconds,
+                plain_statistics: false,
+            }),
+            (ProfileStatisticsName::ExchangeSerializeTime, ProfileDesc {
+                display_name: "exchange serialize time",
+                desc: "Time spent converting exchange blocks to Flight IPC payloads",
+                index: ProfileStatisticsName::ExchangeSerializeTime as usize,
+                unit: StatisticsUnit::NanoSeconds,
+                plain_statistics: false,
+            }),
+            (ProfileStatisticsName::HashJoinBuildTime, ProfileDesc {
+                display_name: "hash join build time",
+                desc: "Time spent consuming build blocks in the experimental hash join",
+                index: ProfileStatisticsName::HashJoinBuildTime as usize,
+                unit: StatisticsUnit::NanoSeconds,
+                plain_statistics: false,
+            }),
+            (ProfileStatisticsName::HashJoinBuildFinalizeTime, ProfileDesc {
+                display_name: "hash join build-finalize time",
+                desc: "Time spent finalizing experimental hash join build state",
+                index: ProfileStatisticsName::HashJoinBuildFinalizeTime as usize,
+                unit: StatisticsUnit::NanoSeconds,
+                plain_statistics: false,
+            }),
+            (ProfileStatisticsName::HashJoinProbeTime, ProfileDesc {
+                display_name: "hash join probe time",
+                desc: "Time spent probing and materializing experimental hash join results",
+                index: ProfileStatisticsName::HashJoinProbeTime as usize,
+                unit: StatisticsUnit::NanoSeconds,
+                plain_statistics: false,
+            }),
+            (ProfileStatisticsName::HashJoinProbeFinalizeTime, ProfileDesc {
+                display_name: "hash join probe-finalize time",
+                desc: "Time spent finalizing unmatched experimental hash join rows",
+                index: ProfileStatisticsName::HashJoinProbeFinalizeTime as usize,
+                unit: StatisticsUnit::NanoSeconds,
+                plain_statistics: false,
+            }),
         ]))
     }).clone()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_profile_statistic_has_a_descriptor() {
+        assert_eq!(
+            get_statistics_desc().len(),
+            std::mem::variant_count::<ProfileStatisticsName>()
+        );
+        assert!(
+            get_statistics_name_index()
+                .iter()
+                .all(|name| name.is_some())
+        );
+    }
 }

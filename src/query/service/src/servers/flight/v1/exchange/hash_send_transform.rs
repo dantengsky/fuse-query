@@ -15,7 +15,10 @@
 use std::any::Any;
 use std::sync::Arc;
 use std::task::Poll;
+use std::time::Instant;
 
+use databend_common_base::runtime::profile::Profile;
+use databend_common_base::runtime::profile::ProfileStatisticsName;
 use databend_common_exception::Result;
 use databend_common_expression::BlockPartitionStream;
 use databend_common_pipeline::core::Event;
@@ -112,7 +115,12 @@ impl Processor for HashSendTransform {
             let data_block = self.input.pull_data().unwrap()?;
 
             if let Some(indices) = self.scatter.scatter_indices(&data_block)? {
+                let partition_started = Instant::now();
                 let ready_blocks = self.partition_stream.partition(indices, data_block, true);
+                Profile::record_usize_profile(
+                    ProfileStatisticsName::ExchangePartitionTime,
+                    usize::try_from(partition_started.elapsed().as_nanos()).unwrap_or(usize::MAX),
+                );
 
                 let mut active_downstream = false;
                 let mut futures = Vec::new();
