@@ -59,6 +59,34 @@ fn test_group_by_hash() -> anyhow::Result<()> {
 }
 
 #[test]
+fn test_serializer_nullable_compound_keys() -> anyhow::Result<()> {
+    let string = "a string long enough to use a backing buffer";
+    let block = DataBlock::new_from_columns(vec![
+        StringType::from_opt_data(vec![Some(string), None]),
+        UInt64Type::from_opt_data(vec![Some(7), Some(9)]),
+    ]);
+    let columns = ProjectedBlock::project(&[0, 1], &block);
+    let method = HashMethodSerializer::default();
+    let state = method.build_keys_state(columns, block.num_rows())?;
+    let keys = method
+        .build_keys_iter(&state)?
+        .map(|key| key.to_vec())
+        .collect::<Vec<_>>();
+
+    let mut first = vec![1];
+    first.extend_from_slice(&(string.len() as u64).to_ne_bytes());
+    first.extend_from_slice(string.as_bytes());
+    first.push(1);
+    first.extend_from_slice(&7_u64.to_ne_bytes());
+
+    let mut second = vec![0, 1];
+    second.extend_from_slice(&9_u64.to_ne_bytes());
+
+    assert_eq!(keys, vec![first, second]);
+    Ok(())
+}
+
+#[test]
 fn test_group_by_hash_decimal() -> anyhow::Result<()> {
     let size_128 = DecimalSize::new_unchecked(20, 2);
     let size_256 = DecimalSize::new_unchecked(40, 2);
