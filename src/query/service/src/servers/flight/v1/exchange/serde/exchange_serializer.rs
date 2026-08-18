@@ -202,7 +202,12 @@ pub fn serialize_block(
             false => {
                 let schema = data_block.infer_schema();
                 let arrow_schema = ArrowSchema::from(&schema);
+                let block_to_arrow_started = Instant::now();
                 let batch = data_block.to_record_batch_with_dataschema(&schema)?;
+                Profile::record_usize_profile(
+                    ProfileStatisticsName::ExchangeBlockToArrowTime,
+                    elapsed_nanos(block_to_arrow_started),
+                );
                 batches_to_flight_data_with_options(
                     &arrow_schema,
                     vec![batch],
@@ -245,7 +250,12 @@ pub fn batches_to_flight_data_with_options(
     options: &IpcWriteOptions,
     native_lz4: bool,
 ) -> std::result::Result<(FlightData, Vec<FlightData>, Vec<FlightData>), ArrowError> {
+    let schema_encode_started = Instant::now();
     let schema_flight_data: FlightData = SchemaAsIpc::new(schema, options).into();
+    Profile::record_usize_profile(
+        ProfileStatisticsName::ExchangeIpcEncodeTime,
+        elapsed_nanos(schema_encode_started),
+    );
     let mut dictionaries = Vec::with_capacity(batches.len());
     let mut flight_data = Vec::with_capacity(batches.len());
 
@@ -253,16 +263,30 @@ pub fn batches_to_flight_data_with_options(
     let mut dictionary_tracker = DictionaryTracker::new(false);
 
     for batch in batches.iter() {
+        let batch_encode_started = Instant::now();
         let (encoded_dictionaries, mut encoded_batch) =
             data_gen.encoded_batch(batch, &mut dictionary_tracker, options)?;
+        Profile::record_usize_profile(
+            ProfileStatisticsName::ExchangeIpcEncodeTime,
+            elapsed_nanos(batch_encode_started),
+        );
         if native_lz4 {
+            let compression_started = Instant::now();
             encoded_batch = compress_record_batch_lz4(encoded_batch)?;
+            Profile::record_usize_profile(
+                ProfileStatisticsName::ExchangeLz4CompressTime,
+                elapsed_nanos(compression_started),
+            );
         }
 
         dictionaries.extend(encoded_dictionaries.into_iter().map(Into::into));
         flight_data.push(encoded_batch.into());
     }
     Ok((schema_flight_data, dictionaries, flight_data))
+}
+
+fn elapsed_nanos(started: Instant) -> usize {
+    usize::try_from(started.elapsed().as_nanos()).unwrap_or(usize::MAX)
 }
 
 #[cfg(test)]

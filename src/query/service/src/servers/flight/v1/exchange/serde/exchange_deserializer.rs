@@ -16,11 +16,14 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::sync::Arc;
+use std::time::Instant;
 
 use arrow_buffer::Buffer;
 use arrow_flight::utils::flight_data_to_arrow_batch;
 use arrow_ipc::root_as_message;
 use arrow_schema::Schema as ArrowSchema;
+use databend_common_base::runtime::profile::Profile;
+use databend_common_base::runtime::profile::ProfileStatisticsName;
 use databend_common_exception::ErrorCode;
 use databend_common_exception::Result;
 use databend_common_expression::BlockMetaInfo;
@@ -100,6 +103,7 @@ pub fn deserialize_block(
     schema: &DataSchema,
     arrow_schema: Arc<ArrowSchema>,
 ) -> Result<DataBlock> {
+    let ipc_decode_started = Instant::now();
     let mut dictionaries_by_id = HashMap::new();
     for dict_packet in dict {
         if let DataPacket::Dictionary(data) = dict_packet {
@@ -120,8 +124,22 @@ pub fn deserialize_block(
     }
 
     let batch = flight_data_to_arrow_batch(&fragment_data.data, arrow_schema, &dictionaries_by_id)?;
+    Profile::record_usize_profile(
+        ProfileStatisticsName::ExchangeIpcDecodeTime,
+        elapsed_nanos(ipc_decode_started),
+    );
+
+    let arrow_to_block_started = Instant::now();
     let data_block = DataBlock::from_record_batch(schema, &batch)?;
+    Profile::record_usize_profile(
+        ProfileStatisticsName::ExchangeArrowToBlockTime,
+        elapsed_nanos(arrow_to_block_started),
+    );
     Ok(data_block)
+}
+
+fn elapsed_nanos(started: Instant) -> usize {
+    usize::try_from(started.elapsed().as_nanos()).unwrap_or(usize::MAX)
 }
 
 impl BlockMetaTransform<ExchangeDeserializeMeta> for TransformExchangeDeserializer {
