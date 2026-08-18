@@ -250,3 +250,57 @@ pub fn batches_to_flight_data_with_options(
     }
     Ok((schema_flight_data, dictionaries, flight_data))
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use arrow_flight::utils::flight_data_to_arrow_batch;
+    use arrow_ipc::CompressionType;
+    use databend_common_expression::types::StringType;
+    use databend_common_expression::types::UInt64Type;
+    use databend_common_expression::DataBlock;
+    use databend_common_expression::FromData;
+
+    use super::*;
+    use crate::servers::flight::v1::exchange::serde::exchange_deserializer::flight_data_to_arrow_batch_zero_copy;
+
+    #[test]
+    fn test_exchange_lz4_string_view_zero_copy_roundtrip() {
+        let strings = StringType::from_data(vec![
+            "a repeated string value long enough to use an external StringView buffer";
+            256
+        ]);
+        let numbers = UInt64Type::from_data((0..256_u64).collect::<Vec<_>>());
+        let block = DataBlock::new_from_columns(vec![strings, numbers]);
+        let schema = block.infer_schema();
+        let arrow_schema = ArrowSchema::from(&schema);
+        let original = block.to_record_batch_with_dataschema(&schema).unwrap();
+        let options = IpcWriteOptions::default()
+            .try_with_compression(Some(CompressionType::LZ4_FRAME))
+            .unwrap();
+
+        let (_, dictionaries, batches) =
+            batches_to_flight_data_with_options(&arrow_schema, vec![original.clone()], &options)
+                .unwrap();
+        assert!(dictionaries.is_empty());
+        assert_eq!(batches.len(), 1);
+
+        let decoded = flight_data_to_arrow_batch(
+            &batches[0],
+            Arc::new(arrow_schema.clone()),
+            &HashMap::new(),
+        )
+        .unwrap();
+        assert_eq!(decoded, original);
+
+        let decoded = flight_data_to_arrow_batch_zero_copy(
+            &batches[0],
+            Arc::new(arrow_schema),
+            &HashMap::new(),
+        )
+        .unwrap();
+        assert_eq!(decoded, original);
+    }
+}
