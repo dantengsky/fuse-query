@@ -268,8 +268,8 @@ fn restore_string_views(
 }
 
 fn validate_binary_view_utf8(array: &BinaryViewArray) -> std::result::Result<(), ArrowError> {
-    for index in 0..array.views().len() {
-        simdutf8::basic::from_utf8(array.value(index)).map_err(|_| {
+    for (index, value) in array.bytes_iter().enumerate() {
+        simdutf8::basic::from_utf8(value).map_err(|_| {
             ArrowError::InvalidArgumentError(format!("Encountered non-UTF-8 data at index {index}"))
         })?;
     }
