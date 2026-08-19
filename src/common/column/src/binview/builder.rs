@@ -128,6 +128,12 @@ impl<T: ViewType + ?Sized> BinaryViewColumnBuilder<T> {
         self.views.len() * 16 + self.total_buffer_len
     }
 
+    /// The total length of values referenced by the views.
+    #[inline]
+    pub fn total_bytes_len(&self) -> usize {
+        self.total_bytes_len
+    }
+
     /// # Safety
     /// - caller must ensure the view and buffers match.
     #[inline]

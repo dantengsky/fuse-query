@@ -160,8 +160,10 @@ impl BlockMetaTransform<ExchangeShuffleMeta> for TransformScatterExchangeSeriali
         let mut new_blocks = Vec::with_capacity(meta.blocks.len());
         for (index, block) in meta.blocks.into_iter().enumerate() {
             new_blocks.push(match self.local_pos == index {
+                // Local partition can keep shared StringView buffers.
                 true => block,
-                false => serialize_block(0, block, &self.options)?,
+                // Compact before IPC so remote Flight payloads do not retain whole-source buffers.
+                false => serialize_block(0, block.compact_string_buffers(), &self.options)?,
             });
         }
 

@@ -60,6 +60,17 @@ impl DataBlock {
         self.take_inner(taker)
     }
 
+    /// Take rows while preserving Arc-backed StringView buffers.
+    pub fn take_preserving_string_views<I>(&self, indices: &I) -> Result<Self>
+    where I: TakeIndex + ?Sized {
+        if indices.is_empty() {
+            return Ok(self.slice(0..0));
+        }
+
+        let taker = TakeVisitor::new(indices).with_preserve_string_views(true);
+        self.take_inner(taker)
+    }
+
     fn take_inner<I>(&self, mut taker: TakeVisitor<I>) -> Result<Self>
     where I: TakeIndex + ?Sized {
         let entries = self
@@ -80,6 +91,7 @@ pub(super) struct TakeVisitor<'a, I: ?Sized> {
     indices: &'a I,
     result: Option<Value<AnyType>>,
     optimize_size_enable: bool,
+    preserve_string_views: bool,
 }
 
 impl<'a, I> TakeVisitor<'a, I>
@@ -90,6 +102,7 @@ where I: TakeIndex + ?Sized
             indices,
             result: None,
             optimize_size_enable: false,
+            preserve_string_views: false,
         }
     }
 
@@ -98,9 +111,17 @@ where I: TakeIndex + ?Sized
         self
     }
 
+    /// Keep Arc-backed StringView buffers instead of copying selected strings.
+    /// Callers that ship the result over the network should compact afterwards.
+    pub fn with_preserve_string_views(mut self, preserve_string_views: bool) -> Self {
+        self.preserve_string_views = preserve_string_views;
+        self
+    }
+
     fn should_optimize_size(&self, num_rows: usize) -> bool {
-        self.optimize_size_enable
-            || num_rows as f64 * SELECTIVITY_THRESHOLD > self.indices.len() as f64
+        !self.preserve_string_views
+            && (self.optimize_size_enable
+                || num_rows as f64 * SELECTIVITY_THRESHOLD > self.indices.len() as f64)
     }
 
     pub fn take_any_value(&mut self, value: Value<AnyType>) -> Result<Value<AnyType>> {
@@ -290,6 +311,32 @@ where I: TakeIndex + ?Sized
 }
 
 impl Column {
+    /// Rebuild string views with compact backing buffers, including nested string columns.
+    pub fn compact_string_buffers(self) -> Self {
+        match self {
+            Column::String(c) => Column::String(c.gc()),
+            Column::Nullable(n) => {
+                let (column, validity) = n.destructure();
+                NullableColumn::new_column(column.compact_string_buffers(), validity)
+            }
+            Column::Tuple(fields) => Column::Tuple(
+                fields
+                    .into_iter()
+                    .map(Column::compact_string_buffers)
+                    .collect(),
+            ),
+            Column::Array(array) => Column::Array(Box::new(ArrayColumn::new(
+                array.underlying_column().compact_string_buffers(),
+                array.underlying_offsets(),
+            ))),
+            Column::Map(map) => Column::Map(Box::new(ArrayColumn::new(
+                map.underlying_column().compact_string_buffers(),
+                map.underlying_offsets(),
+            ))),
+            other => other,
+        }
+    }
+
     pub fn maybe_gc(self) -> Self {
         match self {
             Column::String(c) => Column::String(c.maybe_gc()),

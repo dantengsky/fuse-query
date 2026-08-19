@@ -33,7 +33,11 @@ impl DataBlock {
 
         let mut results = Vec::with_capacity(scatter_size);
         for indices in scatter_indices.iter().take(scatter_size) {
-            let block = self.take_with_optimize_size(indices.as_slice())?;
+            // Share Arc-backed StringView buffers across partitions. Callers that send a
+            // partition over the network must compact remote blocks before serialization.
+            // Plain take() still copies when selectivity is below SELECTIVITY_THRESHOLD, so
+            // NodeToNodeHash (e.g. 3-way ~33%) would otherwise keep paying StringView rebuilds.
+            let block = self.take_preserving_string_views(indices.as_slice())?;
             results.push(block);
         }
 
