@@ -17,11 +17,13 @@ use std::sync::Arc;
 use arrow_array::Array;
 use arrow_array::ArrayRef;
 use arrow_array::RecordBatch;
+use arrow_array::cast::AsArray;
 use arrow_schema::DataType as ArrowDataType;
 use arrow_schema::Field;
 use arrow_schema::Schema;
 use databend_common_column::binary::BinaryColumn;
 use databend_common_column::binview::StringColumn;
+use databend_common_column::binview::View;
 use databend_common_column::bitmap::Bitmap;
 use databend_common_column::buffer::Buffer;
 use databend_common_column::types::months_days_micros;
@@ -464,16 +466,65 @@ fn try_to_binary_column(array: ArrayRef) -> Result<BinaryColumn> {
     Ok(BinaryColumn::new(values.into(), offsets.into()))
 }
 
-// Convert from `ArrayData` into BinaryColumn ignores the validity
+// Convert from Arrow string arrays into StringColumn.
+// Prefer reusing LargeUtf8 values buffers instead of arrow_cast copying into Utf8View.
 fn try_to_string_column(array: ArrayRef) -> Result<StringColumn> {
-    let array = if !matches!(array.data_type(), ArrowDataType::Utf8View) {
-        arrow_cast::cast(array.as_ref(), &ArrowDataType::Utf8View)?
-    } else {
-        array
-    };
+    if matches!(array.data_type(), ArrowDataType::Utf8View) {
+        let data = array.to_data();
+        return Ok(data.into());
+    }
 
+    if matches!(array.data_type(), ArrowDataType::LargeUtf8) {
+        if let Some(col) = try_large_utf8_to_string_column_reuse(array.as_ref()) {
+            return Ok(col);
+        }
+    }
+
+    let array = arrow_cast::cast(array.as_ref(), &ArrowDataType::Utf8View)?;
     let data = array.to_data();
     Ok(data.into())
+}
+
+/// Build StringColumn from LargeUtf8 by reusing the values buffer and only creating views.
+fn try_large_utf8_to_string_column_reuse(array: &dyn Array) -> Option<StringColumn> {
+    let array = array.as_string::<i64>();
+    let offsets = array.offsets().as_ref();
+    let values: Buffer<u8> = array.values().clone().into();
+    let values_len = values.len();
+
+    // Offsets must fit View's u32 offset/length fields.
+    if *offsets.last()? as usize != values_len {
+        return None;
+    }
+
+    let mut views = Vec::with_capacity(array.len());
+    let mut total_bytes_len = 0usize;
+    for window in offsets.windows(2) {
+        let start = window[0];
+        let end = window[1];
+        if start < 0 || end < start {
+            return None;
+        }
+        let start_u = start as usize;
+        let end_u = end as usize;
+        if end_u > values_len || start > u32::MAX as i64 || (end - start) > u32::MAX as i64 {
+            return None;
+        }
+        let bytes = &values.as_slice()[start_u..end_u];
+        total_bytes_len += bytes.len();
+        views.push(View::new_from_bytes(bytes, 0, start as u32));
+    }
+
+    let buffers: std::sync::Arc<[Buffer<u8>]> = std::sync::Arc::from(vec![values]);
+    let col = unsafe {
+        StringColumn::new_unchecked(
+            views.into(),
+            buffers,
+            Some(total_bytes_len),
+            Some(values_len),
+        )
+    };
+    Some(col)
 }
 
 fn try_to_opaque_column(array: ArrayRef, size: usize) -> Result<OpaqueColumn> {

@@ -20,6 +20,22 @@ use crate::DataBlock;
 impl DataBlock {
     pub fn scatter<I>(&self, indices: &[I], scatter_size: usize) -> Result<Vec<Self>>
     where I: databend_common_column::types::Index {
+        self.scatter_with_local(indices, scatter_size, None)
+    }
+
+    /// Scatter rows into `scatter_size` partitions.
+    ///
+    /// When `local_pos` is set, the local partition keeps Arc-backed StringView buffers
+    /// (`take_preserving_string_views`), while remote partitions are rebuilt compactly
+    /// (`take_with_optimize_size`) so Flight IPC does not need a second rewrite pass and
+    /// does not ship whole source buffers.
+    pub fn scatter_with_local<I>(
+        &self,
+        indices: &[I],
+        scatter_size: usize,
+        local_pos: Option<usize>,
+    ) -> Result<Vec<Self>>
+    where I: databend_common_column::types::Index {
         if indices.is_empty() {
             let mut result = Vec::with_capacity(scatter_size);
             result.push(self.clone());
@@ -32,12 +48,13 @@ impl DataBlock {
         let scatter_indices = Self::divide_indices_by_scatter_size(indices, scatter_size);
 
         let mut results = Vec::with_capacity(scatter_size);
-        for indices in scatter_indices.iter().take(scatter_size) {
-            // Share Arc-backed StringView buffers across partitions. Callers that send a
-            // partition over the network must compact remote blocks before serialization.
-            // Plain take() still copies when selectivity is below SELECTIVITY_THRESHOLD, so
-            // NodeToNodeHash (e.g. 3-way ~33%) would otherwise keep paying StringView rebuilds.
-            let block = self.take_preserving_string_views(indices.as_slice())?;
+        for (partition, indices) in scatter_indices.iter().take(scatter_size).enumerate() {
+            let block = match local_pos {
+                Some(local) if local == partition => {
+                    self.take_preserving_string_views(indices.as_slice())?
+                }
+                _ => self.take_with_optimize_size(indices.as_slice())?,
+            };
             results.push(block);
         }
 

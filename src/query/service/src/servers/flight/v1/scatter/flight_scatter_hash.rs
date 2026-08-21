@@ -42,6 +42,7 @@ pub struct HashFlightScatter {
     func_ctx: FunctionContext,
     hash_key: Vec<Expr>,
     scatter_size: usize,
+    local_pos: usize,
 }
 
 impl HashFlightScatter {
@@ -68,6 +69,7 @@ impl HashFlightScatter {
             func_ctx,
             scatter_size,
             hash_key,
+            local_pos,
         }))
     }
 }
@@ -78,6 +80,7 @@ struct OneHashKeyFlightScatter {
     func_ctx: FunctionContext,
     indices_scalar: Expr,
     default_scatter_index: u64,
+    local_pos: usize,
 }
 
 impl OneHashKeyFlightScatter {
@@ -117,6 +120,7 @@ impl OneHashKeyFlightScatter {
             func_ctx,
             indices_scalar,
             default_scatter_index,
+            local_pos,
         }))
     }
 }
@@ -132,7 +136,12 @@ impl FlightScatter for OneHashKeyFlightScatter {
 
         let indices = evaluator.run(&self.indices_scalar).unwrap();
         let indices = get_hash_values(indices, num, self.default_scatter_index)?;
-        let data_blocks = DataBlock::scatter(&data_block, &indices, self.scatter_size)?;
+        let data_blocks = DataBlock::scatter_with_local(
+            &data_block,
+            &indices,
+            self.scatter_size,
+            Some(self.local_pos),
+        )?;
 
         let block_meta = data_block.get_meta();
         let mut res = Vec::with_capacity(data_blocks.len());
@@ -161,7 +170,12 @@ impl FlightScatter for HashFlightScatter {
         let indices = self.build_scatter_indices(&data_block)?;
 
         let block_meta = data_block.get_meta();
-        let data_blocks = DataBlock::scatter(&data_block, &indices, self.scatter_size)?;
+        let data_blocks = DataBlock::scatter_with_local(
+            &data_block,
+            &indices,
+            self.scatter_size,
+            Some(self.local_pos),
+        )?;
 
         let mut res = Vec::with_capacity(data_blocks.len());
         for data_block in data_blocks {
@@ -243,11 +257,11 @@ fn get_hash_values(
             _ => unreachable!(),
         },
         Value::Column(c) => {
-            if let Ok(column) = NumberType::<u64>::try_downcast_column(&c) {
-                return Ok(column);
+            if !c.is_nullable() {
+                return NumberType::<u64>::try_downcast_column(&c);
             }
 
-            let mut column = NullableType::<NumberType<u64>>::try_downcast_column(&c).unwrap();
+            let mut column = NullableType::<NumberType<u64>>::try_downcast_column(&c)?;
             let null_map = column.validity;
             if null_map.null_count() == 0 {
                 return Ok(column.column);
@@ -398,6 +412,17 @@ mod tests {
             )?;
             assert_eq!(nullable, non_nullable);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn extracts_nullable_hash_values() -> Result<()> {
+        let column = UInt64Type::from_data_with_validity(vec![11, 12, 13, 14], vec![
+            true, false, true, false,
+        ]);
+
+        let hashes = get_hash_values(Value::Column(column), 4, 7)?;
+        assert_eq!(hashes.as_slice(), &[11, 7, 13, 7]);
         Ok(())
     }
 

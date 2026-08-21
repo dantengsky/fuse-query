@@ -295,9 +295,19 @@ where I: TakeIndex + ?Sized
     fn take_string_types(&mut self, col: &StringColumn) -> StringColumn {
         if self.should_optimize_size(col.len()) {
             let mut builder = StringColumnBuilder::with_capacity(self.indices.len());
+            // Reserve only non-inline payload for the selected rows so compact take
+            // does not thrash through push_value growth.
+            let mut data_bytes = 0usize;
+            for index in self.indices.iter() {
+                let view = unsafe { *col.views().get_unchecked(index) };
+                if view.length as usize > 12 {
+                    data_bytes += view.length as usize;
+                }
+            }
+            builder.reserve_data(data_bytes);
             for index in self.indices.iter() {
                 unsafe {
-                    builder.put_and_commit(col.index_unchecked(index));
+                    builder.put_view_from_column_unchecked(col, index);
                 }
             }
             builder.build()

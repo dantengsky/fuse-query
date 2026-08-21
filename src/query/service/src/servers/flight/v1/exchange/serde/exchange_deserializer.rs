@@ -44,6 +44,7 @@ use databend_common_pipeline_transforms::processors::BlockMetaTransform;
 use databend_common_pipeline_transforms::processors::BlockMetaTransformer;
 use databend_common_pipeline_transforms::processors::UnknownMode;
 
+use crate::servers::flight::v1::exchange::serde::exchange_serializer::flight_wire_schema;
 use crate::servers::flight::v1::ipc_compression::decompress_record_batch_lz4;
 use crate::servers::flight::v1::packets::DataPacket;
 use crate::servers::flight::v1::packets::FragmentData;
@@ -64,6 +65,7 @@ impl TransformExchangeDeserializer {
         schema: &DataSchemaRef,
     ) -> ProcessorPtr {
         let arrow_schema = ArrowSchema::from(schema.as_ref());
+        let arrow_schema = flight_wire_schema(&arrow_schema);
 
         ProcessorPtr::create(BlockMetaTransformer::create(
             input,
@@ -92,7 +94,7 @@ impl TransformExchangeDeserializer {
 
         if let Some(metadata) = &meta {
             if let Some(dynamic_schema) = metadata.override_block_schema() {
-                arrow_schema = Arc::new(ArrowSchema::from(dynamic_schema.as_ref()));
+                arrow_schema = Arc::new(flight_wire_schema(&ArrowSchema::from(dynamic_schema.as_ref())));
                 schema = dynamic_schema;
             }
         }

@@ -566,7 +566,7 @@ pub fn test_scatter() -> databend_common_exception::Result<()> {
 }
 
 #[test]
-fn test_scatter_shares_string_view_buffers_until_compacted()
+fn test_scatter_hybrid_local_shares_remote_compacts()
 -> databend_common_exception::Result<()> {
     use databend_common_expression::DataBlock;
     use databend_common_expression::types::StringType;
@@ -583,34 +583,29 @@ fn test_scatter_shares_string_view_buffers_until_compacted()
     let source_buffer = source_col.data_buffers()[0].as_ptr();
     let block = DataBlock::new_from_columns(vec![source]);
 
-    let scattered = block.scatter(&[0_u32, 1, 0, 1], 2)?;
+    // Local partition 0 shares; remote partition 1 is compacted in one pass.
+    let scattered = block.scatter_with_local(&[0_u32, 1, 0, 1], 2, Some(0))?;
     assert_eq!(scattered.len(), 2);
 
     let local = scattered[0].get_by_offset(0).to_column();
     let remote = scattered[1].get_by_offset(0).to_column();
-    let Column::String(remote_shared) = &remote else {
+    let Column::String(local_col) = &local else {
         unreachable!()
     };
-    assert_eq!(remote_shared.data_buffers()[0].as_ptr(), source_buffer);
-
-    let remote = remote.compact_string_buffers();
-    let Column::String(local) = local else {
-        unreachable!()
-    };
-    let Column::String(remote) = remote else {
+    let Column::String(remote_col) = &remote else {
         unreachable!()
     };
 
-    assert_eq!(local.iter().collect::<Vec<_>>(), vec![
+    assert_eq!(local_col.iter().collect::<Vec<_>>(), vec![
         "partition zero first buffered string",
         "partition zero second buffered string",
     ]);
-    assert_eq!(remote.iter().collect::<Vec<_>>(), vec![
+    assert_eq!(remote_col.iter().collect::<Vec<_>>(), vec![
         "partition one first buffered string",
         "partition one second buffered string",
     ]);
-    assert_eq!(local.data_buffers()[0].as_ptr(), source_buffer);
-    assert_ne!(remote.data_buffers()[0].as_ptr(), source_buffer);
+    assert_eq!(local_col.data_buffers()[0].as_ptr(), source_buffer);
+    assert_ne!(remote_col.data_buffers()[0].as_ptr(), source_buffer);
     Ok(())
 }
 

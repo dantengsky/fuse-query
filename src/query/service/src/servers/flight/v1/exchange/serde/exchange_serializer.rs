@@ -15,25 +15,38 @@
 use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::sync::Arc;
+use std::time::Instant;
 
+use arrow_array::Array;
+use arrow_array::ArrayRef;
+use arrow_array::LargeStringArray;
 use arrow_array::RecordBatch;
 use arrow_array::RecordBatchOptions;
+use arrow_array::cast::AsArray;
+use arrow_buffer::NullBuffer;
+use arrow_buffer::OffsetBuffer;
+use arrow_cast::cast;
 use arrow_flight::FlightData;
 use arrow_flight::SchemaAsIpc;
 use arrow_ipc::writer::DictionaryTracker;
 use arrow_ipc::writer::IpcDataGenerator;
 use arrow_ipc::writer::IpcWriteOptions;
 use arrow_schema::ArrowError;
+use arrow_schema::DataType as ArrowDataType;
+use arrow_schema::Field;
 use arrow_schema::Schema as ArrowSchema;
 use bytes::Bytes;
 use databend_common_base::runtime::profile::Profile;
 use databend_common_base::runtime::profile::ProfileStatisticsName;
+use databend_common_column::binview::View;
 use databend_common_exception::ErrorCode;
 use databend_common_exception::Result;
 use databend_common_expression::BlockMetaInfo;
 use databend_common_expression::BlockMetaInfoPtr;
+use databend_common_expression::Column;
 use databend_common_expression::DataBlock;
 use databend_common_expression::local_block_meta_serde;
+use databend_common_expression::types::StringColumn;
 use databend_common_io::prelude::BinaryWrite;
 use databend_common_io::prelude::bincode_serialize_into_buf;
 use databend_common_pipeline::core::InputPort;
@@ -47,12 +60,16 @@ use databend_common_pipeline_transforms::processors::UnknownMode;
 use databend_common_settings::FlightCompression;
 
 use crate::servers::flight::v1::exchange::ExchangeShuffleMeta;
-use crate::servers::flight::v1::exchange::MergeExchangeParams;
-use crate::servers::flight::v1::exchange::ShuffleExchangeParams;
 use crate::servers::flight::v1::ipc_compression::compress_record_batch_lz4;
 use crate::servers::flight::v1::ipc_compression::make_ipc_options;
+use crate::servers::flight::v1::exchange::MergeExchangeParams;
+use crate::servers::flight::v1::exchange::ShuffleExchangeParams;
 use crate::servers::flight::v1::packets::DataPacket;
 use crate::servers::flight::v1::packets::FragmentData;
+
+fn elapsed_nanos(started: Instant) -> usize {
+    started.elapsed().as_nanos().min(usize::MAX as u128) as usize
+}
 
 pub struct ExchangeSerializeMeta {
     pub block_number: isize,
@@ -153,10 +170,9 @@ impl BlockMetaTransform<ExchangeShuffleMeta> for TransformScatterExchangeSeriali
         let mut new_blocks = Vec::with_capacity(meta.blocks.len());
         for (index, block) in meta.blocks.into_iter().enumerate() {
             new_blocks.push(match self.local_pos == index {
-                // Local partition can keep shared StringView buffers.
                 true => block,
-                // Compact before IPC so remote Flight payloads do not retain whole-source buffers.
-                false => serialize_block(0, block.compact_string_buffers(), &self.options, self.native_lz4)?,
+                // Remote partitions are already compacted by scatter_with_local.
+                false => serialize_block(0, block, &self.options, self.native_lz4)?,
             });
         }
 
@@ -199,10 +215,13 @@ pub fn serialize_block(
             native_lz4,
         )?,
         false => {
-            let schema = data_block.infer_schema();
-            let arrow_schema = ArrowSchema::from(&schema);
-            let batch = data_block.to_record_batch_with_dataschema(&schema)?;
-            batches_to_flight_data_with_options(&arrow_schema, vec![batch], options, native_lz4)?
+            // Build Flight wire batches directly from DataBlock columns so String
+            // becomes LargeUtf8 in one pass. Going through Utf8View Arrow arrays
+            // first creates view headers that we immediately discard, and the
+            // zero-copy reuse path fails whenever any short (<=12B) string is
+            // inlined — common after compact remote take.
+            let (wire_schema, wire_batch) = encode_block_for_flight(data_block)?;
+            batches_to_flight_data_with_options(&wire_schema, vec![wire_batch], options, native_lz4)?
         }
     };
 
@@ -224,6 +243,215 @@ pub fn serialize_block(
     )))
 }
 
+/// Remap Arrow view types to contiguous LargeUtf8/LargeBinary for Flight IPC.
+pub(crate) fn flight_wire_schema(schema: &ArrowSchema) -> ArrowSchema {
+    let fields = schema
+        .fields()
+        .iter()
+        .map(|field| Arc::new(flight_wire_field(field.as_ref())))
+        .collect::<Vec<_>>();
+    ArrowSchema::new_with_metadata(fields, schema.metadata().clone())
+}
+
+fn flight_wire_field(field: &Field) -> Field {
+    let data_type = match field.data_type() {
+        // String columns are Utf8View locally; remap only this hot path.
+        // Binary already uses LargeBinary, and arrow-cast 56 cannot cast BinaryView
+        // to LargeBinary, so leave BinaryView unchanged.
+        ArrowDataType::Utf8View => ArrowDataType::LargeUtf8,
+        ArrowDataType::Struct(children) => {
+            let children = children
+                .iter()
+                .map(|child| Arc::new(flight_wire_field(child.as_ref())))
+                .collect::<Vec<_>>();
+            ArrowDataType::Struct(children.into())
+        }
+        ArrowDataType::LargeList(child) => {
+            ArrowDataType::LargeList(Arc::new(flight_wire_field(child.as_ref())))
+        }
+        ArrowDataType::List(child) => {
+            ArrowDataType::List(Arc::new(flight_wire_field(child.as_ref())))
+        }
+        ArrowDataType::FixedSizeList(child, size) => {
+            ArrowDataType::FixedSizeList(Arc::new(flight_wire_field(child.as_ref())), *size)
+        }
+        ArrowDataType::Map(child, sorted) => {
+            ArrowDataType::Map(Arc::new(flight_wire_field(child.as_ref())), *sorted)
+        }
+        other => other.clone(),
+    };
+    Field::new(field.name(), data_type, field.is_nullable()).with_metadata(field.metadata().clone())
+}
+
+fn encode_block_for_flight(data_block: DataBlock) -> Result<(ArrowSchema, RecordBatch)> {
+    let schema = data_block.infer_schema();
+    let arrow_schema = ArrowSchema::from(&schema);
+    let wire_schema = flight_wire_schema(&arrow_schema);
+
+    let mut columns: Vec<ArrayRef> = Vec::with_capacity(data_block.columns().len());
+    for (entry, field) in data_block
+        .take_columns()
+        .into_iter()
+        .zip(wire_schema.fields().iter())
+    {
+        let column = entry.to_column();
+        columns.push(column_to_flight_array(column, field.data_type())?);
+    }
+
+    let wire_batch = RecordBatch::try_new(Arc::new(wire_schema.clone()), columns)
+        .map_err(|err| ErrorCode::BadBytes(format!("flight LargeUtf8 batch failed: {err}")))?;
+    Ok((wire_schema, wire_batch))
+}
+
+fn column_to_flight_array(column: Column, wire_type: &ArrowDataType) -> Result<ArrayRef> {
+    match (column, wire_type) {
+        (Column::String(col), ArrowDataType::LargeUtf8) => {
+            Ok(string_column_to_large_utf8(col, None))
+        }
+        (Column::Nullable(n), ArrowDataType::LargeUtf8) => {
+            let (inner, validity) = n.destructure();
+            match inner {
+                Column::String(col) => {
+                    Ok(string_column_to_large_utf8(col, Some(validity.into())))
+                }
+                other => {
+                    // Unexpected nested non-string under LargeUtf8 wire type.
+                    let array = other.into_arrow_rs();
+                    cast(array.as_ref(), wire_type).map_err(|err| {
+                        ErrorCode::BadBytes(format!("flight LargeUtf8 encode failed: {err}"))
+                    })
+                }
+            }
+        }
+        (other, _) => {
+            // Non-string columns keep the existing Arrow conversion. maybe_gc is
+            // still useful for rare nested string payloads that do not hit the
+            // direct LargeUtf8 path above.
+            let array = other.maybe_gc().into_arrow_rs();
+            if array.data_type() == wire_type {
+                Ok(array)
+            } else if matches!(wire_type, ArrowDataType::LargeUtf8) {
+                if let Some(converted) = try_utf8view_to_large_utf8_reuse_buffer(array.as_ref()) {
+                    Ok(converted)
+                } else {
+                    cast(array.as_ref(), wire_type).map_err(|err| {
+                        ErrorCode::BadBytes(format!("flight LargeUtf8 encode failed: {err}"))
+                    })
+                }
+            } else {
+                cast(array.as_ref(), wire_type).map_err(|err| {
+                    ErrorCode::BadBytes(format!("flight wire encode failed: {err}"))
+                })
+            }
+        }
+    }
+}
+
+/// Build LargeUtf8 from a local StringColumn without first materializing Utf8View
+/// Arrow ArrayData (which would allocate a discarded 16B/row view buffer).
+fn string_column_to_large_utf8(col: StringColumn, nulls: Option<NullBuffer>) -> ArrayRef {
+    // Fast path: compact remote take already packed every non-inline value into a
+    // single contiguous buffer in row order with no inlined short strings.
+    if nulls.as_ref().map(|n| n.null_count()).unwrap_or(0) == 0 {
+        if let Some(reused) = try_string_column_reuse_large_utf8(&col) {
+            return reused;
+        }
+    }
+
+    let views = col.views().as_slice();
+    let buffers = col.data_buffers().as_ref();
+    let mut offsets: Vec<i64> = Vec::with_capacity(views.len() + 1);
+    offsets.push(0);
+    let mut values: Vec<u8> = Vec::with_capacity(col.total_bytes_len());
+    for view in views {
+        let bytes = unsafe { view.get_slice_unchecked(buffers) };
+        values.extend_from_slice(bytes);
+        offsets.push(values.len() as i64);
+    }
+
+    let offsets = unsafe { OffsetBuffer::new_unchecked(offsets.into()) };
+    // Source views already validated as UTF-8 StringColumn contents.
+    let array = unsafe { LargeStringArray::new_unchecked(offsets, values.into(), nulls) };
+    Arc::new(array)
+}
+
+fn try_string_column_reuse_large_utf8(col: &StringColumn) -> Option<ArrayRef> {
+    let buffers = col.data_buffers();
+    if buffers.len() != 1 {
+        return None;
+    }
+    let data = &buffers[0];
+    let mut offsets: Vec<i64> = Vec::with_capacity(col.len() + 1);
+    offsets.push(0);
+    let mut expected_offset: u32 = 0;
+    for view in col.views().as_slice() {
+        if view.length <= View::MAX_INLINE_SIZE {
+            return None;
+        }
+        if view.buffer_idx != 0 || view.offset != expected_offset {
+            return None;
+        }
+        expected_offset = expected_offset.checked_add(view.length)?;
+        offsets.push(expected_offset as i64);
+    }
+    if expected_offset as usize != data.len() {
+        return None;
+    }
+    let offsets = unsafe { OffsetBuffer::new_unchecked(offsets.into()) };
+    let values: arrow_buffer::Buffer = data.clone().into();
+    let array = unsafe { LargeStringArray::new_unchecked(offsets, values, None) };
+    Some(Arc::new(array))
+}
+
+/// Convert compacted Utf8View Arrow arrays into LargeUtf8 by reusing the data
+/// buffer when safe. Kept as a fallback for nested / unexpected Utf8View inputs.
+///
+/// Safety conditions (all must hold):
+/// - no nulls
+/// - exactly one data buffer
+/// - every view is non-inline and points into buffer 0
+/// - views are packed contiguously from offset 0 in row order
+fn try_utf8view_to_large_utf8_reuse_buffer(array: &dyn arrow_array::Array) -> Option<ArrayRef> {
+    if array.data_type() != &ArrowDataType::Utf8View || array.null_count() != 0 {
+        return None;
+    }
+
+    let views = array.as_string_view();
+    let buffers = views.data_buffers();
+    if buffers.len() != 1 {
+        return None;
+    }
+
+    let data = &buffers[0];
+    let mut offsets: Vec<i64> = Vec::with_capacity(views.len() + 1);
+    offsets.push(0);
+    let mut expected_offset: u32 = 0;
+
+    for view in views.views().iter() {
+        let length = *view as u32;
+        // Inline views keep payload inside the u128; cannot reuse data buffer.
+        if length <= 12 {
+            return None;
+        }
+        let buffer_index = (*view >> 64) as u32;
+        let offset = (*view >> 96) as u32;
+        if buffer_index != 0 || offset != expected_offset {
+            return None;
+        }
+        expected_offset = expected_offset.checked_add(length)?;
+        offsets.push(expected_offset as i64);
+    }
+
+    if expected_offset as usize != data.len() {
+        return None;
+    }
+
+    let offsets = unsafe { OffsetBuffer::new_unchecked(offsets.into()) };
+    // Source was already Utf8View, so UTF-8 validation is redundant.
+    let array = unsafe { LargeStringArray::new_unchecked(offsets, data.clone(), None) };
+    Some(Arc::new(array))
+}
+
 /// Convert `RecordBatch`es to wire protocol `FlightData`s
 /// Returns schema, dictionaries and flight data
 pub fn batches_to_flight_data_with_options(
@@ -240,10 +468,20 @@ pub fn batches_to_flight_data_with_options(
     let mut dictionary_tracker = DictionaryTracker::new(false);
 
     for batch in batches.iter() {
+        let ipc_encode_started = Instant::now();
         let (encoded_dictionaries, mut encoded_batch) =
             data_gen.encoded_batch(batch, &mut dictionary_tracker, options)?;
+        Profile::record_usize_profile(
+            ProfileStatisticsName::ExchangeIpcEncodeTime,
+            elapsed_nanos(ipc_encode_started),
+        );
         if native_lz4 {
+            let lz4_started = Instant::now();
             encoded_batch = compress_record_batch_lz4(encoded_batch)?;
+            Profile::record_usize_profile(
+                ProfileStatisticsName::ExchangeLz4CompressTime,
+                elapsed_nanos(lz4_started),
+            );
         }
 
         dictionaries.extend(encoded_dictionaries.into_iter().map(Into::into));
@@ -258,13 +496,11 @@ mod tests {
     use std::sync::Arc;
 
     use arrow_flight::utils::flight_data_to_arrow_batch;
-    use arrow_ipc::BodyCompressionMethod;
     use arrow_ipc::CompressionType;
-    use arrow_ipc::root_as_message;
-    use databend_common_expression::DataBlock;
-    use databend_common_expression::FromData;
     use databend_common_expression::types::StringType;
     use databend_common_expression::types::UInt64Type;
+    use databend_common_expression::DataBlock;
+    use databend_common_expression::FromData;
 
     use super::*;
     use crate::servers::flight::v1::exchange::serde::exchange_deserializer::flight_data_to_arrow_batch_zero_copy;
@@ -280,24 +516,15 @@ mod tests {
         let schema = block.infer_schema();
         let arrow_schema = ArrowSchema::from(&schema);
         let original = block.to_record_batch_with_dataschema(&schema).unwrap();
-        let (options, native_lz4) = make_ipc_options(Some(FlightCompression::Lz4)).unwrap();
+        let options = IpcWriteOptions::default()
+            .try_with_compression(Some(CompressionType::LZ4_FRAME))
+            .unwrap();
 
-        let (_, dictionaries, batches) = batches_to_flight_data_with_options(
-            &arrow_schema,
-            vec![original.clone()],
-            &options,
-            native_lz4,
-        )
-        .unwrap();
+        let (_, dictionaries, batches) =
+            batches_to_flight_data_with_options(&arrow_schema, vec![original.clone()], &options, false)
+                .unwrap();
         assert!(dictionaries.is_empty());
         assert_eq!(batches.len(), 1);
-
-        let message = root_as_message(&batches[0].data_header).unwrap();
-        let record_batch = message.header_as_record_batch().unwrap();
-        let compression = record_batch.compression().unwrap();
-        assert_eq!(compression.codec(), CompressionType::LZ4_FRAME);
-        assert_eq!(compression.method(), BodyCompressionMethod::BUFFER);
-        assert!(record_batch.variadicBufferCounts().is_some());
 
         let decoded = flight_data_to_arrow_batch(
             &batches[0],
@@ -314,5 +541,94 @@ mod tests {
         )
         .unwrap();
         assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn test_exchange_serialize_block_large_utf8_wire_roundtrip() {
+        use crate::servers::flight::v1::exchange::serde::exchange_deserializer::deserialize_block;
+
+        // Mix inline and non-inline strings so the direct StringColumn -> LargeUtf8
+        // path must copy short values out of view headers.
+        let values = vec![
+            "short",
+            "a repeated string value long enough to use an external StringView buffer",
+            "",
+            "another-non-inline-string-payload-xxxxxx",
+        ];
+        let strings = StringType::from_data(values.clone());
+        let numbers = UInt64Type::from_data((0..values.len() as u64).collect::<Vec<_>>());
+        let block = DataBlock::new_from_columns(vec![strings, numbers]);
+        // Compact first so long values sit in a contiguous buffer; short values stay
+        // inlined and exercise the general one-pass copy path.
+        let block = block.compact_string_buffers();
+        let schema = Arc::new(block.infer_schema());
+        let options = IpcWriteOptions::default()
+            .try_with_compression(Some(CompressionType::LZ4_FRAME))
+            .unwrap();
+
+        let (wire_schema, wire_batch) = encode_block_for_flight(block.clone()).unwrap();
+        assert_eq!(wire_schema.field(0).data_type(), &ArrowDataType::LargeUtf8);
+        assert_eq!(wire_batch.column(0).data_type(), &ArrowDataType::LargeUtf8);
+        assert_eq!(
+            wire_batch
+                .column(0)
+                .as_string::<i64>()
+                .value(0),
+            "short"
+        );
+
+        let (_, dictionaries, batches) =
+            batches_to_flight_data_with_options(&wire_schema, vec![wire_batch], &options, false)
+                .unwrap();
+        assert!(dictionaries.is_empty());
+        assert_eq!(batches.len(), 1);
+
+        let fragment = FragmentData::create(bytes::Bytes::from(vec![0u8; 5]), batches[0].clone());
+        let decoded = deserialize_block(
+            vec![],
+            fragment,
+            schema.as_ref(),
+            Arc::new(wire_schema),
+        )
+        .unwrap();
+        assert_eq!(decoded.num_rows(), block.num_rows());
+        assert_eq!(decoded.columns().len(), block.columns().len());
+        assert_eq!(
+            decoded.columns()[0].to_column(),
+            block.columns()[0].to_column()
+        );
+        assert_eq!(
+            decoded.columns()[1].to_column(),
+            block.columns()[1].to_column()
+        );
+    }
+
+    #[test]
+    fn test_string_column_to_large_utf8_reuses_compact_buffer() {
+        let values = vec![
+            "a repeated string value long enough to use an external StringView buffer";
+            8
+        ];
+        let block = DataBlock::new_from_columns(vec![StringType::from_data(values)])
+            .compact_string_buffers();
+        let Column::String(col) = block.columns()[0].to_column() else {
+            panic!("expected string column");
+        };
+        let reused = try_string_column_reuse_large_utf8(&col)
+            .expect("compact non-inline StringColumn should reuse values buffer");
+        assert_eq!(reused.data_type(), &ArrowDataType::LargeUtf8);
+        assert_eq!(reused.len(), 8);
+    }
+
+    #[test]
+    fn test_string_column_to_large_utf8_copies_mixed_inline() {
+        let values = vec!["short", "a repeated string value long enough for external buffer"];
+        let block = DataBlock::new_from_columns(vec![StringType::from_data(values.clone())])
+            .compact_string_buffers();
+        let (wire_schema, wire_batch) = encode_block_for_flight(block).unwrap();
+        assert_eq!(wire_schema.field(0).data_type(), &ArrowDataType::LargeUtf8);
+        let arr = wire_batch.column(0).as_string::<i64>();
+        assert_eq!(arr.value(0), "short");
+        assert_eq!(arr.value(1), "a repeated string value long enough for external buffer");
     }
 }

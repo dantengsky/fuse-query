@@ -110,6 +110,18 @@ impl<T: ViewType + ?Sized> BinaryViewColumnBuilder<T> {
         self.views.reserve(additional);
     }
 
+    /// Reserve capacity for non-inline value bytes in the in-progress data buffer.
+    ///
+    /// Callers that know an upper bound (for example `BinaryViewColumnGeneric::gc`) should
+    /// reserve once up front so `push_value` does not thrash through repeated large reallocs
+    /// capped at 16 MiB.
+    pub fn reserve_data(&mut self, additional: usize) {
+        if additional == 0 {
+            return;
+        }
+        self.in_progress_buffer.reserve(additional);
+    }
+
     #[inline]
     pub fn len(&self) -> usize {
         self.views.len()
@@ -136,20 +148,49 @@ impl<T: ViewType + ?Sized> BinaryViewColumnBuilder<T> {
 
     /// # Safety
     /// - caller must ensure the view and buffers match.
+    /// - if `v` is non-inline, caller should have reserved enough data capacity
+    ///   (see `reserve_data`) to avoid thrashing reallocs.
     #[inline]
-    pub(crate) unsafe fn push_view_unchecked(&mut self, v: View, buffers: &[Buffer<u8>]) {
+    pub unsafe fn push_view_unchecked(&mut self, v: View, buffers: &[Buffer<u8>]) {
         let len = v.length;
-        if len <= 12 {
+        if len <= View::MAX_INLINE_SIZE {
             self.total_bytes_len += len as usize;
-            self.views.push(v)
-        } else {
-            unsafe {
-                let data = buffers.get_unchecked(v.buffer_idx as usize);
-                let offset = v.offset as usize;
-                let bytes = data.get_unchecked(offset..offset + len as usize);
-                let t = T::from_bytes_unchecked(bytes);
-                self.push_value(t)
+            self.views.push(v);
+            return;
+        }
+
+        // Fast path for gc/compact: copy bytes into the (preferably pre-reserved)
+        // in-progress buffer and rewrite buffer_idx/offset, avoiding the generic
+        // push_value path that rebuilds a View from &str / &[u8].
+        unsafe {
+            let data = buffers.get_unchecked(v.buffer_idx as usize);
+            let offset = v.offset as usize;
+            let bytes = data.get_unchecked(offset..offset + len as usize);
+
+            self.total_bytes_len += bytes.len();
+            self.total_buffer_len += bytes.len();
+            let required_cap = self.in_progress_buffer.len() + bytes.len();
+            if self.in_progress_buffer.capacity() < required_cap
+                || self.in_progress_buffer.len() > u32::MAX as usize
+            {
+                let doubled = self
+                    .in_progress_buffer
+                    .capacity()
+                    .saturating_mul(2)
+                    .max(DEFAULT_BLOCK_SIZE);
+                let new_capacity = doubled.max(required_cap).max(bytes.len());
+                let in_progress = Vec::with_capacity(new_capacity);
+                let flushed = std::mem::replace(&mut self.in_progress_buffer, in_progress);
+                if !flushed.is_empty() {
+                    self.completed_buffers.push(flushed.into());
+                }
             }
+
+            let new_offset = self.in_progress_buffer.len() as u32;
+            self.in_progress_buffer.extend_from_slice(bytes);
+            let buffer_idx = self.completed_buffers.len() as u32;
+            self.views
+                .push(View::new_noninline_unchecked(bytes, buffer_idx, new_offset));
         }
     }
 
@@ -221,9 +262,15 @@ impl<T: ViewType + ?Sized> BinaryViewColumnBuilder<T> {
             let offset_will_not_fit = self.in_progress_buffer.len() > u32::MAX as usize;
 
             if does_not_fit_in_buffer || offset_will_not_fit {
-                let new_capacity = (self.in_progress_buffer.capacity() * 2)
-                    .clamp(DEFAULT_BLOCK_SIZE, 16 * 1024 * 1024)
-                    .max(bytes.len());
+                // Grow geometrically, but never below the bytes still needed for this push.
+                // Keep a soft 16 MiB default step for unknown streaming writers; callers that
+                // know the final size should call `reserve_data` first.
+                let doubled = self
+                    .in_progress_buffer
+                    .capacity()
+                    .saturating_mul(2)
+                    .max(DEFAULT_BLOCK_SIZE);
+                let new_capacity = doubled.max(required_cap).max(bytes.len());
                 let in_progress = Vec::with_capacity(new_capacity);
                 let flushed = std::mem::replace(&mut self.in_progress_buffer, in_progress);
                 if !flushed.is_empty() {
@@ -499,5 +546,24 @@ mod tests {
             ],
             &["short0", "short1", "short2", "short3", "short4", "short5"],
         );
+    }
+
+    #[test]
+    fn gc_reserves_data_buffer_for_non_inline_values() {
+        // Build a column large enough that the old 16 MiB soft-cap growth would flush many
+        // buffers while copying during gc(). With reserve_data(), one in-progress buffer is enough.
+        let values: Vec<String> = (0..50_000)
+            .map(|i| format!("buffered-value-{i:05}-abcdefghijklmnopqrstuvwxyz"))
+            .collect();
+        let column: StringColumn = values.iter().map(|s| s.as_str()).collect();
+        assert!(!column.data_buffers().is_empty());
+
+        let compacted = column.clone().gc();
+        assert_eq!(compacted.len(), column.len());
+        assert_eq!(compacted.iter().next(), column.iter().next());
+        assert_eq!(compacted.iter().last(), column.iter().last());
+        // After a full rewrite of contiguous non-inline values, a single data buffer is expected.
+        assert_eq!(compacted.data_buffers().len(), 1);
+        assert!(compacted.total_buffer_len() >= compacted.total_bytes_len());
     }
 }

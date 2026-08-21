@@ -366,6 +366,9 @@ impl<T: ViewType + ?Sized> BinaryViewColumnGeneric<T> {
             return self;
         }
         let mut mutable = BinaryViewColumnBuilder::with_capacity(self.len());
+        // `total_bytes_len` is an upper bound on non-inline payload we will copy. Reserving it
+        // once avoids the push_value path repeatedly reallocating through the 16 MiB soft cap.
+        mutable.reserve_data(self.total_bytes_len());
         let buffers = self.buffers.as_ref();
 
         for view in self.views.as_ref() {
@@ -381,6 +384,7 @@ impl<T: ViewType + ?Sized> BinaryViewColumnGeneric<T> {
         }
         let mut map = HashMap::new();
         let mut mutable = BinaryViewColumnBuilder::with_capacity(self.len());
+        mutable.reserve_data(self.total_bytes_len());
         let buffers = self.buffers.as_ref();
 
         for (idx, (val, view)) in self.iter().zip(self.views.iter()).enumerate() {

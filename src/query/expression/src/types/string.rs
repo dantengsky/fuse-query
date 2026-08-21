@@ -319,6 +319,24 @@ impl StringColumnBuilder {
         self.data.push_value(item);
     }
 
+    /// Copy one string view from `col` into this builder, preserving bytes without
+    /// going through `&str` / `push_value`.
+    ///
+    /// # Safety
+    /// `index` must be in-bounds for `col`.
+    #[inline]
+    pub unsafe fn put_view_from_column_unchecked(&mut self, col: &StringColumn, index: usize) {
+        unsafe {
+            self.data
+                .push_view_unchecked(*col.views().get_unchecked(index), col.data_buffers());
+        }
+    }
+
+    #[inline]
+    pub fn reserve_data(&mut self, additional: usize) {
+        self.data.reserve_data(additional);
+    }
+
     #[inline]
     pub fn put_slice(&mut self, item: &[u8]) {
         self.row_buffer.extend_from_slice(item);

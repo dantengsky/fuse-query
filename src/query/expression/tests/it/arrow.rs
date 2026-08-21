@@ -46,3 +46,57 @@ fn test_from_arrow_rs() {
         assert_eq!(c.len(), arr.len());
     }
 }
+
+#[test]
+fn test_large_utf8_to_string_reuses_values() {
+    use arrow_array::LargeStringArray;
+
+    let values = vec![
+        "short",
+        "a repeated string value long enough to use an external StringView buffer",
+        "",
+        "another-non-inline-string-payload-xxxxxx",
+    ];
+    let array = Arc::new(LargeStringArray::from(values.clone())) as ArrayRef;
+    let column = Column::from_arrow_rs(array, &DataType::String).unwrap();
+    let Column::String(col) = column else {
+        panic!("expected string column");
+    };
+    assert_eq!(col.len(), values.len());
+    for (idx, expected) in values.iter().enumerate() {
+        assert_eq!(unsafe { col.index_unchecked(idx) }, *expected);
+    }
+}
+
+#[test]
+fn test_nullable_large_utf8_to_string_roundtrip() {
+    use arrow_array::LargeStringArray;
+
+    let values = vec![
+        Some("short"),
+        None,
+        Some("a repeated string value long enough to use an external StringView buffer"),
+        Some(""),
+    ];
+    let array = Arc::new(LargeStringArray::from(values.clone())) as ArrayRef;
+    let column = Column::from_arrow_rs(array, &DataType::String.wrap_nullable()).unwrap();
+    let arrow = column.clone().into_arrow_rs();
+    assert_eq!(arrow.len(), values.len());
+    assert_eq!(arrow.null_count(), 1);
+    // Round-trip through LargeUtf8 decode should preserve null bitmap and valid strings.
+    let Column::Nullable(null_col) = column else {
+        panic!("expected nullable column");
+    };
+    assert!(!null_col.validity.get_bit(1));
+    assert!(null_col.validity.get_bit(0));
+    assert!(null_col.validity.get_bit(2));
+    let Column::String(col) = null_col.column.clone() else {
+        panic!("expected string column");
+    };
+    assert_eq!(unsafe { col.index_unchecked(0) }, "short");
+    assert_eq!(
+        unsafe { col.index_unchecked(2) },
+        "a repeated string value long enough to use an external StringView buffer"
+    );
+    assert_eq!(unsafe { col.index_unchecked(3) }, "");
+}
