@@ -161,8 +161,8 @@ async fn test_top_n_distributed_plan_has_partial_and_final_stages() -> Result<()
     let ctx = fixture
         .new_query_ctx_with_cluster(
             databend_query::test_kits::ClusterDescriptor::new()
-                .with_node_info("node-a", "127.0.0.1:9090", "cluster", "warehouse")
-                .with_node_info("node-b", "127.0.0.1:9091", "cluster", "warehouse")
+                .with_node("node-a", "127.0.0.1:9090")
+                .with_node("node-b", "127.0.0.1:9091")
                 .with_local_id("node-a"),
         )
         .await?;
