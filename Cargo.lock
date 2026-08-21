@@ -5936,6 +5936,7 @@ dependencies = [
  "arrow-array 56.2.0",
  "arrow-buffer 56.2.0",
  "arrow-cast 56.2.0",
+ "arrow-data 56.2.0",
  "arrow-flight",
  "arrow-ipc 56.2.0",
  "arrow-json 56.2.0",

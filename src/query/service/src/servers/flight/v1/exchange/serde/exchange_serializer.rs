@@ -60,7 +60,7 @@ use databend_common_pipeline_transforms::processors::UnknownMode;
 use databend_common_settings::FlightCompression;
 
 use crate::servers::flight::v1::exchange::ExchangeShuffleMeta;
-use crate::servers::flight::v1::ipc_compression::compress_record_batch_lz4;
+use crate::servers::flight::v1::ipc_compression::encode_record_batch_native_lz4;
 use crate::servers::flight::v1::ipc_compression::make_ipc_options;
 use crate::servers::flight::v1::exchange::MergeExchangeParams;
 use crate::servers::flight::v1::exchange::ShuffleExchangeParams;
@@ -469,20 +469,23 @@ pub fn batches_to_flight_data_with_options(
 
     for batch in batches.iter() {
         let ipc_encode_started = Instant::now();
-        let (encoded_dictionaries, mut encoded_batch) =
-            data_gen.encoded_batch(batch, &mut dictionary_tracker, options)?;
-        Profile::record_usize_profile(
-            ProfileStatisticsName::ExchangeIpcEncodeTime,
-            elapsed_nanos(ipc_encode_started),
-        );
-        if native_lz4 {
+        let (encoded_dictionaries, encoded_batch) = if native_lz4 {
+            // One-shot native C-LZ4: compress each IPC buffer directly into the
+            // final body (no uncompressed staging body).
             let lz4_started = Instant::now();
-            encoded_batch = compress_record_batch_lz4(encoded_batch)?;
+            let encoded = encode_record_batch_native_lz4(batch)?;
             Profile::record_usize_profile(
                 ProfileStatisticsName::ExchangeLz4CompressTime,
                 elapsed_nanos(lz4_started),
             );
-        }
+            (Vec::new(), encoded)
+        } else {
+            data_gen.encoded_batch(batch, &mut dictionary_tracker, options)?
+        };
+        Profile::record_usize_profile(
+            ProfileStatisticsName::ExchangeIpcEncodeTime,
+            elapsed_nanos(ipc_encode_started),
+        );
 
         dictionaries.extend(encoded_dictionaries.into_iter().map(Into::into));
         flight_data.push(encoded_batch.into());
@@ -562,9 +565,8 @@ mod tests {
         // inlined and exercise the general one-pass copy path.
         let block = block.compact_string_buffers();
         let schema = Arc::new(block.infer_schema());
-        let options = IpcWriteOptions::default()
-            .try_with_compression(Some(CompressionType::LZ4_FRAME))
-            .unwrap();
+        let (options, native_lz4) = make_ipc_options(Some(FlightCompression::Lz4)).unwrap();
+        assert!(native_lz4);
 
         let (wire_schema, wire_batch) = encode_block_for_flight(block.clone()).unwrap();
         assert_eq!(wire_schema.field(0).data_type(), &ArrowDataType::LargeUtf8);
@@ -578,7 +580,7 @@ mod tests {
         );
 
         let (_, dictionaries, batches) =
-            batches_to_flight_data_with_options(&wire_schema, vec![wire_batch], &options, false)
+            batches_to_flight_data_with_options(&wire_schema, vec![wire_batch], &options, true)
                 .unwrap();
         assert!(dictionaries.is_empty());
         assert_eq!(batches.len(), 1);

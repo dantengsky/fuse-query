@@ -33,7 +33,7 @@ use databend_common_io::prelude::BinaryWrite;
 use databend_common_io::prelude::bincode_serialize_into_buf;
 use databend_common_settings::FlightCompression;
 
-use crate::servers::flight::v1::ipc_compression::compress_record_batch_lz4;
+use crate::servers::flight::v1::ipc_compression::encode_record_batch_native_lz4;
 use crate::servers::flight::v1::ipc_compression::make_ipc_options;
 
 use super::outbound_buffer::ExchangeSinkBuffer;
@@ -60,11 +60,11 @@ fn encode_batch(
 ) -> Result<(Vec<FlightData>, FlightData)> {
     let data_gen = IpcDataGenerator::default();
     let mut dictionary_tracker = DictionaryTracker::new(false);
-    let (encoded_dictionaries, mut encoded_batch) =
-        data_gen.encoded_batch(batch, &mut dictionary_tracker, ipc_options)?;
-    if native_lz4 {
-        encoded_batch = compress_record_batch_lz4(encoded_batch)?;
-    }
+    let (encoded_dictionaries, encoded_batch) = if native_lz4 {
+        (Vec::new(), encode_record_batch_native_lz4(batch)?)
+    } else {
+        data_gen.encoded_batch(batch, &mut dictionary_tracker, ipc_options)?
+    };
     let dictionaries: Vec<FlightData> = encoded_dictionaries.into_iter().map(Into::into).collect();
     let batch_data: FlightData = encoded_batch.into();
     Ok((dictionaries, batch_data))
