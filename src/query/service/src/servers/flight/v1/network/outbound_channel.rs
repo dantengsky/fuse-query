@@ -20,7 +20,6 @@ use arrow_array::RecordBatch;
 use arrow_array::RecordBatchOptions;
 use arrow_flight::FlightData;
 use arrow_flight::FlightDescriptor;
-use arrow_ipc::CompressionType;
 use arrow_ipc::writer::DictionaryTracker;
 use arrow_ipc::writer::IpcDataGenerator;
 use arrow_ipc::writer::IpcWriteOptions;
@@ -33,6 +32,9 @@ use databend_common_expression::DataBlock;
 use databend_common_io::prelude::BinaryWrite;
 use databend_common_io::prelude::bincode_serialize_into_buf;
 use databend_common_settings::FlightCompression;
+
+use crate::servers::flight::v1::ipc_compression::compress_record_batch_lz4;
+use crate::servers::flight::v1::ipc_compression::make_ipc_options;
 
 use super::outbound_buffer::ExchangeSinkBuffer;
 
@@ -51,26 +53,18 @@ pub trait OutboundChannel: Send + Sync {
 // Shared serialization helpers
 // ---------------------------------------------------------------------------
 
-fn flight_compression(compression: Option<FlightCompression>) -> Option<CompressionType> {
-    match compression {
-        None => None,
-        Some(FlightCompression::Lz4) => Some(CompressionType::LZ4_FRAME),
-        Some(FlightCompression::Zstd) => Some(CompressionType::ZSTD),
-    }
-}
-
-fn make_ipc_options(compression: Option<FlightCompression>) -> Result<IpcWriteOptions> {
-    Ok(IpcWriteOptions::default().try_with_compression(flight_compression(compression))?)
-}
-
 fn encode_batch(
     batch: &RecordBatch,
     ipc_options: &IpcWriteOptions,
+    native_lz4: bool,
 ) -> Result<(Vec<FlightData>, FlightData)> {
     let data_gen = IpcDataGenerator::default();
     let mut dictionary_tracker = DictionaryTracker::new(false);
-    let (encoded_dictionaries, encoded_batch) =
+    let (encoded_dictionaries, mut encoded_batch) =
         data_gen.encoded_batch(batch, &mut dictionary_tracker, ipc_options)?;
+    if native_lz4 {
+        encoded_batch = compress_record_batch_lz4(encoded_batch)?;
+    }
     let dictionaries: Vec<FlightData> = encoded_dictionaries.into_iter().map(Into::into).collect();
     let batch_data: FlightData = encoded_batch.into();
     Ok((dictionaries, batch_data))
@@ -79,6 +73,7 @@ fn encode_batch(
 fn serialize_to_batches(
     block: DataBlock,
     ipc_options: &IpcWriteOptions,
+    native_lz4: bool,
 ) -> Result<(Vec<FlightData>, Vec<FlightData>)> {
     if block.is_empty() {
         let empty_batch = RecordBatch::try_new_with_options(
@@ -86,14 +81,12 @@ fn serialize_to_batches(
             vec![],
             &RecordBatchOptions::new().with_row_count(Some(0)),
         )?;
-        let (dicts, batch) = encode_batch(&empty_batch, ipc_options)?;
+        let (dicts, batch) = encode_batch(&empty_batch, ipc_options, native_lz4)?;
         Ok((dicts, vec![batch]))
     } else {
         let schema = block.infer_schema();
-        let arrow_schema = ArrowSchema::from(&schema);
         let batch = block.to_record_batch_with_dataschema(&schema)?;
-        let _ = &arrow_schema; // used for schema inference, batch carries it
-        let (dicts, batch_data) = encode_batch(&batch, ipc_options)?;
+        let (dicts, batch_data) = encode_batch(&batch, ipc_options, native_lz4)?;
         Ok((dicts, vec![batch_data]))
     }
 }
@@ -103,6 +96,7 @@ fn serialize_to_batches(
 pub fn serialize_block(
     block: DataBlock,
     ipc_options: &IpcWriteOptions,
+    native_lz4: bool,
     descriptor: Option<FlightDescriptor>,
 ) -> Result<Vec<FlightData>> {
     if block.is_empty() && block.get_meta().is_none() {
@@ -114,7 +108,7 @@ pub fn serialize_block(
     meta.write_scalar_own(block.num_rows() as u32)?;
     bincode_serialize_into_buf(&mut meta, &block.get_meta())?;
 
-    let (dict_data, value_data) = serialize_to_batches(block, ipc_options)?;
+    let (dict_data, value_data) = serialize_to_batches(block, ipc_options, native_lz4)?;
 
     let meta_bytes: Bytes = meta.into();
     let mut result = Vec::with_capacity(dict_data.len() + value_data.len());
@@ -154,6 +148,7 @@ pub struct RemoteChannel {
     channel_id: usize,
     buffer: Arc<ExchangeSinkBuffer>,
     ipc_options: IpcWriteOptions,
+    native_lz4: bool,
 }
 
 impl RemoteChannel {
@@ -163,11 +158,13 @@ impl RemoteChannel {
         buffer: Arc<ExchangeSinkBuffer>,
         compression: Option<FlightCompression>,
     ) -> Result<Arc<dyn OutboundChannel>> {
+        let (ipc_options, native_lz4) = make_ipc_options(compression)?;
         Ok(Arc::new(Self {
             dest_idx,
             channel_id,
             buffer,
-            ipc_options: make_ipc_options(compression)?,
+            ipc_options,
+            native_lz4,
         }))
     }
 }
@@ -184,7 +181,7 @@ impl OutboundChannel for RemoteChannel {
         Profile::record_usize_profile(ProfileStatisticsName::ExchangeRows, block.num_rows());
         Profile::record_usize_profile(ProfileStatisticsName::ExchangeBytes, block.memory_size());
 
-        let flight_data_list = serialize_block(block, &self.ipc_options, None)?;
+        let flight_data_list = serialize_block(block, &self.ipc_options, self.native_lz4, None)?;
 
         let tid_prefix = (self.channel_id as u16).to_le_bytes();
 

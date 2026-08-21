@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod actions;
+pub(crate) mod ipc_compression;
 pub mod exchange;
 pub mod network;
 pub mod packets;

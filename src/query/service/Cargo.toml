@@ -29,6 +29,7 @@ memory-profiling = ["databend-common-base/memory-profiling", "databend-common-ht
 storage-hdfs = ["opendal/services-hdfs", "databend-common-storage/storage-hdfs"]
 
 [dependencies]
+lz4 = { workspace = true }
 anyhow = { workspace = true }
 arrow-array = { workspace = true }
 arrow-buffer = { workspace = true }

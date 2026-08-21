@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::sync::Arc;
+use std::time::Instant;
 
 use arrow_array::ArrayRef;
 use arrow_array::RecordBatch;
@@ -24,6 +25,8 @@ use arrow_flight::FlightData;
 use arrow_ipc::root_as_message;
 use arrow_schema::ArrowError;
 use arrow_schema::Schema as ArrowSchema;
+use databend_common_base::runtime::profile::Profile;
+use databend_common_base::runtime::profile::ProfileStatisticsName;
 use databend_common_exception::ErrorCode;
 use databend_common_exception::Result;
 use databend_common_expression::BlockMetaInfo;
@@ -41,8 +44,13 @@ use databend_common_pipeline_transforms::processors::BlockMetaTransform;
 use databend_common_pipeline_transforms::processors::BlockMetaTransformer;
 use databend_common_pipeline_transforms::processors::UnknownMode;
 
+use crate::servers::flight::v1::ipc_compression::decompress_record_batch_lz4;
 use crate::servers::flight::v1::packets::DataPacket;
 use crate::servers::flight::v1::packets::FragmentData;
+
+fn elapsed_nanos(started: Instant) -> usize {
+    started.elapsed().as_nanos().min(usize::MAX as u128) as usize
+}
 
 pub struct TransformExchangeDeserializer {
     schema: DataSchemaRef,
@@ -122,12 +130,41 @@ pub fn deserialize_block(
         }
     }
 
-    let batch = flight_data_to_arrow_batch_zero_copy(
-        &fragment_data.data,
-        arrow_schema,
-        &dictionaries_by_id,
-    )?;
+    let native_lz4_started = Instant::now();
+    let native_lz4_data = decompress_record_batch_lz4(
+        &fragment_data.data.data_header,
+        &fragment_data.data.data_body,
+    )
+    .map_err(|err| ErrorCode::BadBytes(format!("flight native LZ4 decompress failed: {err}")))?;
+
+    let decoded_data;
+    let flight_data = if let Some(native_lz4_data) = native_lz4_data {
+        Profile::record_usize_profile(
+            ProfileStatisticsName::ExchangeLz4DecompressTime,
+            elapsed_nanos(native_lz4_started),
+        );
+        decoded_data = FlightData {
+            data_header: native_lz4_data.ipc_message.into(),
+            data_body: native_lz4_data.arrow_data.into(),
+            ..fragment_data.data.clone()
+        };
+        &decoded_data
+    } else {
+        &fragment_data.data
+    };
+
+    let ipc_decode_started = Instant::now();
+    let batch = flight_data_to_arrow_batch_zero_copy(flight_data, arrow_schema, &dictionaries_by_id)?;
+    Profile::record_usize_profile(
+        ProfileStatisticsName::ExchangeIpcDecodeTime,
+        elapsed_nanos(ipc_decode_started),
+    );
+    let arrow_to_block_started = Instant::now();
     let data_block = DataBlock::from_record_batch(schema, &batch)?;
+    Profile::record_usize_profile(
+        ProfileStatisticsName::ExchangeArrowToBlockTime,
+        elapsed_nanos(arrow_to_block_started),
+    );
     Ok(data_block)
 }
 
