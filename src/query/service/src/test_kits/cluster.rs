@@ -50,6 +50,38 @@ impl ClusterDescriptor {
         }
     }
 
+    /// Like [`Self::with_node`], but also assigns the cluster and warehouse the
+    /// node belongs to. `NodeInfo::create` leaves both empty, which makes
+    /// `Cluster::unassign` true and causes the interpreter to reject every
+    /// statement with `InvalidWarehouse`, so any test that actually executes
+    /// SQL against a multi-node descriptor needs these set.
+    pub fn with_node_info(
+        self,
+        id: impl Into<String>,
+        addr: impl Into<String>,
+        cluster_id: impl Into<String>,
+        warehouse_id: impl Into<String>,
+    ) -> ClusterDescriptor {
+        let mut new_nodes = self.cluster_nodes_list.clone();
+        let id = id.into();
+        let mut node = NodeInfo::create(
+            id.clone(),
+            "".to_string(),
+            "".to_string(),
+            addr.into(),
+            "".to_string(),
+            DATABEND_COMMIT_VERSION.to_string(),
+            id,
+        );
+        node.cluster_id = cluster_id.into();
+        node.warehouse_id = warehouse_id.into();
+        new_nodes.push(Arc::new(node));
+        ClusterDescriptor {
+            cluster_nodes_list: new_nodes,
+            local_node_id: self.local_node_id,
+        }
+    }
+
     pub fn with_local_id(self, id: impl Into<String>) -> ClusterDescriptor {
         ClusterDescriptor {
             local_node_id: id.into(),
