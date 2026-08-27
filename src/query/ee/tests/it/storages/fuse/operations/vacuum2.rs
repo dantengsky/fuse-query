@@ -13,13 +13,20 @@
 // limitations under the License.
 
 use std::path::Path;
+use std::sync::Arc;
 
+use databend_common_catalog::table::Table;
 use databend_common_exception::ErrorCode;
 use databend_common_exception::Result;
+use databend_common_expression::DataBlock;
+use databend_common_storages_fuse::FuseTable;
+use databend_common_storages_fuse::io::SegmentsIO;
 use databend_enterprise_query::test_kits::context::EESetup;
 use databend_query::sessions::QueryContext;
 use databend_query::sessions::TableContextTableAccess;
 use databend_query::test_kits::TestFixture;
+use databend_storages_common_table_meta::meta::CompactSegmentInfo;
+use futures::TryStreamExt;
 
 // TODO investigate this
 // NOTE: SHOULD specify flavor = "multi_thread", otherwise query execution might be hanged
@@ -113,6 +120,134 @@ async fn test_vacuum2_all() -> anyhow::Result<()> {
 
     check_files_left(&ctx, storage_root, "db1", "t1").await?;
     check_files_left(&ctx, storage_root, "default", "t1").await?;
+
+    Ok(())
+}
+
+/// Regression test for chunked reads of protected gc-root segments.
+///
+/// `do_vacuum2` reads the gc-root's protected segments in chunks of
+/// `VACUUM2_SEGMENT_READ_CHUNK_SIZE` (1000) rather than all at once, so that peak
+/// memory does not scale with the number of protected segments. Every chunk must
+/// contribute its block locations to the protected set: if a single chunk were
+/// skipped or its results dropped, the blocks it protects would be misclassified
+/// as garbage and deleted, silently corrupting a live table.
+///
+/// This test forces the segment count past the chunk boundary (one block per
+/// segment, one row per block) and then asserts every block still referenced by
+/// the surviving snapshot is present on storage after vacuum.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_vacuum2_protected_segments_span_multiple_chunks() -> anyhow::Result<()> {
+    // Must exceed the chunk size used by do_vacuum2, so the read loop runs more
+    // than one iteration and a lost chunk would be observable.
+    const SEGMENT_COUNT: usize = 1001;
+
+    let ee_setup = EESetup::new();
+    let fixture = TestFixture::setup_with_custom(ee_setup).await?;
+
+    let session = fixture.default_session();
+    // Retention 0 so the previous snapshot becomes collectable immediately.
+    session.get_settings().set_data_retention_time_in_days(0)?;
+    // Auto compaction would merge the many tiny segments back together and
+    // defeat the point of the test.
+    session
+        .get_settings()
+        .set_auto_compaction_imperfect_blocks_threshold(0)?;
+
+    let ctx = fixture.new_query_ctx().await?;
+    fixture.create_default_database().await?;
+    let db_name = fixture.default_db_name();
+    let tbl_name = "t_chunked";
+
+    fixture
+        .execute_command(&format!(
+            "create table {}.{} (c int) row_per_block=1 block_per_segment=1",
+            db_name, tbl_name
+        ))
+        .await?;
+
+    // One row per block and one block per segment, so each row lands in its own
+    // segment and the gc-root ends up with SEGMENT_COUNT protected segments.
+    fixture
+        .execute_command(&format!(
+            "insert into {}.{} select number from numbers({})",
+            db_name, tbl_name, SEGMENT_COUNT
+        ))
+        .await?;
+
+    // A second write creates a newer snapshot, so the first one becomes eligible
+    // for collection and vacuum has actual work to do.
+    fixture
+        .execute_command(&format!("insert into {}.{} values (-1)", db_name, tbl_name))
+        .await?;
+
+    // Confirm the setup actually crossed the chunk boundary. If table option
+    // semantics change and segments get merged, the test would silently stop
+    // covering the multi-chunk path, so fail loudly instead.
+    let table = ctx
+        .get_default_catalog()?
+        .get_table(&ctx.get_tenant(), &db_name, tbl_name)
+        .await?;
+    let fuse_table = FuseTable::try_from_table(table.as_ref())?;
+    let snapshot = fuse_table
+        .read_table_snapshot()
+        .await?
+        .expect("snapshot should exist after inserts");
+    assert!(
+        snapshot.segments.len() > 1000,
+        "expected more than 1000 protected segments to cross the chunk boundary, got {}",
+        snapshot.segments.len()
+    );
+
+    // Blocks referenced by the surviving snapshot: none of these may be removed.
+    let segments_io =
+        SegmentsIO::create(ctx.clone(), fuse_table.get_operator(), fuse_table.schema());
+    let mut live_blocks = Vec::new();
+    for chunk in snapshot.segments.chunks(500) {
+        let segments = segments_io
+            .read_segments::<Arc<CompactSegmentInfo>>(chunk, false)
+            .await?;
+        for segment in segments {
+            for block in segment?.block_metas()?.iter() {
+                live_blocks.push(block.location.0.clone());
+            }
+        }
+    }
+    assert_eq!(live_blocks.len(), SEGMENT_COUNT + 1);
+
+    fixture
+        .execute_command(&format!(
+            "call system$fuse_vacuum2('{}', '{}')",
+            db_name, tbl_name
+        ))
+        .await?;
+
+    // The core assertion: every block still referenced by the live snapshot must
+    // survive. Dropping any protected-segment chunk during the read would leave
+    // that chunk's blocks unprotected and delete them here.
+    let operator = fuse_table.get_operator();
+    let mut missing = Vec::new();
+    for loc in &live_blocks {
+        if !operator.exists(loc).await? {
+            missing.push(loc.clone());
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "vacuum deleted {} live block(s) still referenced by the current snapshot; \
+         first few: {:?}",
+        missing.len(),
+        &missing[..missing.len().min(5)]
+    );
+
+    // Sanity check that the table is still readable end to end and no rows were
+    // lost: scanning every row would fail outright if a live block was deleted.
+    let stream = fixture
+        .execute_query(&format!("select c from {}.{}", db_name, tbl_name))
+        .await?;
+    let blocks: Vec<DataBlock> = stream.try_collect().await?;
+    let scanned_rows: usize = blocks.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(scanned_rows, SEGMENT_COUNT + 1);
 
     Ok(())
 }
