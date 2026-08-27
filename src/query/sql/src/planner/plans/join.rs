@@ -255,12 +255,72 @@ impl JoinEquiCondition {
             .collect()
     }
 
+    /// Return the equality-preserving key expressions used by both statistics and execution.
+    pub fn canonical_keys(&self) -> (&ScalarExpr, &ScalarExpr) {
+        if let Some(right) = unwrap_integer_to_string_cast(&self.left, &self.right) {
+            return (&self.left, right);
+        }
+        if let Some(left) = unwrap_integer_to_string_cast(&self.right, &self.left) {
+            return (left, &self.right);
+        }
+        (&self.left, &self.right)
+    }
+
     fn single_columns(&self) -> Option<JoinConditionColumns> {
+        let (left, right) = self.canonical_keys();
         Some(JoinConditionColumns {
-            left: single_used_column(&self.left)?,
-            right: single_used_column(&self.right)?,
+            left: single_used_column(left)?,
+            right: single_used_column(right)?,
         })
     }
+}
+
+/// Remove an integer-to-string round trip when the other equality key is an integer.
+///
+/// Mixed string/integer equality normally uses `Decimal(38, 5)` as the hash key. That coercion is
+/// needed for arbitrary strings such as `"1.2"`, but it is unnecessary when the string is produced
+/// directly from another integer. Both integers must fit losslessly in their normal common numeric
+/// type, so formatting and parsing the value cannot change equality.
+fn unwrap_integer_to_string_cast<'a>(
+    integer_expr: &ScalarExpr,
+    string_expr: &'a ScalarExpr,
+) -> Option<&'a ScalarExpr> {
+    let ScalarExpr::CastExpr(cast) = string_expr else {
+        return None;
+    };
+    if cast.is_try || !matches!(cast.target_type.remove_nullable(), DataType::String) {
+        return None;
+    }
+
+    let integer_type = integer_expr.data_type().ok()?;
+    let DataType::Number(integer_type) = integer_type.remove_nullable() else {
+        return None;
+    };
+    if !integer_type.is_integer() {
+        return None;
+    }
+
+    let source_type = cast.argument.data_type().ok()?;
+    let DataType::Number(source_type) = source_type.remove_nullable() else {
+        return None;
+    };
+    if !source_type.is_integer() {
+        return None;
+    }
+
+    let integer_data_type = DataType::Number(integer_type);
+    let source_data_type = DataType::Number(source_type);
+    let common_type = common_super_type(
+        integer_data_type,
+        source_data_type,
+        &BUILTIN_FUNCTIONS.default_cast_rules,
+    );
+    let Some(DataType::Number(common_type)) = common_type else {
+        return None;
+    };
+    let preserves_equality = integer_type.can_lossless_cast_to(common_type)
+        && source_type.can_lossless_cast_to(common_type);
+    preserves_equality.then_some(cast.argument.as_ref())
 }
 
 /// Join operator. We will choose hash join by default.
@@ -847,9 +907,11 @@ impl JoinStatsEstimator {
             }
         }
 
+        let (left_condition, right_condition) = condition.canonical_keys();
         let condition_stats = match try {
             JoinConditionEstimation {
-                condition,
+                left_condition,
+                right_condition,
                 left_col_stat: left_statistics.column_stats.get(&columns.left)?,
                 right_col_stat: right_statistics.column_stats.get(&columns.right)?,
                 left_cardinality,
@@ -897,7 +959,8 @@ struct JoinConditionColumns {
 }
 
 struct JoinConditionEstimation<'a> {
-    condition: &'a JoinEquiCondition,
+    left_condition: &'a ScalarExpr,
+    right_condition: &'a ScalarExpr,
     left_col_stat: &'a ColumnStat,
     right_col_stat: &'a ColumnStat,
     left_cardinality: f64,
@@ -930,8 +993,8 @@ impl<'a> JoinConditionEstimation<'a> {
         let Some(kind) = mixed_numeric_stat_kind(
             self.left_col_stat,
             self.right_col_stat,
-            &self.condition.left.data_type()?,
-            &self.condition.right.data_type()?,
+            &self.left_condition.data_type()?,
+            &self.right_condition.data_type()?,
         )?
         else {
             return Ok(JoinConditionStats::Skip);
@@ -1255,6 +1318,45 @@ mod tests {
             params: vec![],
             arguments,
         })
+    }
+
+    fn int_column_stat(min: i64, max: i64, ndv: f64) -> ColumnStat {
+        ColumnStat {
+            min: Datum::Int(min),
+            max: Datum::Int(max),
+            ndv: StatEstimate::exact(ndv),
+            null_count: StatCount::exact(0),
+            histogram: None,
+        }
+    }
+
+    fn stat_info(cardinality: f64, column: Symbol, stat: ColumnStat) -> Arc<StatInfo> {
+        Arc::new(StatInfo {
+            cardinality,
+            statistics: Statistics {
+                precise_cardinality: Some(cardinality as u64),
+                column_stats: HashMap::from([(column, stat)]),
+            },
+        })
+    }
+
+    #[test]
+    fn test_canonical_integer_string_keys_drive_join_stats() -> Result<()> {
+        let left_key = column(0, DataType::Number(NumberDataType::Int64));
+        let right_source = column(1, DataType::Number(NumberDataType::Int32));
+        let right_key = cast(right_source, DataType::String);
+        let join = Join {
+            join_type: JoinType::Inner,
+            equi_conditions: vec![JoinEquiCondition::new(left_key, right_key, false)],
+            ..Default::default()
+        };
+        let left = stat_info(4.0, Symbol::new(0), int_column_stat(1, 4, 4.0));
+        let right = stat_info(3.0, Symbol::new(1), int_column_stat(0, 1, 2.0));
+
+        let stats = join.derive_join_stats(left, right)?;
+
+        assert_eq!(stats.cardinality, 3.0);
+        Ok(())
     }
 
     #[test]
