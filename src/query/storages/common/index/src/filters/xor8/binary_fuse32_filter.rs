@@ -101,14 +101,17 @@ impl FilterBuilder for BinaryFuse32Builder {
         }
     }
 
+    fn add_digest(&mut self, digest: u64) {
+        self.digests.insert(digest);
+    }
+
     fn add_digests<'i, I: IntoIterator<Item = &'i u64>>(&mut self, digests: I) {
         self.digests.extend(digests.into_iter().copied());
     }
 
-    fn build(&mut self) -> Result<Self::Filter, Self::Error> {
-        let digests = std::mem::take(&mut self.digests);
-        let len = digests.len();
-        let digests = digests.into_iter().collect::<Vec<_>>();
+    fn build(self) -> Result<Self::Filter, Self::Error> {
+        let len = self.digests.len();
+        let digests = self.digests.into_iter().collect::<Vec<_>>();
         let filter =
             BinaryFuse32::try_from(digests.as_slice()).map_err(BinaryFuse32BuildingError::new)?;
 

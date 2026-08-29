@@ -152,6 +152,14 @@ impl FilterBuilder for FilterImplBuilder {
         }
     }
 
+    fn add_digest(&mut self, digest: u64) {
+        match self {
+            FilterImplBuilder::Xor(filter) => filter.add_digest(digest),
+            FilterImplBuilder::BinaryFuse32(filter) => filter.add_digest(digest),
+            FilterImplBuilder::Ngram(filter) => filter.add_digest(digest),
+        }
+    }
+
     fn add_digests<'i, I: IntoIterator<Item = &'i u64>>(&mut self, digests: I) {
         match self {
             FilterImplBuilder::Xor(filter) => filter.add_digests(digests),
@@ -160,7 +168,7 @@ impl FilterBuilder for FilterImplBuilder {
         }
     }
 
-    fn build(&mut self) -> Result<Self::Filter, Self::Error> {
+    fn build(self) -> Result<Self::Filter, Self::Error> {
         match self {
             FilterImplBuilder::Xor(filter) => Ok(FilterImpl::Xor(filter.build()?)),
             FilterImplBuilder::BinaryFuse32(filter) => {
