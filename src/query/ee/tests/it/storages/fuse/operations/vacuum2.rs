@@ -12,9 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
+use databend_common_catalog::session_type::SessionType;
 use databend_common_catalog::table::Table;
 use databend_common_exception::ErrorCode;
 use databend_common_exception::Result;
@@ -25,6 +28,7 @@ use databend_enterprise_query::test_kits::context::EESetup;
 use databend_query::sessions::QueryContext;
 use databend_query::sessions::TableContextTableAccess;
 use databend_query::test_kits::TestFixture;
+use databend_query::test_kits::execute_command;
 use databend_storages_common_io::dedup_file_locations;
 use databend_storages_common_table_meta::meta::CompactSegmentInfo;
 use futures::TryStreamExt;
@@ -249,6 +253,118 @@ async fn test_vacuum2_protected_segments_span_multiple_chunks() -> anyhow::Resul
     let blocks: Vec<DataBlock> = stream.try_collect().await?;
     let scanned_rows: usize = blocks.iter().map(|b| b.num_rows()).sum();
     assert_eq!(scanned_rows, SEGMENT_COUNT + 1);
+
+    Ok(())
+}
+
+/// An old transaction may have written block objects before a newer snapshot becomes the
+/// vacuum gc-root. Vacuum may delete those uncommitted objects, but the old transaction must
+/// then fail to commit so no committed snapshot can reference a deleted block.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_vacuum2_rejects_transaction_whose_blocks_were_collected() -> anyhow::Result<()> {
+    let fixture = TestFixture::setup_with_custom(EESetup::new()).await?;
+    fixture
+        .default_session()
+        .get_settings()
+        .set_data_retention_time_in_days(0)?;
+    fixture.create_default_database().await?;
+
+    let db_name = fixture.default_db_name();
+    let tbl_name = "t_concurrent_txn";
+    fixture
+        .execute_command(&format!("create table {db_name}.{tbl_name} (c int)"))
+        .await?;
+    fixture
+        .execute_command(&format!("insert into {db_name}.{tbl_name} values (1)"))
+        .await?;
+
+    let catalog_ctx = fixture.new_query_ctx().await?;
+    let table = catalog_ctx
+        .get_default_catalog()?
+        .get_table(&fixture.default_tenant(), &db_name, tbl_name)
+        .await?;
+    let fuse_table = FuseTable::try_from_table(table.as_ref())?;
+    let operator = fuse_table.get_operator();
+    let block_prefix = fuse_table
+        .meta_location_generator()
+        .block_location_prefix()
+        .to_string();
+    let blocks_before_txn = operator
+        .list(&block_prefix)
+        .await?
+        .into_iter()
+        .filter(|entry| entry.metadata().is_file())
+        .map(|entry| entry.path().to_string())
+        .collect::<HashSet<_>>();
+
+    let txn_session = fixture.new_session_with_type(SessionType::Dummy).await?;
+    txn_session
+        .get_settings()
+        .set_data_retention_time_in_days(0)?;
+    let txn_ctx = txn_session
+        .create_query_context(&databend_common_version::BUILD_INFO)
+        .await?;
+    execute_command(txn_ctx.clone(), "begin").await?;
+    execute_command(
+        txn_ctx.clone(),
+        &format!("insert into {db_name}.{tbl_name} values (2)"),
+    )
+    .await?;
+
+    let blocks_after_txn = operator
+        .list(&block_prefix)
+        .await?
+        .into_iter()
+        .filter(|entry| entry.metadata().is_file())
+        .map(|entry| entry.path().to_string())
+        .collect::<HashSet<_>>();
+    let txn_blocks = blocks_after_txn
+        .difference(&blocks_before_txn)
+        .cloned()
+        .collect::<Vec<_>>();
+    assert!(
+        !txn_blocks.is_empty(),
+        "transaction insert should write at least one uncommitted block"
+    );
+
+    // Ensure the next committed snapshot has a strictly later logical timestamp than the
+    // transaction's block objects and can therefore become their gc-root cutoff.
+    tokio::time::sleep(Duration::from_millis(2)).await;
+    fixture
+        .execute_command(&format!("insert into {db_name}.{tbl_name} values (3)"))
+        .await?;
+    fixture
+        .execute_command(&format!(
+            "call system$fuse_vacuum2('{db_name}', '{tbl_name}')"
+        ))
+        .await?;
+
+    for path in &txn_blocks {
+        assert!(
+            !operator.exists(path).await?,
+            "vacuum should collect uncommitted block older than the gc-root: {path}"
+        );
+    }
+
+    let commit_error = execute_command(txn_ctx, "commit")
+        .await
+        .expect_err("transaction must not commit a snapshot referencing collected blocks");
+    assert!(
+        matches!(
+            commit_error.code(),
+            ErrorCode::STORAGE_NOT_FOUND
+                | ErrorCode::TABLE_VERSION_MISMATCHED
+                | ErrorCode::UNRESOLVABLE_CONFLICT
+        ),
+        "unexpected transaction rejection after vacuum collected its blocks: {commit_error}"
+    );
+
+    let stream = fixture
+        .execute_query(&format!("select c from {db_name}.{tbl_name}"))
+        .await?;
+    let blocks: Vec<DataBlock> = stream.try_collect().await?;
+    let committed_rows: usize = blocks.iter().map(|block| block.num_rows()).sum();
+    assert_eq!(committed_rows, 2);
 
     Ok(())
 }
