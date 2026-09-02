@@ -53,16 +53,16 @@ explain select 1 a from numbers(10) group by a;
 EvalScalar
 ├── output columns: [a (#2)]
 ├── expressions: [group_item (#1)]
-├── estimated rows: 3.33
+├── estimated rows: 1.00
 └── AggregateFinal
     ├── output columns: [a (#1)]
     ├── group by: [a]
     ├── aggregate functions: []
-    ├── estimated rows: 3.33
+    ├── estimated rows: 1.00
     └── AggregatePartial
         ├── group by: [a]
         ├── aggregate functions: []
-        ├── estimated rows: 3.33
+        ├── estimated rows: 1.00
         └── EvalScalar
             ├── output columns: [a (#1)]
             ├── expressions: [1]

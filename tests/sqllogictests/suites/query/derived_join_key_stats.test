@@ -1,0 +1,119 @@
+# Regression coverage for derived join key statistics.
+#
+# EvalScalar and UnionAll now derive column statistics for their outputs
+# instead of dropping them. Statistics normally only steer plan choice, but
+# two consumers turn them into results: RuleFoldCountAggregate rewrites
+# COUNT into a literal from precise_cardinality minus an exact null_count,
+# and RuleFilterNulls injects NOT NULL filters on join keys. These cases
+# pin the results that must not change.
+
+statement ok
+create or replace database derived_key_stats
+
+statement ok
+use derived_key_stats
+
+statement ok
+create or replace table t_null (a int null, b int null)
+
+statement ok
+insert into t_null values (1, 1), (null, 2), (null, 3), (4, 4)
+
+statement ok
+create or replace table t_other (a int null, b int null)
+
+statement ok
+insert into t_other values (1, 1), (null, 9), (null, 8), (5, 5)
+
+# COUNT folding reads the union's merged null_count. COUNT(*) counts rows,
+# COUNT(col) skips NULLs, and the union must not lose the NULL rows.
+query II
+select count(*), count(a) from (select a from t_null union all select a from t_other)
+----
+8 4
+
+# The same shape through a derived expression, so the key statistics travel
+# via EvalScalar rather than a plain column reference.
+query II
+select count(*), count(x) from (select a + 1 as x from t_null union all select a + 1 as x from t_other)
+----
+8 4
+
+# A cast on the union branch is the lossless-injective path that now
+# propagates statistics; NULL counting must still be exact.
+query II
+select count(*), count(x) from (select cast(a as bigint) as x from t_null union all select cast(a as bigint) as x from t_other)
+----
+8 4
+
+# TRY_CAST turns failures into NULLs, so statistics must not be reused from
+# the input. The extra NULLs have to be reflected in the count.
+query II
+select count(*), count(x) from (select try_cast(b as int) as x from t_null union all select try_cast(b as int) as x from t_other)
+----
+8 8
+
+# Constant-folded COUNT over a union of exactly known inputs.
+query I
+select count(*) from (select 1 as a union all select null as a union all select 3 as a)
+----
+3
+
+query I
+select count(a) from (select 1 as a union all select null as a union all select 3 as a)
+----
+2
+
+# INTERSECT and EXCEPT bind their keys as null-safe equality, so NULL must
+# match NULL. RuleFilterNulls must not drop those rows when the key is
+# NULL-heavy (both tables here are 50% NULL, above its 20% threshold).
+query I
+select a from t_null intersect select a from t_other order by a
+----
+1
+NULL
+
+query I
+select a from t_null except select a from t_other order by a
+----
+4
+
+# The same null-safe shape with the key reached through a union branch.
+# The union contributes t_other's own values too, so 5 matches as well.
+query I
+select a from (select a from t_null union all select a from t_other) intersect select a from t_other order by a
+----
+1
+5
+NULL
+
+# A join on a NULL-heavy key: plain equality drops NULLs, and the row count
+# must match the non-NULL matches only.
+query I
+select count(*) from t_null l join t_other r on l.a = r.a
+----
+1
+
+# Null-safe equality on the same key keeps the NULL pairs.
+query I
+select count(*) from t_null l join t_other r on l.a is not distinct from r.a
+----
+5
+
+# Union feeding a join key, which is the shape whose statistics this change
+# actually propagates. The union holds a=1 twice (once per branch) and a=5
+# once, so plain equality against t_other matches three rows.
+query I
+select count(*) from (select a from t_null union all select a from t_other) u join t_other r on u.a = r.a
+----
+3
+
+# Aggregates over a union must not be folded away when the branches carry
+# NULLs in the aggregated column.
+query IIII
+select count(*), count(a), min(a), max(a) from (select a from t_null union all select a from t_other)
+----
+8 4 1 5
+
+statement ok
+drop database derived_key_stats

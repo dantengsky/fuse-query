@@ -252,3 +252,158 @@ impl Operator for EvalScalar {
         }))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use databend_common_expression::stat_distribution::StatCount;
+    use databend_common_expression::stat_distribution::StatEstimate;
+    use databend_common_expression::types::DataType;
+    use databend_common_expression::types::NumberDataType;
+    use databend_common_statistics::Datum;
+
+    use super::*;
+    use crate::ColumnBindingBuilder;
+    use crate::Visibility;
+    use crate::optimizer::ir::SExpr;
+    use crate::plans::ConstantTableScan;
+    use crate::plans::RelOperator;
+
+    fn int64() -> DataType {
+        DataType::Number(NumberDataType::Int64)
+    }
+
+    fn column(index: usize) -> ScalarExpr {
+        BoundColumnRef {
+            span: None,
+            column: ColumnBindingBuilder::new(
+                format!("c{index}"),
+                Symbol::new(index),
+                Box::new(int64()),
+                Visibility::Visible,
+            )
+            .build(),
+        }
+        .into()
+    }
+
+    /// A leaf whose derived statistics are known, so `derive_stats` has a
+    /// concrete input to work from without needing a real table.
+    fn leaf_with_stats(index: usize, cardinality: usize) -> SExpr {
+        let scan = ConstantTableScan::new_empty_scan(
+            Arc::new(databend_common_expression::DataSchema::empty()),
+            ColumnSet::new(),
+        );
+        let expr = SExpr::create_leaf(Arc::new(RelOperator::ConstantTableScan(scan)));
+        let stat = Arc::new(StatInfo {
+            cardinality: cardinality as f64,
+            statistics: Statistics {
+                precise_cardinality: Some(cardinality as u64),
+                column_stats: HashMap::from([(Symbol::new(index), ColumnStat {
+                    min: Datum::Int(1),
+                    max: Datum::Int(cardinality as i64),
+                    ndv: StatEstimate::exact(cardinality as f64),
+                    null_count: StatCount::exact(0),
+                    histogram: None,
+                })]),
+            },
+        });
+        expr.stat_info.set(stat).expect("stat_info unset");
+        expr
+    }
+
+    /// `RuleMergeEvalScalar` on this branch concatenates the up and down items
+    /// without deduplicating them, so a merged `EvalScalar` can hold the same
+    /// index twice. Upstream asserts this cannot happen; here it can, and
+    /// deriving statistics must still succeed.
+    #[test]
+    fn test_derive_stats_tolerates_duplicated_items() -> Result<()> {
+        let input = leaf_with_stats(0, 3);
+        let eval = EvalScalar {
+            items: vec![
+                ScalarItem {
+                    scalar: column(0),
+                    index: Symbol::new(0),
+                },
+                ScalarItem {
+                    scalar: column(0),
+                    index: Symbol::new(0),
+                },
+                ScalarItem {
+                    scalar: plus_one(0),
+                    index: Symbol::new(1),
+                },
+            ],
+        };
+        let expr = SExpr::create_unary(Arc::new(RelOperator::EvalScalar(eval.clone())), input);
+
+        let stat = eval.derive_stats(&RelExpr::with_s_expr(&expr))?;
+
+        // The repeated index collapses to a single entry carrying the stats of
+        // the scalar it repeats, and the derived column is added alongside it.
+        let derived = &stat.statistics.column_stats[&Symbol::new(0)];
+        assert_eq!(derived.min, Datum::Int(1));
+        assert_eq!(derived.max, Datum::Int(3));
+        assert_eq!(stat.cardinality, 3.0);
+        Ok(())
+    }
+
+    /// An `EvalScalar` that only re-projects its input unchanged should hand
+    /// back the input statistics untouched.
+    #[test]
+    fn test_derive_stats_passes_through_identity_projection() -> Result<()> {
+        let input = leaf_with_stats(0, 5);
+        let eval = EvalScalar {
+            items: vec![ScalarItem {
+                scalar: column(0),
+                index: Symbol::new(0),
+            }],
+        };
+        let expr = SExpr::create_unary(Arc::new(RelOperator::EvalScalar(eval.clone())), input);
+
+        let stat = eval.derive_stats(&RelExpr::with_s_expr(&expr))?;
+
+        assert_eq!(stat.cardinality, 5.0);
+        assert_eq!(stat.statistics.precise_cardinality, Some(5));
+        assert!(stat.statistics.column_stats.contains_key(&Symbol::new(0)));
+        Ok(())
+    }
+
+    /// A derived column whose input statistics are missing must simply be
+    /// absent from the output rather than inventing a value.
+    #[test]
+    fn test_derive_stats_omits_items_without_input_stats() -> Result<()> {
+        // Statistics exist for column 0 only; the item reads column 7.
+        let input = leaf_with_stats(0, 4);
+        let eval = EvalScalar {
+            items: vec![ScalarItem {
+                scalar: plus_one(7),
+                index: Symbol::new(9),
+            }],
+        };
+        let expr = SExpr::create_unary(Arc::new(RelOperator::EvalScalar(eval.clone())), input);
+
+        let stat = eval.derive_stats(&RelExpr::with_s_expr(&expr))?;
+
+        assert!(!stat.statistics.column_stats.contains_key(&Symbol::new(9)));
+        // Pass-through columns of the input are still preserved.
+        assert!(stat.statistics.column_stats.contains_key(&Symbol::new(0)));
+        Ok(())
+    }
+
+    fn plus_one(index: usize) -> ScalarExpr {
+        ScalarExpr::FunctionCall(crate::plans::FunctionCall {
+            span: None,
+            func_name: "plus".to_string(),
+            params: vec![],
+            arguments: vec![
+                column(index),
+                ScalarExpr::ConstantExpr(crate::plans::ConstantExpr {
+                    span: None,
+                    value: databend_common_expression::Scalar::Number(
+                        databend_common_expression::types::number::NumberScalar::Int64(1),
+                    ),
+                }),
+            ],
+        })
+    }
+}

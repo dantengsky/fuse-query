@@ -446,4 +446,82 @@ mod tests {
         assert_eq!(parent.cardinality, 7.0);
         Ok(())
     }
+
+    fn stat_info_with_nulls(
+        index: usize,
+        cardinality: f64,
+        null_count: StatCount,
+        precise_cardinality: Option<u64>,
+    ) -> Arc<StatInfo> {
+        Arc::new(StatInfo {
+            cardinality,
+            statistics: Statistics {
+                precise_cardinality,
+                column_stats: HashMap::from([(Symbol::new(index), ColumnStat {
+                    min: Datum::Int(1),
+                    max: Datum::Int(cardinality as i64),
+                    ndv: StatEstimate::exact(cardinality),
+                    null_count,
+                    histogram: None,
+                })]),
+            },
+        })
+    }
+
+    /// `RuleFoldCountAggregate` rewrites `COUNT(col)` into a literal using
+    /// `precise_cardinality - null_count`, but only when the null count is
+    /// exact. Union branches are concatenated, so summing two exact counts is
+    /// still exact and the fold stays sound.
+    #[test]
+    fn test_union_sums_exact_null_counts_exactly() -> Result<()> {
+        let left = stat_info_with_nulls(0, 4.0, StatCount::exact(1), Some(4));
+        let right = stat_info_with_nulls(1, 6.0, StatCount::exact(2), Some(6));
+
+        let union = single_column_union(0, 1, 2).derive_union_stats(left, right)?;
+
+        assert_eq!(union.statistics.precise_cardinality, Some(10));
+        assert_eq!(
+            union.statistics.column_stats[&Symbol::new(2)].null_count,
+            StatCount::exact(3)
+        );
+        Ok(())
+    }
+
+    /// If either side's null count is only estimated, the merged count must not
+    /// claim to be exact, otherwise the COUNT fold above would emit a wrong
+    /// constant.
+    #[test]
+    fn test_union_does_not_fabricate_exact_null_count() -> Result<()> {
+        let left = stat_info_with_nulls(0, 4.0, StatCount::exact(1), Some(4));
+        let right = stat_info_with_nulls(1, 6.0, StatCount::estimate(2.0, 6.0), None);
+
+        let union = single_column_union(0, 1, 2).derive_union_stats(left, right)?;
+
+        // No precise cardinality survives, so the fold cannot fire at all.
+        assert_eq!(union.statistics.precise_cardinality, None);
+        let merged = union.statistics.column_stats[&Symbol::new(2)].null_count;
+        assert!(
+            !matches!(merged, StatCount::Exact(_)),
+            "estimated input must not yield an exact null count, got {merged:?}"
+        );
+        Ok(())
+    }
+
+    /// The union key range must cover both branches; a min/max taken from only
+    /// one side would let a parent join under-estimate its input.
+    #[test]
+    fn test_union_key_range_spans_both_branches() -> Result<()> {
+        let left = stat_info(0, 3.0);
+        let right = stat_info(1, 9.0);
+
+        let union = single_column_union(0, 1, 2).derive_union_stats(left, right)?;
+        let stat = &union.statistics.column_stats[&Symbol::new(2)];
+
+        assert_eq!(stat.min, Datum::Int(1));
+        assert_eq!(stat.max, Datum::Int(9));
+        assert_eq!(union.cardinality, 12.0);
+        // ndv upper is the sum of both sides, so the key cannot look unique.
+        assert_eq!(stat.ndv.upper, 12.0);
+        Ok(())
+    }
 }

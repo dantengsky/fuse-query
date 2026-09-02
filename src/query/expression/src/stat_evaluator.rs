@@ -398,4 +398,47 @@ mod tests {
             .is_none()
         );
     }
+
+    /// A `TRY_CAST` turns conversion failures into NULLs, so the input null
+    /// count no longer describes the result. Reusing it would understate the
+    /// nulls, which callers such as the `COUNT` fold treat as authoritative.
+    /// The evaluator must decline even when the conversion is lossless.
+    #[test]
+    fn test_try_cast_does_not_propagate_statistics() {
+        let src_type = DataType::Number(NumberDataType::Int64);
+        let dest_type = src_type.clone().wrap_nullable();
+        let expr = Expr::Cast(Cast {
+            span: None,
+            is_try: true,
+            expr: Box::new(Expr::ColumnRef(ColumnRef {
+                span: None,
+                id: 0,
+                data_type: src_type.clone(),
+                display_name: "c0".to_string(),
+            })),
+            dest_type,
+        });
+        let input_stats = HashMap::from([(0, ArgStat {
+            domain: crate::Domain::from_min_max(
+                Scalar::Number(NumberScalar::Int64(1)),
+                Scalar::Number(NumberScalar::Int64(3)),
+                &src_type,
+            ),
+            ndv: StatEstimate::exact(3.0),
+            null_count: StatCount::exact(0),
+            distribution: BorrowedDistribution::Unknown,
+        })]);
+
+        assert!(
+            StatEvaluator::run(
+                &expr,
+                &FunctionContext::default(),
+                &FunctionRegistry::empty(),
+                StatCardinality::exact(3),
+                &input_stats,
+            )
+            .unwrap()
+            .is_none()
+        );
+    }
 }

@@ -314,3 +314,38 @@ impl StatCount {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `StatCount::sum` backs the union-branch null-count merge. Exactness must
+    /// only survive when both inputs are exact, because callers such as the
+    /// `COUNT` fold turn an exact null count into a literal result.
+    #[test]
+    fn test_stat_count_sum_preserves_exactness_only_when_both_exact() {
+        assert_eq!(
+            StatCount::sum(StatCount::exact(2), StatCount::exact(3)),
+            StatCount::exact(5)
+        );
+
+        let mixed = StatCount::sum(StatCount::exact(2), StatCount::estimate(3.0, 4.0));
+        assert!(!matches!(mixed, StatCount::Exact(_)));
+        assert_eq!(mixed.expected(), 5.0);
+        assert_eq!(mixed.upper(), 6.0);
+
+        let both_estimated =
+            StatCount::sum(StatCount::estimate(1.0, 2.0), StatCount::estimate(3.0, 4.0));
+        assert!(!matches!(both_estimated, StatCount::Exact(_)));
+        assert_eq!(both_estimated.expected(), 4.0);
+        assert_eq!(both_estimated.upper(), 6.0);
+    }
+
+    /// Summing two exact counts must not wrap around into a small value, which
+    /// would understate the number of nulls.
+    #[test]
+    fn test_stat_count_sum_saturates_instead_of_overflowing() {
+        let sum = StatCount::sum(StatCount::exact(u64::MAX), StatCount::exact(1));
+        assert_eq!(sum, StatCount::exact(u64::MAX));
+    }
+}
