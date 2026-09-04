@@ -1,0 +1,112 @@
+## Copyright 2023 Databend Cloud
+##
+## Licensed under the Elastic License, Version 2.0 (the "License");
+## you may not use this file except in compliance with the License.
+## You may obtain a copy of the License at
+##
+##     https://www.elastic.co/licensing/elastic-license
+##
+## Unless required by applicable law or agreed to in writing, software
+## distributed under the License is distributed on an "AS IS" BASIS,
+## WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+## See the License for the specific language governing permissions and
+## limitations under the License.
+
+# An UPDATE rewrites a row as one DELETE plus one INSERT, so the base table's
+# row_count is unchanged while the change set holds two rows. Endpoint row-count
+# arithmetic reports 0 for that delta; when that 0 reached
+# `Statistics::precise_cardinality` it let RuleFoldCountAggregate replace
+# `count()` with the constant 0 over a DummyTableScan, so a bare count() on the
+# stream answered 0 while `select *` returned both rows.
+
+statement ok
+create or replace database stream_count_after_update
+
+statement ok
+use stream_count_after_update
+
+statement ok
+create or replace table t(a int, b int)
+
+statement ok
+create or replace stream s on table t APPEND_ONLY = false
+
+statement ok
+insert into t values(1, 9)
+
+query I
+select count() from s with consume
+----
+1
+
+statement ok
+update t set b = 10 where a = 1
+
+# The bare count() is the case that regressed: it must not fold to a constant.
+query I
+select count() from s
+----
+2
+
+# Same query shape, but through paths that never folded. They agree with count(),
+# which is what makes the count() answer above trustworthy rather than a golden
+# that merely matches today's behaviour.
+query I
+select count(a) from s
+----
+2
+
+query I
+select count() from (select * from s)
+----
+2
+
+query TI
+select change$action, count() from s group by change$action order by change$action
+----
+DELETE 1
+INSERT 1
+
+query IIT
+select a, b, change$action from s order by change$action
+----
+1 9 DELETE
+1 10 INSERT
+
+# A delete-only delta does change row_count, so its count() stays foldable and
+# must remain correct.
+statement ok
+select count() from s with consume
+
+statement ok
+delete from t where a = 1
+
+query I
+select count() from s
+----
+1
+
+# An append-only delta likewise.
+statement ok
+select count() from s with consume
+
+statement ok
+insert into t values(2, 20)
+
+query I
+select count() from s
+----
+1
+
+# A consumed stream with no subsequent change is genuinely empty, and count()
+# must still report 0 here — the fix must not turn "no changes" into "unknown".
+statement ok
+select count() from s with consume
+
+query I
+select count() from s
+----
+0
+
+statement ok
+drop database stream_count_after_update

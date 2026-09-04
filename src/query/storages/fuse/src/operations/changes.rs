@@ -455,13 +455,31 @@ impl FuseTable {
 
         let base_snapshot = self.changes_read_offset_snapshot(base_location).await?;
         let base_summary = base_snapshot.summary.clone();
-        let latest_summary = if let Some(snapshot) = self.read_table_snapshot().await? {
-            snapshot.summary.clone()
-        } else {
+        let Some(latest_snapshot) = self.read_table_snapshot().await? else {
             return Ok(None);
         };
+        let latest_summary = latest_snapshot.summary.clone();
 
-        let num_rows = latest_summary.row_count.abs_diff(base_summary.row_count);
+        // Row counts alone cannot tell "no changes" from "insertions and deletions
+        // cancelled out". An UPDATE rewrites a row as one DELETE plus one INSERT, so
+        // `row_count` is unchanged while the change set holds two rows. Comparing the
+        // segment sets distinguishes the two: identical segments really do mean no
+        // change, whereas differing segments with an unchanged row count mean the
+        // delta is non-empty but this endpoint arithmetic cannot size it.
+        //
+        // `num_rows` here is an estimate (see the `min_stats` comment below), but it
+        // reaches `Statistics::precise_cardinality`, which promises an exact count and
+        // lets `RuleFoldCountAggregate` replace `count()` with a constant. Reporting
+        // `Some(0)` for an unsizeable delta therefore turns a coarse estimate into a
+        // wrong answer; `None` keeps it honest and the rule declines to fold.
+        let row_count_diff = latest_summary.row_count.abs_diff(base_summary.row_count);
+        let segments_differ = HashSet::<&Location>::from_iter(&base_snapshot.segments)
+            != HashSet::<&Location>::from_iter(&latest_snapshot.segments);
+        let num_rows = if row_count_diff == 0 && segments_differ {
+            None
+        } else {
+            Some(row_count_diff)
+        };
         let data_size = latest_summary
             .uncompressed_byte_size
             .abs_diff(base_summary.uncompressed_byte_size);
@@ -510,7 +528,7 @@ impl FuseTable {
             .abs_diff(base_summary.block_count);
         let max_stats = || {
             Some(TableStatistics {
-                num_rows: Some(num_rows),
+                num_rows,
                 data_size: Some(data_size),
                 data_size_compressed: Some(data_size_compressed),
                 index_size: Some(index_size),
@@ -527,7 +545,7 @@ impl FuseTable {
         // mainly used to determine the join order
         let min_stats = || {
             Some(TableStatistics {
-                num_rows: Some(num_rows / 2),
+                num_rows: num_rows.map(|rows| rows / 2),
                 data_size: Some(data_size / 2),
                 data_size_compressed: Some(data_size_compressed / 2),
                 index_size: Some(index_size / 2),
