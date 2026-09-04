@@ -13,6 +13,8 @@
 // limitations under the License.
 
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 use databend_common_catalog::runtime_filter_info::RuntimeFilterReady;
 use databend_common_exception::ErrorCode;
@@ -39,6 +41,7 @@ pub struct RuntimeFiltersDesc {
     pub selectivity_threshold: u64,
 
     broadcast_id: Option<u32>,
+    global_build_side_empty: AtomicBool,
     pub filters_desc: Vec<RuntimeFilterDesc>,
     runtime_filters_ready: Vec<Arc<RuntimeFilterReady>>,
 }
@@ -79,6 +82,7 @@ impl RuntimeFiltersDesc {
             runtime_filters_ready,
             ctx: ctx.clone(),
             broadcast_id: join.broadcast_id,
+            global_build_side_empty: AtomicBool::new(false),
         }))
     }
 
@@ -99,6 +103,9 @@ impl RuntimeFiltersDesc {
             packet = get_global_runtime_filter_packet(broadcast_id, packet, &self.ctx).await?;
         }
 
+        self.global_build_side_empty
+            .store(packet.build_rows == 0, Ordering::Release);
+
         let runtime_filter_descs = self.filters_desc.iter().map(|r| (r.id, r)).collect();
         let runtime_filter_infos = build_runtime_filter_infos(
             packet,
@@ -118,5 +125,9 @@ impl RuntimeFiltersDesc {
         }
 
         Ok(())
+    }
+
+    pub fn build_side_empty(&self) -> bool {
+        self.global_build_side_empty.load(Ordering::Acquire)
     }
 }
