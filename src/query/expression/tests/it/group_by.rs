@@ -93,6 +93,78 @@ fn test_group_by_hash_serializer_keys() -> anyhow::Result<()> {
 }
 
 #[test]
+fn test_timestamp_tz_key_equality_ignores_offset() -> anyhow::Result<()> {
+    use databend_common_column::types::timestamp_tz;
+    use databend_common_expression::types::ArrayColumn;
+    use databend_common_expression::types::NullableColumn;
+
+    let timestamps = Column::TimestampTz(
+        vec![
+            timestamp_tz::new(1_000_000, 0),
+            timestamp_tz::new(1_000_000, 3600),
+            timestamp_tz::new(2_000_000, 0),
+        ]
+        .into(),
+    );
+    let columns = vec![
+        timestamps.clone(),
+        NullableColumn::new_column(timestamps.clone(), vec![true, true, true].into()),
+        Column::Tuple(vec![
+            timestamps.clone(),
+            UInt64Type::from_data(vec![7, 7, 7]),
+        ]),
+        Column::Array(Box::new(ArrayColumn::new(
+            timestamps.clone(),
+            vec![0_u64, 1, 2, 3].into(),
+        ))),
+    ];
+    for column in columns {
+        let block = DataBlock::new_from_columns(vec![column, UInt64Type::from_data(vec![7, 7, 7])]);
+        let method = HashMethodSerializer::default();
+        let state = method.build_keys_state(ProjectedBlock::from(block.columns()), 3)?;
+        let keys = method
+            .build_keys_iter(&state)?
+            .map(<[u8]>::to_vec)
+            .collect::<Vec<_>>();
+        assert_eq!(keys[0], keys[1]);
+        assert_ne!(keys[0], keys[2]);
+        let mut hashes = vec![0; 3];
+        group_hash_entries(ProjectedBlock::from(block.columns()), &mut hashes);
+        assert_eq!(hashes[0], hashes[1]);
+        assert_ne!(hashes[0], hashes[2]);
+        for row in 0..3 {
+            let constant = DataBlock::new(
+                block
+                    .columns()
+                    .iter()
+                    .map(|entry| {
+                        BlockEntry::new_const_column(
+                            entry.data_type(),
+                            entry.value().index(row).unwrap().to_owned(),
+                            1,
+                        )
+                    })
+                    .collect(),
+                1,
+            );
+            let mut constant_hash = vec![0; 1];
+            group_hash_entries(ProjectedBlock::from(constant.columns()), &mut constant_hash);
+            assert_eq!(constant_hash[0], hashes[row]);
+        }
+    }
+    // Key canonicalization must not modify the values projected into results.
+    assert_eq!(
+        timestamps.index(1).unwrap(),
+        Scalar::TimestampTz(timestamp_tz::new(1_000_000, 3600)).as_ref()
+    );
+    let Column::TimestampTz(values) = timestamps else {
+        unreachable!()
+    };
+    assert_eq!(values[1].seconds_offset(), 3600);
+    Ok(())
+}
+
+#[test]
 fn test_group_by_hash_decimal() -> anyhow::Result<()> {
     let size_128 = DecimalSize::new_unchecked(20, 2);
     let size_256 = DecimalSize::new_unchecked(40, 2);

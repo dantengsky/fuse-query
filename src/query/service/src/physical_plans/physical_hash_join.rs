@@ -869,6 +869,14 @@ impl PhysicalPlanBuilder {
         if let (ScalarExpr::BoundColumnRef(left), ScalarExpr::BoundColumnRef(right)) =
             (left_condition, right_condition)
         {
+            // Join equality does not imply identical presentation offsets.
+            // Keep each side's value for projection rather than substituting
+            // the probe column for a TimestampTz build column.
+            if left.column.data_type.contains_timestamp_tz()
+                || right.column.data_type.contains_timestamp_tz()
+            {
+                return Ok(());
+            }
             if column_projections.contains(&right.column.index) {
                 if let (Ok(probe_index), Ok(build_index)) = (
                     probe_schema.index_of(&left.column.index.to_string()),
