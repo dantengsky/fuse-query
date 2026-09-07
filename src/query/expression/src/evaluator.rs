@@ -220,6 +220,18 @@ fn select_binary_numeric_if(
         };
     }
 
+    // Old persisted values or callers using a non-strict decimal representation
+    // may carry more bits than the logical precision requires. The typed path
+    // requires an exact physical width; let the generic builder normalize these
+    // values instead of failing its downcast.
+    if data_type.remove_nullable().is_decimal()
+        && [then_result, else_result]
+            .into_iter()
+            .any(|value| DecimalDataType::from_value(value).is_some_and(|(ty, _)| !ty.is_strict()))
+    {
+        return Ok(None);
+    }
+
     let column = match data_type {
         DataType::Number(number_type) => select_number!(number_type, select_plain)?,
         DataType::Decimal(size) => match size.data_kind() {

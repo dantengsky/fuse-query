@@ -30,6 +30,67 @@ fn test_control() {
     test_is_not_null(file);
 }
 
+#[test]
+fn test_if_accepts_non_strict_decimal_columns() {
+    use databend_common_expression::ColumnRef;
+    use databend_common_expression::DataBlock;
+    use databend_common_expression::Evaluator;
+    use databend_common_expression::Expr;
+    use databend_common_expression::FunctionContext;
+    use databend_common_expression::Scalar;
+    use databend_common_expression::type_check::check_function;
+    use databend_common_functions::BUILTIN_FUNCTIONS;
+
+    let size = DecimalSize::new(10, 2).unwrap();
+    for nullable in [false, true] {
+        for legacy_then in [false, true] {
+            let legacy =
+                Column::Decimal(DecimalColumn::Decimal128(vec![123_i128, 456].into(), size));
+            let column = if nullable {
+                NullableColumn::new_column(legacy, vec![true, false].into())
+            } else {
+                legacy
+            };
+            let data_type = column.data_type();
+            let block = DataBlock::new_from_columns(vec![
+                BooleanType::from_data(vec![legacy_then, !legacy_then]),
+                column,
+            ]);
+            let condition = Expr::ColumnRef(ColumnRef {
+                span: None,
+                id: 0,
+                data_type: DataType::Boolean,
+                display_name: "condition".into(),
+            });
+            let value = Expr::ColumnRef(ColumnRef {
+                span: None,
+                id: 1,
+                data_type: data_type.clone(),
+                display_name: "value".into(),
+            });
+            let zero = Expr::constant(Scalar::default_value(&data_type), Some(data_type));
+            let args = if legacy_then {
+                vec![condition, value, zero]
+            } else {
+                vec![condition, zero, value]
+            };
+            let expr = check_function(None, "if", &[], &args, &BUILTIN_FUNCTIONS).unwrap();
+            let ctx = FunctionContext::default();
+            let result = Evaluator::new(&block, &ctx, &BUILTIN_FUNCTIONS)
+                .run(&expr)
+                .unwrap();
+            let expected_first = Scalar::Decimal(DecimalScalar::Decimal64(123, size));
+            let expected_second = if nullable {
+                Scalar::Null
+            } else {
+                Scalar::Decimal(DecimalScalar::Decimal64(0, size))
+            };
+            assert_eq!(result.index(0).unwrap(), expected_first.as_ref());
+            assert_eq!(result.index(1).unwrap(), expected_second.as_ref());
+        }
+    }
+}
+
 fn test_if(file: &mut impl Write) {
     run_ast(file, "if(false, 1, false, 2, NULL)", &[]);
     run_ast(file, "if(true, 1, NULL, 2, NULL)", &[]);
