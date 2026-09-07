@@ -161,11 +161,18 @@ fn subtree_output_is_non_null(s_expr: &SExpr, output: Symbol, metadata: &Metadat
                 None => subtree_output_is_non_null(s_expr.right_child(), *right_output, metadata),
             };
         }
-        // A nested outer join may null-extend a source column even when its
-        // metadata type is non-nullable. Stop here instead of treating that
-        // source type as proof about the nested join's output.
-        RelOperator::Join(_) => return Ok(false),
-        _ => {}
+        // Only these operators preserve the nullability of an existing input column.
+        RelOperator::Filter(_)
+        | RelOperator::Sort(_)
+        | RelOperator::Limit(_)
+        | RelOperator::Exchange(_) => {}
+        RelOperator::Scan(_) | RelOperator::ConstantTableScan(_) => {
+            return Ok(!metadata.column(output).data_type().is_nullable_or_null());
+        }
+        // In particular, GROUPING SETS can synthesize NULL grouping keys from
+        // NOT NULL input columns, just as a nested outer join can null-extend
+        // them. Do not infer output nullability through an unhandled operator.
+        _ => return Ok(false),
     }
 
     if s_expr.children().count() == 1
@@ -178,7 +185,7 @@ fn subtree_output_is_non_null(s_expr: &SExpr, output: Symbol, metadata: &Metadat
         return subtree_output_is_non_null(s_expr.unary_child(), output, metadata);
     }
 
-    Ok(!metadata.column(output).data_type().is_nullable_or_null())
+    Ok(false)
 }
 
 fn scalar_is_non_null(scalar: &ScalarExpr, input: &SExpr, metadata: &Metadata) -> Result<bool> {
