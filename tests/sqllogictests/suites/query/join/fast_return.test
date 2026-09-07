@@ -34,10 +34,9 @@ query IIII
 select * from t1 right join t2 on t1.a = t2.a order by t1.a, t2.a
 ----
 
-# Stopping the probe pipeline also avoids evaluating its join key.
-query I
-select t1.a from t1 right join t2 on to_int64(concat('invalid-', to_string(t1.a))) = t2.a
-----
+# The invalid probe-expression short-circuit test lives in
+# mode/standalone/empty_right_join_short_circuit.test: a distributed exchange
+# may evaluate its key before this join learns that the build is empty.
 
 statement ok
 set force_join_data_spill = 1;
