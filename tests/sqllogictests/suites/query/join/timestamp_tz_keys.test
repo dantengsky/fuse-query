@@ -1,0 +1,151 @@
+statement ok
+create or replace table tz_key_test(ts timestamp_tz not null, k bigint not null);
+
+statement ok
+insert into tz_key_test values
+('1970-01-01 00:00:01 +0000', 7),
+('1970-01-01 01:00:01 +0100', 7),
+('1970-01-01 00:00:02 +0000', 7);
+
+# Same instant, different presentation offset: equality must agree with hashing.
+query B
+select '1970-01-01 00:00:01 +0000'::timestamp_tz = '1970-01-01 01:00:01 +0100'::timestamp_tz;
+----
+1
+
+query I
+select count(*) from tz_key_test a join tz_key_test b on a.ts = b.ts and a.k = b.k;
+----
+5
+
+query II rowsort
+select k, count(*) from tz_key_test group by ts, k;
+----
+7 1
+7 2
+
+query I
+select count(*) from (select distinct ts, k from tz_key_test);
+----
+2
+
+# Canonicalize only keys; preserve the offset on projected input values.
+query T
+select to_string(ts) from tz_key_test where to_string(ts) like '%+0100';
+----
+1970-01-01 01:00:01.000000 +0100
+
+query I
+select count(*) from tz_key_test a join tz_key_test b on (a.ts, a.k) = (b.ts, b.k);
+----
+5
+
+query I
+select count(*) from tz_key_test a join tz_key_test b on [a.ts] = [b.ts] and a.k = b.k;
+----
+5
+
+query I rowsort
+select count(*) from tz_key_test group by (ts, k);
+----
+1
+2
+
+query I rowsort
+select count(*) from tz_key_test group by [ts], k;
+----
+1
+2
+
+statement ok
+create or replace table tz_nullable_test(ts timestamp_tz, k bigint not null);
+
+statement ok
+insert into tz_nullable_test select ts, k from tz_key_test;
+
+statement ok
+insert into tz_nullable_test values (null, 7), (null, 7);
+
+query I
+select count(*) from tz_nullable_test a join tz_nullable_test b on a.ts = b.ts and a.k = b.k;
+----
+5
+
+query I
+select count(*) from tz_nullable_test a join tz_nullable_test b on a.ts is not distinct from b.ts and a.k = b.k;
+----
+9
+
+query I rowsort
+select count(*) from tz_nullable_test group by ts, k;
+----
+1
+2
+2
+
+# A window partition must also identify equal instants.
+query I rowsort
+select count(*) over (partition by ts,k) from tz_key_test;
+----
+1
+2
+2
+
+# Multi-key sorting uses the variable row encoder; equal instants must tie.
+query I rowsort
+select dense_rank() over (order by ts,k) from tz_key_test;
+----
+1
+1
+2
+
+# Probe/build values keep their original offsets after key normalization.
+query T
+select to_string(b.ts) from tz_key_test a join tz_key_test b on a.ts=b.ts and a.k=b.k
+where to_string(a.ts) like '%+0000' and to_string(b.ts) like '%+0100';
+----
+1970-01-01 01:00:01.000000 +0100
+
+query I
+select count(*) from tz_key_test a join tz_key_test b on {'instant': a.ts} = {'instant': b.ts} and a.k=b.k;
+----
+5
+
+query I rowsort
+select count(*) from tz_key_test group by {'instant': ts}, k;
+----
+1
+2
+
+query TT rowsort
+select to_string(a.ts), to_string(b.ts) from tz_key_test a join tz_key_test b on a.ts=b.ts and a.k=b.k;
+----
+1970-01-01 00:00:01.000000 +0000 1970-01-01 00:00:01.000000 +0000
+1970-01-01 00:00:01.000000 +0000 1970-01-01 01:00:01.000000 +0100
+1970-01-01 00:00:02.000000 +0000 1970-01-01 00:00:02.000000 +0000
+1970-01-01 01:00:01.000000 +0100 1970-01-01 00:00:01.000000 +0000
+1970-01-01 01:00:01.000000 +0100 1970-01-01 01:00:01.000000 +0100
+
+# Exercise the legacy join implementation too.
+query I
+settings(enable_experimental_new_join=0) select count(*) from tz_key_test a join tz_key_test b on a.ts=b.ts and a.k=b.k;
+----
+5
+
+# Forced spill must use the same instant-based key semantics.
+query I
+settings(force_join_data_spill=1) select count(*) from tz_key_test a join tz_key_test b on a.ts=b.ts and a.k=b.k;
+----
+5
+
+query I rowsort
+settings(force_aggregate_data_spill=1) select count(*) from tz_key_test group by ts,k;
+----
+1
+2
+
+statement ok
+drop table tz_nullable_test;
+
+statement ok
+drop table tz_key_test;
