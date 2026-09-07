@@ -1,0 +1,22 @@
+statement ok
+create or replace table bad_shuffle_probe(k string);
+
+statement ok
+create or replace table bad_shuffle_build(k bigint);
+
+statement ok
+insert into bad_shuffle_probe values ('invalid-7');
+
+# Nonempty build prevents empty-input shortcuts from hiding the invalid key.
+statement ok
+insert into bad_shuffle_build values (7);
+
+statement error invalid digit
+settings(enforce_shuffle_join=1, enable_join_runtime_filter=0)
+select count(*) from bad_shuffle_probe p join bad_shuffle_build b on to_int64(p.k)=b.k;
+
+statement ok
+drop table bad_shuffle_probe;
+
+statement ok
+drop table bad_shuffle_build;
