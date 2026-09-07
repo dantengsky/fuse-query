@@ -448,6 +448,13 @@ impl ValueVisitor for LengthCalculatorVisitor<'_> {
         Ok(())
     }
 
+    fn visit_timestamp_tz(&mut self, _buffer: Buffer<timestamp_tz>) -> Result<()> {
+        self.lengths
+            .iter_mut()
+            .for_each(|x| *x += timestamp_tz::ENCODED_LEN);
+        Ok(())
+    }
+
     fn visit_date(&mut self, _buffer: Buffer<i32>) -> Result<()> {
         self.lengths.iter_mut().for_each(|x| *x += i32::ENCODED_LEN);
         Ok(())
@@ -733,6 +740,18 @@ impl ValueVisitor for EncodeVisitor<'_> {
         Ok(())
     }
 
+    fn visit_timestamp_tz(&mut self, buffer: Buffer<timestamp_tz>) -> Result<()> {
+        fixed_encode(
+            &mut self.out.data,
+            &mut self.out.offsets,
+            buffer,
+            self.validity,
+            self.field.asc,
+            self.field.nulls_first,
+        );
+        Ok(())
+    }
+
     fn visit_date(&mut self, buffer: Buffer<i32>) -> Result<()> {
         fixed_encode(
             &mut self.out.data,
@@ -839,6 +858,44 @@ mod tests {
         };
         VariableRowConverter::new(SortKeyDescription::new(column_desc, schema, true).unwrap())
             .unwrap()
+    }
+
+    #[test]
+    fn test_timestamp_tz_column_matches_constant_encoding() {
+        use databend_common_column::types::timestamp_tz;
+
+        for nullable in [false, true] {
+            let data_type = if nullable {
+                DataType::TimestampTz.wrap_nullable()
+            } else {
+                DataType::TimestampTz
+            };
+            let converter = create_variable_converter(vec![SortField::new(data_type.clone())]);
+            let column = TimestampTzType::from_data(vec![
+                timestamp_tz::new(-1, 0),
+                timestamp_tz::new(-1, 3600),
+                timestamp_tz::new(1, 0),
+            ]);
+            let column = if nullable {
+                databend_common_expression::types::NullableColumn::new_column(
+                    column,
+                    vec![true, true, false].into(),
+                )
+            } else {
+                column
+            };
+            let rows = converter.convert_columns(&[column.clone().into()], 3);
+            assert_eq!(rows.index(0).unwrap(), rows.index(1).unwrap());
+            for row in 0..3 {
+                let entry = BlockEntry::new_const_column(
+                    data_type.clone(),
+                    column.index(row).unwrap().to_owned(),
+                    1,
+                );
+                let constant_rows = converter.convert_columns(&[entry], 1);
+                assert_eq!(rows.index(row).unwrap(), constant_rows.index(0).unwrap());
+            }
+        }
     }
 
     #[test]
