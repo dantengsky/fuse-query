@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::hash_map::DefaultHasher;
+use std::hash::Hasher;
+
 use databend_common_exception::Result;
 use databend_common_expression::BlockEntry;
 use databend_common_expression::DataBlock;
@@ -42,6 +45,7 @@ pub struct HashFlightScatter {
     func_ctx: FunctionContext,
     hash_key: Vec<Expr>,
     scatter_size: usize,
+    use_group_hash: bool,
 }
 
 impl HashFlightScatter {
@@ -59,15 +63,28 @@ impl HashFlightScatter {
                 local_pos,
             );
         }
-        let hash_key = hash_keys
+        let mut hash_key: Vec<_> = hash_keys
             .iter()
             .map(|key| key.as_expr(&BUILTIN_FUNCTIONS))
             .collect();
+        // The group hash fast path must preserve both SQL equality and the
+        // Const/Column representation invariant. Generic/nested types have
+        // different canonicalization rules; retain their established hash path.
+        let use_group_hash = hash_key
+            .iter()
+            .all(|key| supports_group_hash(key.data_type()));
+        if !use_group_hash {
+            hash_key = hash_key
+                .into_iter()
+                .map(|key| check_function(None, "siphash", &[], &[key], &BUILTIN_FUNCTIONS))
+                .collect::<Result<_>>()?;
+        }
 
         Ok(Box::new(Self {
             func_ctx,
             scatter_size,
             hash_key,
+            use_group_hash,
         }))
     }
 }
@@ -184,6 +201,19 @@ impl HashFlightScatter {
         }
 
         let evaluator = Evaluator::new(data_block, &self.func_ctx, &BUILTIN_FUNCTIONS);
+        if !self.use_group_hash {
+            let mut hashes = vec![DefaultHasher::default(); num_rows];
+            for key in &self.hash_key {
+                let values = get_hash_values(evaluator.run(key)?, num_rows, 0)?;
+                for (hash, value) in hashes.iter_mut().zip(values.iter()) {
+                    hash.write_u64(*value);
+                }
+            }
+            return Ok(hashes
+                .into_iter()
+                .map(|hash| hash.finish() % self.scatter_size as u64)
+                .collect());
+        }
         let hash_keys = self
             .hash_key
             .iter()
@@ -202,6 +232,20 @@ impl HashFlightScatter {
             *hash %= scatter_size;
         }
         Ok(hashes)
+    }
+}
+
+fn supports_group_hash(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Nullable(inner) => supports_group_hash(inner),
+        DataType::Boolean
+        | DataType::Number(_)
+        | DataType::Decimal(_)
+        | DataType::String
+        | DataType::Binary
+        | DataType::Date
+        | DataType::Timestamp => true,
+        _ => false,
     }
 }
 
@@ -337,6 +381,79 @@ mod tests {
             max_partition * partitions * 20 <= indices.len() * 21,
             "partition counts are imbalanced: {counts:?}"
         );
+    }
+
+    #[test]
+    fn equal_timestamp_tz_keys_share_a_partition() -> Result<()> {
+        use databend_common_column::types::timestamp_tz;
+        use databend_common_expression::Column;
+
+        let utc = timestamp_tz::new(1_000_000, 0);
+        let offset = timestamp_tz::new(1_000_000, 3600);
+        assert_eq!(utc, offset);
+        let block = DataBlock::new_from_columns(vec![
+            Column::TimestampTz(vec![utc, offset].into()),
+            UInt64Type::from_data(vec![7, 7]),
+        ]);
+        for partitions in [3, 4, 8] {
+            let indices = scatter_indices(block_hash_keys(&block), partitions, &block)?;
+            assert_eq!(indices[0], indices[1]);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn bitmap_constant_and_column_share_a_partition() -> Result<()> {
+        use databend_common_io::HybridBitmap;
+        use roaring::RoaringTreemap;
+
+        let mut legacy = RoaringTreemap::new();
+        let mut current = HybridBitmap::new();
+        for value in [1_u64, 5, 42] {
+            legacy.insert(value);
+            current.insert(value);
+        }
+        let mut legacy_bytes = Vec::new();
+        let mut current_bytes = Vec::new();
+        legacy.serialize_into(&mut legacy_bytes).unwrap();
+        current.serialize_into(&mut current_bytes).unwrap();
+        for bytes in [legacy_bytes, current_bytes] {
+            for data_type in [DataType::Bitmap, DataType::Bitmap.wrap_nullable()] {
+                let constant = DataBlock::new(
+                    vec![
+                        BlockEntry::new_const_column(data_type, Scalar::Bitmap(bytes.clone()), 2),
+                        BlockEntry::new_const_column_arg::<UInt64Type>(7, 2),
+                    ],
+                    2,
+                );
+                let materialized = constant.convert_to_full();
+                for partitions in [3, 4, 8] {
+                    assert_eq!(
+                        scatter_indices(block_hash_keys(&constant), partitions, &constant)?,
+                        scatter_indices(block_hash_keys(&materialized), partitions, &materialized)?,
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn generic_and_nested_keys_use_the_legacy_hash_path() {
+        for data_type in [
+            DataType::TimestampTz,
+            DataType::Bitmap,
+            DataType::Variant,
+            DataType::Array(Box::new(DataType::TimestampTz)),
+            DataType::Tuple(vec![DataType::Bitmap]),
+        ] {
+            assert!(!supports_group_hash(&data_type));
+            assert!(!supports_group_hash(&data_type.wrap_nullable()));
+        }
+        assert!(supports_group_hash(&DataType::String));
+        assert!(supports_group_hash(
+            &DataType::Number(NumberDataType::UInt64).wrap_nullable()
+        ));
     }
 
     #[test]
