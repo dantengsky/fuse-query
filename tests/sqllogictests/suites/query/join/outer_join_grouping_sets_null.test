@@ -1,0 +1,64 @@
+statement ok
+create or replace table outer_group_l(k int not null);
+
+statement ok
+create or replace table outer_group_r(marker int not null);
+
+statement ok
+insert into outer_group_l values (1), (2);
+
+statement ok
+insert into outer_group_r values (7);
+
+# Keep the native grouping sets operator to exercise synthesized NULL keys.
+statement ok
+set grouping_sets_to_union = 0;
+
+# k=1 matches the grand-total row; k=2 is an unmatched outer row.
+query II rowsort
+select l.k, r.marker
+from outer_group_l l
+left join (
+    select marker, count(*) as n from outer_group_r
+    group by grouping sets ((marker), ())
+) r on l.k = r.n
+where r.marker is null;
+----
+1 NULL
+2 NULL
+
+query II rowsort
+select l.k, r.marker
+from (
+    select marker, count(*) as n from outer_group_r
+    group by rollup(marker)
+) r right join outer_group_l l on l.k = r.n
+where r.marker is null;
+----
+1 NULL
+2 NULL
+
+# Preserve the proof boundary through aliases and union branches.
+query II rowsort
+select l.k, r.marker
+from outer_group_l l
+left join (
+    select marker, n from (
+        select marker, count(*) as n from outer_group_r group by cube(marker)
+    ) grouped
+    union all
+    select marker, count(*) as n from outer_group_r group by marker
+) r on l.k = r.n
+where r.marker is null;
+----
+1 NULL
+2 NULL
+
+statement ok
+unset grouping_sets_to_union;
+
+statement ok
+drop table outer_group_l;
+
+statement ok
+drop table outer_group_r;
