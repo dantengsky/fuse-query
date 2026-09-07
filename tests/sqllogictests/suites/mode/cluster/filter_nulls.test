@@ -93,7 +93,7 @@ Exchange
     ├── filters: []
     ├── build join filters:
     │   └── filter id:1, build key:table3.value (#2), probe targets:[table1.value (#0)@scan0], filter type:bloom,inlist,min_max
-    ├── estimated rows: 500.00
+    ├── estimated rows: 250.00
     ├── Exchange(Build)
     │   ├── output columns: [table3.value (#2), table2.value (#1)]
     │   ├── exchange type: Broadcast
@@ -235,6 +235,31 @@ Exchange
             ├── push downs: [filters: [is_not_null(table1.value (#0))], limit: NONE]
             ├── apply join filters: [#0]
             └── estimated rows: 2000.00
+
+# Estimated rows above are not result cardinalities. Check actual matching rows
+# and exclusion of NULL keys independently of EXPLAIN.
+query III
+SELECT count(*), min(table1.value), max(table1.value)
+FROM table1 INNER JOIN table2 ON table1.value = table2.value;
+----
+1000 0 999
+
+query III
+SELECT count(*), min(table1.value), max(table1.value)
+FROM table1 INNER JOIN table2 INNER JOIN table3
+ON table1.value = table2.value AND table2.value = table3.value;
+----
+1000 0 999
+
+query I
+SELECT count(*) FROM table1 LEFT SEMI JOIN table2 ON table1.value = table2.value;
+----
+1000
+
+query I
+SELECT count(*) FROM table1 RIGHT SEMI JOIN table2 ON table1.value = table2.value;
+----
+1000
 
 statement ok
 drop table table1;

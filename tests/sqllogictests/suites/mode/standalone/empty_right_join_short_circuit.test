@@ -1,0 +1,28 @@
+# This is an executor short-circuit guarantee, not an SQL evaluation-order
+# guarantee. In a cluster, a separate probe Exchange may evaluate its key
+# before the receiving join sees the empty build. Keep this test standalone.
+statement ok
+set enable_experimental_new_join = 1;
+
+statement ok
+create or replace table empty_right_probe(a int);
+
+statement ok
+insert into empty_right_probe values (7), (3), (5);
+
+statement ok
+create or replace table empty_right_build(a int);
+
+query I
+select p.a from empty_right_probe p right join empty_right_build b
+on to_int64(concat('invalid-', to_string(p.a))) = b.a;
+----
+
+statement ok
+drop table empty_right_probe;
+
+statement ok
+drop table empty_right_build;
+
+statement ok
+unset enable_experimental_new_join;
