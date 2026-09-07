@@ -627,7 +627,19 @@ impl AggHash for OpaqueScalarRef<'_> {
 impl AggHash for ScalarRef<'_> {
     #[inline(always)]
     fn agg_hash(&self) -> u64 {
-        self.to_string().as_bytes().agg_hash()
+        match self {
+            // TimestampTz equality ignores the stored presentation offset.
+            ScalarRef::TimestampTz(value) => value.timestamp().agg_hash(),
+            // Recurse into containers so wrapping a TimestampTz in an array,
+            // map or tuple does not reintroduce offset-sensitive display hashes.
+            ScalarRef::Array(column) | ScalarRef::Map(column) => column
+                .iter()
+                .fold(0, |hash, value| merge_hash(hash, value.agg_hash())),
+            ScalarRef::Tuple(fields) => fields
+                .iter()
+                .fold(0, |hash, value| merge_hash(hash, value.agg_hash())),
+            _ => self.to_string().as_bytes().agg_hash(),
+        }
     }
 }
 
