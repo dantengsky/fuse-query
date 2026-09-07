@@ -1,5 +1,5 @@
-# Pin numbers() partition generation so scan statistics do not depend on
-# the runner's default max_threads or settings left by another test file.
+# Pin max_threads only while preparing data so numbers() produces stable
+# partitions. EXPLAIN and result checks below run with normal concurrency.
 statement ok
 set max_threads = 1;
 
@@ -17,6 +17,10 @@ delete from t2 where number % 3 = 0;
 
 statement ok
 insert into t2 select * from numbers(8);
+
+# Restore the configured default before planning or executing the queries.
+statement ok
+unset max_threads;
 
 statement ok
 set disable_join_reorder = 1;
@@ -110,9 +114,6 @@ NULL 5
 NULL 6
 NULL 7
 NULL 8
-
-statement ok
-unset max_threads;
 
 statement ok
 unset disable_join_reorder;
