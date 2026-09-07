@@ -530,6 +530,133 @@ EvalScalar
         ├── order by: []
         └── limit: NONE
 
+=== grouping_sets_output_keeps_outer_join ===
+description: GROUPING SETS can null-extend a NOT NULL source grouping key on matched rows.
+sql: SELECT l.k, r.marker
+FROM outer_to_anti_left l
+LEFT JOIN (
+    SELECT marker, count(*) AS n
+    FROM outer_to_anti_non_null
+    GROUP BY GROUPING SETS ((marker), ())
+) r ON l.k = r.n
+WHERE r.marker IS NULL
+raw_plan:
+EvalScalar
+├── scalars: [outer_to_anti_left.k (#0) AS (#0), outer_to_anti_non_null.marker (#4) AS (#4)]
+└── Filter
+    ├── filters: [not(is_not_null(outer_to_anti_non_null.marker (#4)))]
+    └── Join(Left)
+        ├── build keys: [n (#8)]
+        ├── probe keys: [outer_to_anti_left.k (#0)]
+        ├── other filters: []
+        ├── EvalScalar
+        │   ├── scalars: [CAST(COUNT(*) (#7) AS UInt64 NULL) AS (#8)]
+        │   └── EvalScalar
+        │       ├── scalars: [outer_to_anti_non_null.marker (#4) AS (#4), COUNT(*) (#7) AS (#7)]
+        │       └── Aggregate(Initial)
+        │           ├── group items: [outer_to_anti_non_null.marker (#4) AS (#4), _grouping_id (#6) AS (#6)]
+        │           ├── aggregate functions: [count() AS (#7)]
+        │           └── EvalScalar
+        │               ├── scalars: [outer_to_anti_non_null.marker (#4) AS (#4)]
+        │               └── Scan
+        │                   ├── table: default.outer_to_anti_non_null (#1)
+        │                   ├── filters: []
+        │                   ├── order by: []
+        │                   └── limit: NONE
+        └── Scan
+            ├── table: default.outer_to_anti_left (#0)
+            ├── filters: []
+            ├── order by: []
+            └── limit: NONE
+optimized_plan:
+Filter
+├── filters: [not(is_not_null(outer_to_anti_non_null.marker (#4)))]
+└── Join(Right)
+    ├── build keys: [outer_to_anti_left.k (#0)]
+    ├── probe keys: [n (#8)]
+    ├── other filters: []
+    ├── Scan
+    │   ├── table: default.outer_to_anti_left (#0)
+    │   ├── filters: []
+    │   ├── order by: []
+    │   └── limit: NONE
+    └── EvalScalar
+        ├── scalars: [outer_to_anti_non_null.marker (#4) AS (#4), COUNT(*) (#7) AS (#7), CAST(COUNT(*) (#7) AS UInt64 NULL) AS (#8)]
+        └── Aggregate(Final)
+            ├── group items: [outer_to_anti_non_null.marker (#4) AS (#4), _grouping_id (#6) AS (#6)]
+            ├── aggregate functions: [count() AS (#7)]
+            └── Aggregate(Partial)
+                ├── group items: [outer_to_anti_non_null.marker (#4) AS (#4), _grouping_id (#6) AS (#6)]
+                ├── aggregate functions: [count() AS (#7)]
+                └── Scan
+                    ├── table: default.outer_to_anti_non_null (#1)
+                    ├── filters: []
+                    ├── order by: []
+                    └── limit: NONE
+
+=== rollup_output_keeps_right_outer_join ===
+description: The right-outer counterpart must not treat a ROLLUP key as non-null.
+sql: SELECT l.k, r.marker
+FROM (
+    SELECT marker, count(*) AS n
+    FROM outer_to_anti_non_null
+    GROUP BY ROLLUP(marker)
+) r RIGHT JOIN outer_to_anti_left l ON l.k = r.n
+WHERE r.marker IS NULL
+raw_plan:
+EvalScalar
+├── scalars: [outer_to_anti_non_null.marker (#1) AS (#1), outer_to_anti_left.k (#5) AS (#5)]
+└── Filter
+    ├── filters: [not(is_not_null(outer_to_anti_non_null.marker (#1)))]
+    └── Join(Right)
+        ├── build keys: [outer_to_anti_left.k (#5)]
+        ├── probe keys: [n (#8)]
+        ├── other filters: []
+        ├── Scan
+        │   ├── table: default.outer_to_anti_left (#1)
+        │   ├── filters: []
+        │   ├── order by: []
+        │   └── limit: NONE
+        └── EvalScalar
+            ├── scalars: [CAST(COUNT(*) (#4) AS UInt64 NULL) AS (#8)]
+            └── EvalScalar
+                ├── scalars: [outer_to_anti_non_null.marker (#1) AS (#1), COUNT(*) (#4) AS (#4)]
+                └── Aggregate(Initial)
+                    ├── group items: [outer_to_anti_non_null.marker (#1) AS (#1), _grouping_id (#3) AS (#3)]
+                    ├── aggregate functions: [count() AS (#4)]
+                    └── EvalScalar
+                        ├── scalars: [outer_to_anti_non_null.marker (#1) AS (#1)]
+                        └── Scan
+                            ├── table: default.outer_to_anti_non_null (#0)
+                            ├── filters: []
+                            ├── order by: []
+                            └── limit: NONE
+optimized_plan:
+Filter
+├── filters: [not(is_not_null(outer_to_anti_non_null.marker (#1)))]
+└── Join(Right)
+    ├── build keys: [outer_to_anti_left.k (#5)]
+    ├── probe keys: [n (#8)]
+    ├── other filters: []
+    ├── Scan
+    │   ├── table: default.outer_to_anti_left (#1)
+    │   ├── filters: []
+    │   ├── order by: []
+    │   └── limit: NONE
+    └── EvalScalar
+        ├── scalars: [outer_to_anti_non_null.marker (#1) AS (#1), COUNT(*) (#4) AS (#4), CAST(COUNT(*) (#4) AS UInt64 NULL) AS (#8)]
+        └── Aggregate(Final)
+            ├── group items: [outer_to_anti_non_null.marker (#1) AS (#1), _grouping_id (#3) AS (#3)]
+            ├── aggregate functions: [count() AS (#4)]
+            └── Aggregate(Partial)
+                ├── group items: [outer_to_anti_non_null.marker (#1) AS (#1), _grouping_id (#3) AS (#3)]
+                ├── aggregate functions: [count() AS (#4)]
+                └── Scan
+                    ├── table: default.outer_to_anti_non_null (#0)
+                    ├── filters: []
+                    ├── order by: []
+                    └── limit: NONE
+
 === null_safe_condition_keeps_outer_join ===
 description: A null-equal join key must not be rewritten as an anti join.
 sql: SELECT l.k, r.k

@@ -143,6 +143,31 @@ RIGHT JOIN outer_to_anti_right AS r ON IF(l.k IS NULL, 0, l.k) = r.k
 WHERE IF(l.k IS NULL, 0, l.k) IS NULL",
         },
         SqlTestCase {
+            name: "grouping_sets_output_keeps_outer_join",
+            description: "GROUPING SETS can null-extend a NOT NULL source grouping key on matched rows.",
+            setup_sqls: &[LEFT_TABLE, NON_NULL_TABLE],
+            sql: "SELECT l.k, r.marker
+FROM outer_to_anti_left l
+LEFT JOIN (
+    SELECT marker, count(*) AS n
+    FROM outer_to_anti_non_null
+    GROUP BY GROUPING SETS ((marker), ())
+) r ON l.k = r.n
+WHERE r.marker IS NULL",
+        },
+        SqlTestCase {
+            name: "rollup_output_keeps_right_outer_join",
+            description: "The right-outer counterpart must not treat a ROLLUP key as non-null.",
+            setup_sqls: &[LEFT_TABLE, NON_NULL_TABLE],
+            sql: "SELECT l.k, r.marker
+FROM (
+    SELECT marker, count(*) AS n
+    FROM outer_to_anti_non_null
+    GROUP BY ROLLUP(marker)
+) r RIGHT JOIN outer_to_anti_left l ON l.k = r.n
+WHERE r.marker IS NULL",
+        },
+        SqlTestCase {
             name: "null_safe_condition_keeps_outer_join",
             description: "A null-equal join key must not be rewritten as an anti join.",
             setup_sqls: &[LEFT_TABLE, RIGHT_TABLE],
