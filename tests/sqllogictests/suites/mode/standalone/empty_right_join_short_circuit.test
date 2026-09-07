@@ -1,6 +1,14 @@
+# This assertion was added by 504adc0dfa to query/join/fast_return.test.
+# Only this assertion was moved here; the original valid-key empty-join result
+# cases remain in that shared suite and run in both standalone and cluster CI.
+#
+# 504adc0dfa implements local probe-pipeline cancellation after an empty build.
 # This is an executor short-circuit guarantee, not an SQL evaluation-order
-# guarantee. In a cluster, a separate probe Exchange may evaluate its key
-# before the receiving join sees the empty build. Keep this test standalone.
+# guarantee: a separate remote probe Exchange can evaluate its key before the
+# receiving join sees the empty build. This test therefore covers standalone only.
+# TODO: extend empty-build cancellation to remote probe fragments and add the
+# corresponding cluster regression if that stronger guarantee is implemented.
+# Passing this test must not be taken as evidence that remote work is skipped.
 statement ok
 set enable_experimental_new_join = 1;
 

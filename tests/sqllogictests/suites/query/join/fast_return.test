@@ -34,9 +34,14 @@ query IIII
 select * from t1 right join t2 on t1.a = t2.a order by t1.a, t2.a
 ----
 
-# The invalid probe-expression short-circuit test lives in
-# mode/standalone/empty_right_join_short_circuit.test: a distributed exchange
-# may evaluate its key before this join learns that the build is empty.
+# The original fast-return cases belong in this shared standalone/cluster suite.
+# Only the invalid probe-expression assertion added by 504adc0dfa was moved to
+# mode/standalone/empty_right_join_short_circuit.test: that commit implemented
+# local pipeline cancellation, not cross-fragment cancellation. A remote probe
+# Exchange may evaluate its key before the receiving join sees the empty build.
+# TODO: extend empty-build cancellation across distributed probe fragments and
+# add cluster coverage if that stronger execution guarantee is implemented;
+# do not treat the standalone test as proof that remote work is skipped.
 
 statement ok
 set force_join_data_spill = 1;
