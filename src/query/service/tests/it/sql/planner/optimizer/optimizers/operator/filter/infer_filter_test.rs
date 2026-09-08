@@ -1218,11 +1218,13 @@ fn equal_compatibility_cases() -> Vec<EqualCompatibilityCase> {
             timestamp,
             true,
         ),
+        // Equal instants need not carry the same offset, so an offset-sensitive
+        // predicate cannot transfer across a timestamp_tz equality.
         case(
-            "timestamp_tz with timestamp_tz",
+            "timestamp_tz with timestamp_tz is not inferred",
             timestamp_tz.clone(),
             timestamp_tz,
-            true,
+            false,
         ),
         case(
             "nullable number with number",
