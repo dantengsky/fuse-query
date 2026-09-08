@@ -118,22 +118,127 @@ impl Operator for TopN {
         } else {
             self.limit
         };
-        let cardinality = stat_info.cardinality.min(output_rows as f64);
-        let precise_cardinality = stat_info.statistics.precise_cardinality.map(|rows| {
-            if partial {
-                rows.min(self.candidate_count() as u64)
+        let precise_cardinality = if output_rows == 0 {
+            Some(0)
+        } else {
+            stat_info.statistics.precise_cardinality.map(|rows| {
+                if partial {
+                    rows.min(self.candidate_count() as u64)
+                } else {
+                    rows.saturating_sub(self.offset as u64)
+                        .min(self.limit as u64)
+                }
+            })
+        };
+        // Only the final stage consumes the offset. Keep the conservative
+        // input estimate separate from the point estimate: a skewed join
+        // below TopN must not turn an underestimated build into a broadcast.
+        let bound_rows = |rows: f64| {
+            let rows = if partial {
+                rows
             } else {
-                rows.saturating_sub(self.offset as u64)
-                    .min(self.limit as u64)
-            }
-        });
+                (rows - self.offset as f64).max(0.0)
+            };
+            rows.min(output_rows as f64)
+        };
+        let cardinality = precise_cardinality
+            .map(|rows| rows as f64)
+            .unwrap_or_else(|| bound_rows(stat_info.cardinality));
+        let max_cardinality = precise_cardinality
+            .map(|rows| rows as f64)
+            .unwrap_or_else(|| bound_rows(stat_info.max_cardinality.max(stat_info.cardinality)));
 
         Ok(Arc::new(StatInfo {
             cardinality,
+            max_cardinality,
             statistics: Statistics {
                 precise_cardinality,
                 column_stats: Default::default(),
             },
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::optimizer::ir::SExpr;
+    use crate::plans::DummyTableScan;
+
+    fn top_n_stats(
+        after_exchange: Option<bool>,
+        limit: usize,
+        offset: usize,
+        cardinality: f64,
+        max_cardinality: f64,
+        precise_cardinality: Option<u64>,
+    ) -> Result<Arc<StatInfo>> {
+        let input = SExpr::create(
+            DummyTableScan::default(),
+            vec![],
+            None,
+            None,
+            Some(Arc::new(StatInfo {
+                cardinality,
+                max_cardinality,
+                statistics: Statistics {
+                    precise_cardinality,
+                    ..Default::default()
+                },
+            })),
+        );
+        let expr = SExpr::create_unary(
+            TopN {
+                items: vec![],
+                limit,
+                offset,
+                lazy_columns: Default::default(),
+                after_exchange,
+            },
+            input,
+        );
+        RelExpr::with_s_expr(&expr).derive_cardinality()
+    }
+
+    #[test]
+    fn top_n_stats_bound_partial_candidates_and_final_offset() -> Result<()> {
+        let partial = top_n_stats(Some(false), 10, 5, 8.0, 1000.0, None)?;
+        assert_eq!(partial.cardinality, 8.0);
+        assert_eq!(partial.max_cardinality, 15.0);
+        for stage in [None, Some(true)] {
+            let final_stat = top_n_stats(stage, 10, 5, 8.0, 1000.0, None)?;
+            assert_eq!(final_stat.cardinality, 3.0);
+            assert_eq!(final_stat.max_cardinality, 10.0);
+            assert_eq!(final_stat.statistics.precise_cardinality, None);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn top_n_stats_preserve_precise_empty_without_promoting_estimates() -> Result<()> {
+        for stage in [None, Some(false), Some(true)] {
+            let empty = top_n_stats(stage, 10, 5, 0.0, 0.0, Some(0))?;
+            assert_eq!(empty.cardinality, 0.0);
+            assert_eq!(empty.max_cardinality, 0.0);
+            assert_eq!(empty.statistics.precise_cardinality, Some(0));
+
+            let estimated = top_n_stats(stage, 10, 5, 0.0, 1000.0, None)?;
+            assert_eq!(estimated.statistics.precise_cardinality, None);
+            assert!(estimated.max_cardinality > 0.0);
+        }
+        for stage in [None, Some(true)] {
+            let exhausted = top_n_stats(stage, 10, 5, 4.0, 4.0, Some(4))?;
+            assert_eq!(exhausted.cardinality, 0.0);
+            assert_eq!(exhausted.max_cardinality, 0.0);
+            assert_eq!(exhausted.statistics.precise_cardinality, Some(0));
+            let zero_limit = top_n_stats(stage, 0, 5, 100.0, 1000.0, None)?;
+            assert_eq!(zero_limit.max_cardinality, 0.0);
+            assert_eq!(zero_limit.statistics.precise_cardinality, Some(0));
+        }
+        let partial = top_n_stats(Some(false), 10, 5, 8.0, 8.0, Some(8))?;
+        assert_eq!(partial.statistics.precise_cardinality, Some(8));
+        let saturated = top_n_stats(Some(false), usize::MAX, 5, 8.0, 8.0, Some(8))?;
+        assert_eq!(saturated.max_cardinality, 8.0);
+        Ok(())
     }
 }
