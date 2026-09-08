@@ -672,6 +672,14 @@ impl Operator for Join {
             let outer = used_columns.difference(&output_columns).cloned().collect();
             outer_columns = outer_columns.union(&outer).cloned().collect();
         }
+        for condition in &self.non_equi_conditions {
+            outer_columns.extend(
+                condition
+                    .used_columns()
+                    .difference(&output_columns)
+                    .copied(),
+            );
+        }
         outer_columns = outer_columns.difference(&output_columns).cloned().collect();
 
         // Derive used columns
@@ -1540,6 +1548,25 @@ mod tests {
     use crate::plans::FunctionCall;
 
     const DEFAULT_MAX_BROADCAST_BUILD_ROWS: u64 = 100_000_000;
+
+    #[test]
+    fn non_equi_join_predicate_tracks_outer_columns() -> Result<()> {
+        use crate::optimizer::ir::SExpr;
+
+        let left = SExpr::create_leaf(crate::plans::DummyTableScan::default());
+        let right = SExpr::create_leaf(crate::plans::DummyTableScan::default());
+        let expression = SExpr::create_binary(
+            Join {
+                non_equi_conditions: vec![column(42, DataType::Boolean)],
+                ..Default::default()
+            },
+            left,
+            right,
+        );
+        let properties = expression.derive_relational_prop()?;
+        assert!(properties.outer_columns.contains(&Symbol::new(42)));
+        Ok(())
+    }
 
     fn column(index: usize, data_type: DataType) -> ScalarExpr {
         ScalarExpr::BoundColumnRef(BoundColumnRef {

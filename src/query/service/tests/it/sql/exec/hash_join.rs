@@ -80,6 +80,29 @@ async fn outer_join_keeps_matched_grouping_sets_nulls() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn correlated_computed_alias_preserves_results() -> anyhow::Result<()> {
+    let fixture = TestFixture::setup().await?;
+    for (projection, join_condition, expected) in [
+        ("t2.a + 1", "t2.a = t1.a", 0),
+        ("t2.a + 1", "t2.a + 1 = t1.a", 1),
+        ("cast(t2.a as bigint) + 1", "t2.a + 1 = t1.a", 1),
+        ("case when t2.a = 1 then 2 else 3 end", "t2.a + 1 = t1.a", 1),
+    ] {
+        let sql = format!(
+            "SELECT count(*) FROM (VALUES (1,1),(2,1)) t1(a,b) WHERE EXISTS (SELECT 1 FROM (SELECT {projection} AS a FROM (VALUES (1,1),(2,1)) t2(a,b) JOIN (VALUES (1)) t3(c) ON {join_condition} WHERE t2.b=t1.b) s WHERE s.a=t1.a)"
+        );
+        let blocks: Vec<DataBlock> = fixture.execute_query(&sql).await?.try_collect().await?;
+        let block = DataBlock::concat(&blocks)?;
+        assert_eq!(
+            block.get_by_offset(0).value().index(0).unwrap().to_string(),
+            expected.to_string(),
+            "{sql}"
+        );
+    }
+    Ok(())
+}
+
 fn constant_plan() -> PhysicalPlan {
     PhysicalPlan::new(ConstantTableScan {
         meta: PhysicalPlanMeta::new("ConstantTableScan"),
