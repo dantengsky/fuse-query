@@ -12,7 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashSet;
+
 use databend_common_exception::Result;
+use databend_common_sql::plans::Plan;
+use databend_common_sql::plans::RelOperator;
 
 use crate::framework::golden::SqlTestCase;
 use crate::framework::golden::open_golden_file;
@@ -26,6 +30,8 @@ async fn write_optimized_case(file: &mut impl std::io::Write, case: &SqlTestCase
     let raw_plan = ctx.bind_sql(case.sql).await?;
     let optimized_plan = ctx.optimize_plan(raw_plan.clone()).await?;
 
+    assert_unique_eval_scalar_indexes(&optimized_plan, case.name);
+
     write_case_header(file, case)?;
     writeln!(file, "raw_plan:")?;
     writeln!(file, "{}", raw_plan.format_indent(Default::default())?)?;
@@ -38,6 +44,49 @@ async fn write_optimized_case(file: &mut impl std::io::Write, case: &SqlTestCase
     writeln!(file)?;
 
     Ok(())
+}
+
+/// Decorrelation re-emits correlated columns as `outer.*` projections carrying their resolved
+/// (derived) index, while dropping original items by their pre-resolution index. When a resolved
+/// index collided with an original item's index, both survived and the `EvalScalar` ended up with
+/// two items writing one output index.
+///
+/// An `EvalScalar` defines exactly one value per output index, so assert that invariant directly on
+/// the plan tree rather than relying on the golden text. This also holds in release builds, where
+/// the equivalent `debug_assert` in `EvalScalar::derive_stats` compiles out.
+fn assert_unique_eval_scalar_indexes(plan: &Plan, case_name: &str) {
+    let Plan::Query { s_expr, .. } = plan else {
+        panic!("case {case_name} should optimize into a query plan");
+    };
+
+    let mut stack = vec![s_expr.as_ref()];
+    let mut eval_scalars_seen = 0usize;
+    while let Some(expr) = stack.pop() {
+        if let RelOperator::EvalScalar(eval_scalar) = expr.plan() {
+            eval_scalars_seen += 1;
+            let mut indexes = HashSet::with_capacity(eval_scalar.items.len());
+            for item in &eval_scalar.items {
+                assert!(
+                    indexes.insert(item.index),
+                    "case {}: EvalScalar defines output index {} more than once, in items {:?}",
+                    case_name,
+                    item.index,
+                    eval_scalar
+                        .items
+                        .iter()
+                        .map(|item| item.index)
+                        .collect::<Vec<_>>(),
+                );
+            }
+        }
+        stack.extend(expr.children());
+    }
+
+    // Guard against the walk silently passing because it never reached an EvalScalar.
+    assert!(
+        eval_scalars_seen > 0,
+        "case {case_name} should contain at least one EvalScalar"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]

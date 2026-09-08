@@ -248,12 +248,45 @@ impl SubqueryDecorrelatorOptimizer {
 
         let metadata = self.metadata.clone();
         let metadata = metadata.read();
+
+        // The correlated columns are re-emitted below as `outer.*` projections that carry their
+        // *resolved* (derived) index, while the filter below drops original items by their
+        // *pre-resolution* index. When a resolved index collides with an original item's index,
+        // filtering on the pre-resolution index alone lets both through and yields two items for
+        // a single output index. Collect the resolved indexes so the filter can exclude those too.
+        //
+        // Collecting into a set also collapses the case where two correlated columns resolve to
+        // the same derived index, which would otherwise emit that `outer.*` projection twice.
+        let reemitted_indexes = correlated_columns
+            .iter()
+            .copied()
+            .map(|old| derived_columns.must_resolve(old))
+            .collect::<Result<ColumnSet>>()?;
+
+        // An original item sharing an output index with a re-emitted correlated column is only
+        // safe to drop because it is a redundant reference to that same column. A computed
+        // expression there would mean losing the computation.
+        debug_assert!(
+            eval_scalar
+                .items
+                .iter()
+                .filter(|item| reemitted_indexes.contains(&item.index))
+                .all(|item| matches!(
+                    &item.scalar,
+                    ScalarExpr::BoundColumnRef(column) if column.column.index == item.index
+                )),
+            "correlated re-emission would drop a computed EvalScalar item"
+        );
+
         let items: Vec<ScalarItem> = eval_scalar
             .items
             .iter()
-            .filter(|item| !correlated_columns.contains(&item.index))
+            .filter(|item| {
+                !correlated_columns.contains(&item.index)
+                    && !reemitted_indexes.contains(&item.index)
+            })
             .map(Item::Scalar)
-            .chain(correlated_columns.iter().copied().map(Item::Index))
+            .chain(reemitted_indexes.iter().copied().map(Item::Index))
             .map(|item| match item {
                 Item::Scalar(item) => Ok(ScalarItem {
                     scalar: self.flatten_scalar(
@@ -263,11 +296,9 @@ impl SubqueryDecorrelatorOptimizer {
                     )?,
                     index: item.index,
                 }),
-                Item::Index(old) => Ok(Self::scalar_item_from_index(
-                    derived_columns.must_resolve(old)?,
-                    "outer.",
-                    &metadata,
-                )),
+                Item::Index(resolved) => {
+                    Ok(Self::scalar_item_from_index(resolved, "outer.", &metadata))
+                }
             })
             .collect::<Result<_>>()?;
 
