@@ -237,6 +237,21 @@ impl SubqueryDecorrelatorOptimizer {
             need_cross_join = true;
         }
 
+        // An above-filter alias may refer to a computed output defined here.
+        // It cannot stand for an outer column below its own definition. In
+        // that case materialize the outer input before flattening this child.
+        if correlated_columns.iter().any(|old| {
+            derived_columns.resolve(*old).is_some_and(|resolved| {
+                eval_scalar.items.iter().any(|item| {
+                    item.index == resolved
+                        && !matches!(&item.scalar, ScalarExpr::BoundColumnRef(column)
+                            if column.column.index == item.index)
+                })
+            })
+        }) {
+            need_cross_join = true;
+        }
+
         let (flatten_plan, derived_columns) = self.flatten_plan_with_scope(
             outer,
             subquery.unary_child(),
@@ -248,12 +263,22 @@ impl SubqueryDecorrelatorOptimizer {
 
         let metadata = self.metadata.clone();
         let metadata = metadata.read();
+        let reemitted_indexes = correlated_columns
+            .iter()
+            .map(|old| derived_columns.must_resolve(*old))
+            .collect::<Result<ColumnSet>>()?;
         let items: Vec<ScalarItem> = eval_scalar
             .items
             .iter()
             .filter(|item| !correlated_columns.contains(&item.index))
+            // Only remove redundant identity projections, never computations.
+            .filter(|item| {
+                !reemitted_indexes.contains(&item.index)
+                    || !matches!(&item.scalar, ScalarExpr::BoundColumnRef(column)
+                    if column.column.index == item.index)
+            })
             .map(Item::Scalar)
-            .chain(correlated_columns.iter().copied().map(Item::Index))
+            .chain(reemitted_indexes.iter().copied().map(Item::Index))
             .map(|item| match item {
                 Item::Scalar(item) => Ok(ScalarItem {
                     scalar: self.flatten_scalar(
@@ -263,11 +288,9 @@ impl SubqueryDecorrelatorOptimizer {
                     )?,
                     index: item.index,
                 }),
-                Item::Index(old) => Ok(Self::scalar_item_from_index(
-                    derived_columns.must_resolve(old)?,
-                    "outer.",
-                    &metadata,
-                )),
+                Item::Index(resolved) => {
+                    Ok(Self::scalar_item_from_index(resolved, "outer.", &metadata))
+                }
             })
             .collect::<Result<_>>()?;
 
@@ -472,6 +495,11 @@ impl SubqueryDecorrelatorOptimizer {
                         left_need_cross_join = true;
                     } else if right_prop.output_columns.contains(&col) {
                         right_need_cross_join = true;
+                    } else {
+                        // An outer reference in a non-equi ON predicate is
+                        // produced by neither input. Materialize it on the left
+                        // so the rewritten predicate has an input binding.
+                        left_need_cross_join = true;
                     }
                 }
             }
