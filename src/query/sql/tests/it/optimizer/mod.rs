@@ -19,3 +19,4 @@ mod outer_join_to_anti;
 mod push_down_filter_project_set;
 mod selectivity;
 mod selectivity_smoke;
+mod typed_constant_sql_repro;
