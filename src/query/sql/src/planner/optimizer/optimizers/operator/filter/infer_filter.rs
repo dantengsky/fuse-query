@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 
 use databend_common_base::base::OrderedFloat;
+use databend_common_exception::ErrorCode;
 use databend_common_exception::Result;
 use databend_common_expression::Scalar;
 use databend_common_expression::type_check::common_super_type;
@@ -803,7 +804,11 @@ impl<'a> InferFilterOptimizer<'a> {
         }
         for (left_index, expr_equal_to) in self.expr_equal_to.iter().enumerate() {
             for expr in expr_equal_to.iter() {
-                let right_index = self.expr_index.get(expr).unwrap();
+                let right_index = self.expr_index.get(expr).ok_or_else(|| {
+                    ErrorCode::Internal(
+                        "InferFilterOptimizer contains inconsistent expression indexes",
+                    )
+                })?;
                 Self::union(&mut parents, left_index, *right_index);
             }
         }
@@ -829,7 +834,9 @@ impl<'a> InferFilterOptimizer<'a> {
 
         // Construct predicates for each ScalarExpr.
         for expr in self.exprs.iter() {
-            let index = self.expr_index.get(expr).unwrap();
+            let index = self.expr_index.get(expr).ok_or_else(|| {
+                ErrorCode::Internal("InferFilterOptimizer contains inconsistent expression indexes")
+            })?;
             let parent_index = Self::find(&mut parents, *index);
             let parent_predicates = &self.expr_predicates[parent_index];
             for predicate in parent_predicates.iter() {
