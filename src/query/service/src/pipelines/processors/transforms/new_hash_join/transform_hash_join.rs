@@ -273,7 +273,7 @@ impl Processor for TransformHashJoin {
                 );
 
                 self.instant = Instant::now();
-                if self.join.can_skip_probe() {
+                if self.rf_desc.build_side_empty() && self.join.can_skip_probe() {
                     self.probe_port.finish();
                     self.joined_port.finish();
 

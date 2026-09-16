@@ -43,7 +43,10 @@ pub trait Join: Send + Sync + 'static {
         false
     }
 
-    /// Whether the probe phase can be skipped after all build workers finish.
+    /// Whether probing can be skipped when the entire distributed build side is empty.
+    ///
+    /// This is a join-type predicate only. The caller is responsible for confirming emptiness
+    /// against the globalized build row count.
     fn can_skip_probe(&self) -> bool {
         false
     }

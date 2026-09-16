@@ -34,14 +34,58 @@ query IIII
 select * from t1 right join t2 on t1.a = t2.a order by t1.a, t2.a
 ----
 
-# The original fast-return cases belong in this shared standalone/cluster suite.
-# Only the invalid probe-expression assertion added by 504adc0dfa was moved to
-# mode/standalone/empty_right_join_short_circuit.test: that commit implemented
-# local pipeline cancellation, not cross-fragment cancellation. A remote probe
+# Result-correctness cases belong in this shared standalone/cluster suite. The
+# invalid probe-expression assertions, which additionally prove the probe input was
+# cancelled, live in mode/standalone/empty_build_join_short_circuit.test: the
+# implemented cancellation is local to a pipeline, not cross-fragment. A remote probe
 # Exchange may evaluate its key before the receiving join sees the empty build.
 # TODO: extend empty-build cancellation across distributed probe fragments and
 # add cluster coverage if that stronger execution guarantee is implemented;
 # do not treat the standalone test as proof that remote work is skipped.
+
+# Build side is empty, so every join type whose output derives from a build match is empty.
+query II
+select * from t1 left semi join t2 on t1.a = t2.a order by t1.a
+----
+
+query II
+select * from t1 right semi join t2 on t1.a = t2.a order by t2.a
+----
+
+query II
+select * from t1 right anti join t2 on t1.a = t2.a order by t2.a
+----
+
+# LeftAnti preserves unmatched probe rows, so an empty build must NOT skip the probe.
+query II
+select * from t1 left anti join t2 on t1.a = t2.a order by t1.a
+----
+3 4
+5 6
+7 8
+
+# Emptiness must be detected without runtime filters: with none configured there is no
+# runtime-filter builder, so the build row count cannot come from one.
+statement ok
+set enable_join_runtime_filter = 0;
+
+query IIII
+select * from t1 inner join t2 on t1.a = t2.a order by t1.a, t2.a
+----
+
+query II
+select * from t1 left semi join t2 on t1.a = t2.a order by t1.a
+----
+
+query II
+select * from t1 left anti join t2 on t1.a = t2.a order by t1.a
+----
+3 4
+5 6
+7 8
+
+statement ok
+unset enable_join_runtime_filter;
 
 statement ok
 set force_join_data_spill = 1;
@@ -60,6 +104,17 @@ select * from t1 left join t2 on t1.a = t2.a order by t1.a, t2.a
 query IIII
 select * from t2 left join t1 on t1.a = t2.a order by t1.a, t2.a
 ----
+
+query II
+select * from t1 left semi join t2 on t1.a = t2.a order by t1.a
+----
+
+query II
+select * from t1 left anti join t2 on t1.a = t2.a order by t1.a
+----
+3 4
+5 6
+7 8
 
 statement ok
 unset force_join_data_spill;

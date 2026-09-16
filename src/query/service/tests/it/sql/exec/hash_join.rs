@@ -34,6 +34,8 @@ use databend_query::physical_plans::PhysicalPlanMeta;
 use databend_query::physical_plans::PhysicalRuntimeFilters;
 use databend_query::pipelines::processors::HashJoinDesc;
 use databend_query::pipelines::processors::transforms::HashJoinFactory;
+use databend_query::pipelines::processors::transforms::Join;
+use databend_query::sessions::QueryContext;
 use databend_query::sessions::TableContextSettings;
 use databend_query::sql::Planner;
 use databend_query::test_kits::TestFixture;
@@ -112,6 +114,55 @@ fn constant_plan() -> PhysicalPlan {
     })
 }
 
+fn hash_join_plan(join_type: JoinType, probe_key: &Expr, build_key: &Expr) -> HashJoin {
+    HashJoin {
+        meta: PhysicalPlanMeta::new("HashJoin"),
+        projections: BTreeSet::new(),
+        probe_projections: BTreeSet::new(),
+        build_projections: BTreeSet::new(),
+        build: constant_plan(),
+        probe: constant_plan(),
+        build_keys: vec![build_key.as_remote_expr()],
+        probe_keys: vec![probe_key.as_remote_expr()],
+        is_null_equal: vec![false],
+        non_equi_conditions: vec![],
+        join_type,
+        marker_index: None,
+        from_correlated_subquery: false,
+        probe_to_build: vec![],
+        output_schema: Arc::new(DataSchema::empty()),
+        need_hold_hash_table: false,
+        stat_info: None,
+        single_to_inner: None,
+        build_side_cache_info: None,
+        runtime_filter: PhysicalRuntimeFilters::default(),
+        broadcast_id: None,
+        nested_loop_filter: None,
+    }
+}
+
+fn int64_key(value: i64) -> Expr {
+    Expr::constant(
+        Scalar::Number(NumberScalar::Int64(value)),
+        Some(DataType::Number(NumberDataType::Int64)),
+    )
+}
+
+fn int64_factory(
+    ctx: Arc<QueryContext>,
+    physical_join: &HashJoin,
+) -> anyhow::Result<Arc<HashJoinFactory>> {
+    let desc = Arc::new(HashJoinDesc::create(physical_join)?);
+    let method =
+        DataBlock::choose_hash_method_with_types(&[DataType::Number(NumberDataType::Int64)])?;
+    Ok(HashJoinFactory::create(
+        ctx,
+        FunctionContext::default(),
+        method,
+        desc,
+    ))
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn right_outer_join_skips_probe_keys_when_build_is_empty() -> anyhow::Result<()> {
     let fixture = TestFixture::setup().await?;
@@ -125,35 +176,9 @@ async fn right_outer_join_skips_probe_keys_when_build_is_empty() -> anyhow::Resu
         &[Expr::constant(Scalar::String("invalid".to_string()), None)],
         &BUILTIN_FUNCTIONS,
     )?;
-    let build_key = Expr::constant(
-        Scalar::Number(NumberScalar::Int64(0)),
-        Some(DataType::Number(NumberDataType::Int64)),
-    );
+    let build_key = int64_key(0);
 
-    let physical_join = HashJoin {
-        meta: PhysicalPlanMeta::new("HashJoin"),
-        projections: BTreeSet::new(),
-        probe_projections: BTreeSet::new(),
-        build_projections: BTreeSet::new(),
-        build: constant_plan(),
-        probe: constant_plan(),
-        build_keys: vec![build_key.as_remote_expr()],
-        probe_keys: vec![invalid_probe_key.as_remote_expr()],
-        is_null_equal: vec![false],
-        non_equi_conditions: vec![],
-        join_type: JoinType::Right,
-        marker_index: None,
-        from_correlated_subquery: false,
-        probe_to_build: vec![],
-        output_schema: Arc::new(DataSchema::empty()),
-        need_hold_hash_table: false,
-        stat_info: None,
-        single_to_inner: None,
-        build_side_cache_info: None,
-        runtime_filter: PhysicalRuntimeFilters::default(),
-        broadcast_id: None,
-        nested_loop_filter: None,
-    };
+    let physical_join = hash_join_plan(JoinType::Right, &invalid_probe_key, &build_key);
     let desc = Arc::new(HashJoinDesc::create(&physical_join)?);
     let method =
         DataBlock::choose_hash_method_with_types(&[DataType::Number(NumberDataType::Int64)])?;
@@ -170,7 +195,8 @@ async fn right_outer_join_skips_probe_keys_when_build_is_empty() -> anyhow::Resu
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn right_outer_join_stops_probe_pipeline_when_build_is_empty() -> anyhow::Result<()> {
+async fn right_outer_join_completes_without_probe_key_error_when_build_is_empty()
+-> anyhow::Result<()> {
     let fixture = TestFixture::setup().await?;
     let ctx = fixture.new_query_ctx().await?;
     ctx.get_settings()
@@ -178,8 +204,12 @@ async fn right_outer_join_stops_probe_pipeline_when_build_is_empty() -> anyhow::
     ctx.get_settings()
         .set_setting("enable_join_runtime_filter".to_string(), "0".to_string())?;
 
-    // The invalid cast is evaluated by an EvalScalar in the probe pipeline, before the join.
-    // An empty preserved/build side must stop that pipeline instead of merely discarding its rows.
+    // This pins that the query completes empty rather than raising the probe-key cast error.
+    // Note it does not by itself prove the probe pipeline was stopped: the key is evaluated
+    // inside the join's own probe_block (EXPLAIN shows it under `probe keys:`, with no
+    // EvalScalar in the probe pipeline), and probe_block returns early on an empty build
+    // before evaluating keys. The pipeline-level skip is asserted against execution metrics
+    // in mode/standalone/empty_build_join_short_circuit.test.
     let query = r#"
         SELECT probe.number
         FROM numbers(10) AS probe
@@ -196,5 +226,65 @@ async fn right_outer_join_stops_probe_pipeline_when_build_is_empty() -> anyhow::
     let blocks: Vec<DataBlock> = interpreter.execute(ctx).await?.try_collect().await?;
 
     assert_eq!(blocks.iter().map(DataBlock::num_rows).sum::<usize>(), 0);
+    Ok(())
+}
+
+/// `can_skip_probe` is a join-type predicate: it must cover exactly the join types whose output
+/// is empty once the build side is empty. Getting this wrong is either a silent full probe scan
+/// (missing type) or a wrong result (extra type), so pin every type the new join dispatches.
+#[tokio::test(flavor = "multi_thread")]
+async fn can_skip_probe_covers_join_types_emptied_by_empty_build() -> anyhow::Result<()> {
+    let fixture = TestFixture::setup().await?;
+    let ctx = fixture.new_query_ctx().await?;
+
+    // Left/LeftAnti still emit their preserved probe rows, so they must keep probing.
+    let cases = [
+        (JoinType::Inner, true),
+        (JoinType::LeftSemi, true),
+        (JoinType::Right, true),
+        (JoinType::RightSemi, true),
+        (JoinType::RightAnti, true),
+        (JoinType::Left, false),
+        (JoinType::LeftAnti, false),
+    ];
+
+    for (join_type, expected) in cases {
+        let physical_join = hash_join_plan(join_type, &int64_key(1), &int64_key(0));
+        let factory = int64_factory(ctx.clone(), &physical_join)?;
+        let join = factory.create_hybrid_join(join_type, 0)?;
+        assert_eq!(
+            join.can_skip_probe(),
+            expected,
+            "unexpected can_skip_probe for {join_type:?}"
+        );
+    }
+    Ok(())
+}
+
+/// The emptiness signal must not depend on runtime filters existing. `PhysicalRuntimeFilters` is
+/// empty here, so no runtime-filter builder is created and the builders' own row counter stays 0;
+/// reporting that as `build_rows` would make `build_side_empty()` true for a non-empty build side
+/// and skip the probe, producing wrong results rather than merely slow ones.
+#[tokio::test(flavor = "multi_thread")]
+async fn build_runtime_filter_reports_logical_build_rows_without_runtime_filters()
+-> anyhow::Result<()> {
+    let fixture = TestFixture::setup().await?;
+    let ctx = fixture.new_query_ctx().await?;
+
+    let physical_join = hash_join_plan(JoinType::LeftSemi, &int64_key(1), &int64_key(0));
+    assert!(
+        physical_join.runtime_filter.filters.is_empty(),
+        "this test only covers the no-runtime-filter path"
+    );
+
+    let factory = int64_factory(ctx, &physical_join)?;
+    let mut join = factory.create_hybrid_join(JoinType::LeftSemi, 0)?;
+
+    join.add_block(Some(DataBlock::new(vec![], 3)))?;
+    join.add_block(Some(DataBlock::new(vec![], 4)))?;
+    join.add_block(None)?;
+    while join.final_build()?.is_some() {}
+
+    assert_eq!(join.build_runtime_filter()?.build_rows, 7);
     Ok(())
 }

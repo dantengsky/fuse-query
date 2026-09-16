@@ -13,7 +13,9 @@
 // limitations under the License.
 
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 
 use databend_common_catalog::runtime_filter_info::RuntimeFilterReady;
 use databend_common_exception::ErrorCode;
@@ -41,6 +43,7 @@ pub struct RuntimeFiltersDesc {
     pub observed_build_rows: Arc<AtomicUsize>,
 
     broadcast_id: Option<u32>,
+    global_build_side_empty: AtomicBool,
     pub filters_desc: Vec<RuntimeFilterDesc>,
     runtime_filters_ready: Vec<Arc<RuntimeFilterReady>>,
 }
@@ -82,6 +85,7 @@ impl RuntimeFiltersDesc {
             runtime_filters_ready,
             ctx: ctx.clone(),
             broadcast_id: join.broadcast_id,
+            global_build_side_empty: AtomicBool::new(false),
         }))
     }
 
@@ -102,6 +106,11 @@ impl RuntimeFiltersDesc {
             packet = get_global_runtime_filter_packet(broadcast_id, packet, &self.ctx).await?;
         }
 
+        // `packet.build_rows` is summed across nodes by `merge_join_runtime_filter_packets`, so
+        // this reflects the whole distributed build side, not just this node's share.
+        self.global_build_side_empty
+            .store(packet.build_rows == 0, Ordering::Release);
+
         let runtime_filter_descs = self.filters_desc.iter().map(|r| (r.id, r)).collect();
         let runtime_filter_infos = build_runtime_filter_infos(
             packet,
@@ -121,5 +130,13 @@ impl RuntimeFiltersDesc {
         }
 
         Ok(())
+    }
+
+    /// Whether the whole distributed build side is empty.
+    ///
+    /// Stays `false` until `globalization` runs, so callers short-circuiting before that
+    /// (see `close_broadcast`) conservatively keep probing.
+    pub fn build_side_empty(&self) -> bool {
+        self.global_build_side_empty.load(Ordering::Acquire)
     }
 }
