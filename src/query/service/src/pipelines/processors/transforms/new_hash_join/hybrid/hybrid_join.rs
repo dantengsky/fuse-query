@@ -169,6 +169,10 @@ impl HybridHashJoin {
 
 impl Join for HybridHashJoin {
     fn add_block(&mut self, data: Option<DataBlock>) -> Result<()> {
+        if let Some(block) = data.as_ref() {
+            self.state.add_build_input_rows(block.num_rows());
+        }
+
         // 1. Check if another processor has already triggered spill
         if self.state.check_spilled() {
             self.switch_to_grace_mode(false)?;
@@ -220,10 +224,15 @@ impl Join for HybridHashJoin {
     }
 
     fn build_runtime_filter(&self) -> Result<JoinRuntimeFilterPacket> {
-        match &self.mode {
+        let mut packet = match &self.mode {
             HybridJoinMode::Memory(join) => join.build_runtime_filter(),
             HybridJoinMode::Grace(join) => join.build_runtime_filter(),
-        }
+        }?;
+        // `packet.build_rows` otherwise comes from the runtime-filter builders, which are absent
+        // when the join has no runtime filters and are reset by spill repartitioning. Use the
+        // logical build input count so `build_side_empty()` stays trustworthy in both cases.
+        packet.build_rows = self.state.build_input_rows();
+        Ok(packet)
     }
 
     fn is_spill_happened(&self) -> bool {
@@ -231,10 +240,14 @@ impl Join for HybridHashJoin {
     }
 
     fn can_skip_probe(&self) -> bool {
-        match &self.mode {
-            HybridJoinMode::Memory(join) => join.can_skip_probe(),
-            HybridJoinMode::Grace(join) => join.can_skip_probe(),
-        }
+        matches!(
+            self.join_type,
+            JoinType::Inner
+                | JoinType::LeftSemi
+                | JoinType::Right
+                | JoinType::RightSemi
+                | JoinType::RightAnti
+        )
     }
 
     fn probe_block(&mut self, data: DataBlock) -> Result<Box<dyn JoinStream + '_>> {
