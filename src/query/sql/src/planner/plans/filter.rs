@@ -96,7 +96,13 @@ impl Operator for Filter {
         let mut sb =
             SelectivityEstimator::new(stat_info.statistics.column_stats.clone(), input_cardinality);
         let cardinality = sb.apply(&self.predicates)?;
-        let max_cardinality = sb.max_cardinality(cardinality, stat_info.max_cardinality);
+        let uses_stale_range_statistics = sb.uses_stale_range_statistics();
+        let mut max_cardinality = sb.max_cardinality(cardinality, stat_info.max_cardinality);
+        let stale_range_statistics =
+            stat_info.stale_range_statistics || uses_stale_range_statistics;
+        if stat_info.stale_range_statistics {
+            max_cardinality = max_cardinality.max(stat_info.max_cardinality);
+        }
         let precise_cardinality = sb.is_proven_empty().then_some(0);
         // Derive column statistics
         let column_stats = if cardinality == 0.0 {
@@ -107,6 +113,7 @@ impl Operator for Filter {
         Ok(Arc::new(StatInfo {
             cardinality,
             max_cardinality,
+            stale_range_statistics,
             statistics: Statistics {
                 precise_cardinality,
                 column_stats,

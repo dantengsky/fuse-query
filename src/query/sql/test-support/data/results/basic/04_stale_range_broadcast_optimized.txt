@@ -1,0 +1,21 @@
+Exchange(Merge)
+└── EvalScalar
+    ├── scalars: [large_dimension.join_key (#3) AS (#3), range_value (#4) AS (#6), selective_value (#5) AS (#7), stale_range_source.join_key (#0) AS (#8)]
+    └── Join(Inner)
+        ├── build keys: [stale_range_source.join_key (#0)]
+        ├── probe keys: [large_dimension.join_key (#3)]
+        ├── other filters: []
+        ├── Exchange(Broadcast)
+        │   └── EvalScalar
+        │       ├── scalars: [stale_range_source.join_key (#0) AS (#0), stale_range_source.range_value (#1) AS (#4), stale_range_source.selective_value (#2) AS (#5)]
+        │       └── Scan
+        │           ├── table: default.stale_range_source (#0)
+        │           ├── filters: [gt(stale_range_source.range_value (#1), 10), eq(stale_range_source.selective_value (#2), 42)]
+        │           ├── order by: []
+        │           └── limit: NONE
+        └── Scan
+            ├── table: default.large_dimension (#1)
+            ├── filters: []
+            ├── order by: []
+            └── limit: NONE
+
