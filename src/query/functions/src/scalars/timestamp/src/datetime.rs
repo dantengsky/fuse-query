@@ -2445,7 +2445,7 @@ fn register_to_number_functions(registry: &mut FunctionRegistry) {
     registry.register_1_arg::<TimestampType, Int64Type, _>(
         "to_unix_timestamp",
         |_, _| FunctionDomain::Full,
-        |val, ctx| ToNumberImpl::eval_timestamp::<ToUnixTimestamp, _>(val, &ctx.func_ctx.tz),
+        |val, _| val.div_euclid(MICROS_PER_SEC),
     );
 
     registry.register_1_arg::<TimestampType, Float64Type, _>(
