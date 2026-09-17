@@ -370,7 +370,7 @@ impl Operator for Scan {
             .and_then(|stat| stat.num_rows);
 
         let mut proven_empty = false;
-        let cardinality = match (precise_cardinality, &self.prewhere) {
+        let (cardinality, max_cardinality) = match (precise_cardinality, &self.prewhere) {
             (Some(precise_cardinality), Some(prewhere)) => {
                 // Derive cardinality
                 let mut sb = SelectivityEstimator::new(
@@ -378,12 +378,16 @@ impl Operator for Scan {
                     StatCardinality::exact(precise_cardinality),
                 );
                 let cardinality = sb.apply(&prewhere.predicates)?;
+                let max_cardinality = sb.max_cardinality(cardinality, precise_cardinality as f64);
                 proven_empty = sb.is_proven_empty();
                 column_stats = sb.into_column_stats();
-                cardinality
+                (cardinality, max_cardinality)
             }
-            (Some(precise_cardinality), None) => precise_cardinality as f64,
-            (_, _) => 0.0,
+            (Some(precise_cardinality), None) => {
+                let cardinality = precise_cardinality as f64;
+                (cardinality, cardinality)
+            }
+            (_, _) => (0.0, 0.0),
         };
 
         // If prewhere is not none, we can't get precise cardinality
@@ -401,21 +405,22 @@ impl Operator for Scan {
         // leakage through statistical inference.
         if self.secure_predicates.is_some() {
             let mut proven_empty = precise_cardinality == Some(0);
-            let cardinality = match &self.secure_predicates {
+            let (cardinality, max_cardinality) = match &self.secure_predicates {
                 Some(preds) if !preds.is_empty() => {
                     let input_cardinality = precise_cardinality
                         .map(StatCardinality::exact)
                         .unwrap_or_else(|| StatCardinality::estimate(cardinality));
                     let mut estimator = SelectivityEstimator::new(column_stats, input_cardinality);
                     let cardinality = estimator.apply(preds)?;
+                    let max_cardinality = estimator.max_cardinality(cardinality, max_cardinality);
                     proven_empty |= estimator.is_proven_empty();
-                    cardinality
+                    (cardinality, max_cardinality)
                 }
-                _ => cardinality,
+                _ => (cardinality, max_cardinality),
             };
             return Ok(Arc::new(StatInfo {
                 cardinality,
-                max_cardinality: cardinality,
+                max_cardinality,
                 statistics: OpStatistics {
                     precise_cardinality: proven_empty.then_some(0),
                     column_stats: Default::default(),
@@ -425,7 +430,7 @@ impl Operator for Scan {
 
         Ok(Arc::new(StatInfo {
             cardinality,
-            max_cardinality: cardinality,
+            max_cardinality,
             statistics: OpStatistics {
                 precise_cardinality,
                 column_stats,

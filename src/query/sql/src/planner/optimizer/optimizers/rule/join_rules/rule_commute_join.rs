@@ -225,6 +225,27 @@ mod tests {
         assert!(!should_commute(JoinType::Inner, &right, &selective_left));
     }
 
+    #[test]
+    fn test_outer_join_prefers_stale_window_over_large_dimension_build() {
+        // Model a large append-heavy table after applying a narrow range predicate
+        // to stale statistics: expected rows drive build-side ordering, while the
+        // separate risk bound remains available to the distribution planner.
+        let mut stale_window = estimated_stat(80_000_000.0);
+        stale_window.max_cardinality = 40_000_000_000.0;
+        let account_dimension = estimated_stat(225_000_000.0);
+
+        assert!(should_commute(
+            JoinType::Left,
+            &stale_window,
+            &account_dimension
+        ));
+        assert!(!should_commute(
+            JoinType::Right,
+            &account_dimension,
+            &stale_window
+        ));
+    }
+
     fn proven_empty_expr() -> SExpr {
         SExpr::create_unary(
             Filter {
