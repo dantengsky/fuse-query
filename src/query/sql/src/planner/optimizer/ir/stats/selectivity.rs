@@ -99,6 +99,10 @@ impl SelectivityEstimator {
         }
     }
 
+    pub fn uses_stale_range_statistics(&self) -> bool {
+        self.statistics_zero_fallback
+    }
+
     fn merged_column_stats(&self) -> ColumnStatSet {
         let mut merged = self.column_stats.clone();
         merged.extend(self.overrides.clone());

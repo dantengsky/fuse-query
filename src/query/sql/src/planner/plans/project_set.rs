@@ -40,6 +40,7 @@ impl ProjectSet {
         // We assume that the SRF function will expand by at least x3 per row.
         input_stat.cardinality *= 3.0;
         input_stat.max_cardinality = input_stat.max_cardinality.max(input_stat.cardinality);
+        input_stat.stale_range_statistics = false;
         Ok(Arc::new(input_stat.clone()))
     }
 }
