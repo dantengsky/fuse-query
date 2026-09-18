@@ -22,6 +22,7 @@ pub use enforcer::DistributionEnforcer;
 pub use enforcer::Enforcer;
 pub use enforcer::PropertyEnforcer;
 pub use property::Distribution;
+pub(crate) use property::MAX_CARDINALITY_UNDERESTIMATION_RATIO;
 pub use property::PhysicalProperty;
 pub use property::RelationalProperty;
 pub use property::RequiredProperty;
