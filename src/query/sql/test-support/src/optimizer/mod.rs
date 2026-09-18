@@ -470,16 +470,19 @@ impl StatsApplier<'_> {
     ) -> HashMap<Symbol, Option<BasicColumnStatistics>> {
         let mut result = HashMap::new();
 
-        for (idx, column) in metadata
-            .columns_by_table_index(table_index)
-            .iter()
-            .enumerate()
-        {
-            if let ColumnEntry::BaseTableColumn(BaseTableColumn { column_name, .. }) = column {
+        for column in metadata.columns_by_table_index(table_index).iter() {
+            if let ColumnEntry::BaseTableColumn(BaseTableColumn {
+                column_index,
+                column_name,
+                ..
+            }) = column
+            {
                 let full_name = format!("{table_name}.{column_name}");
                 if let Some(stats) = self.column_stats.get(&full_name) {
+                    // Scan statistics are keyed by the metadata column index, not
+                    // by the column position inside the table.
                     result.insert(
-                        Symbol::new(idx),
+                        *column_index,
                         Some(BasicColumnStatistics {
                             min: to_datum(&stats.min)
                                 .or_else(|| default_min_datum(&column.data_type())),

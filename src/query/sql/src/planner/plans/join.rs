@@ -40,6 +40,7 @@ use crate::optimizer::ir::Side;
 use crate::optimizer::ir::StatInfo;
 use crate::optimizer::ir::Statistics;
 use crate::optimizer::ir::UniformSampleSet;
+use crate::optimizer::ir::discrete_domain_size;
 use crate::plans::Operator;
 use crate::plans::RelOp;
 use crate::plans::ScalarExpr;
@@ -1324,19 +1325,7 @@ fn bound_ndv_by_discrete_domain(
     min: &Datum,
     max: &Datum,
 ) -> (StatEstimate, bool) {
-    let domain_ndv = match (min, max) {
-        (Datum::Bool(min), Datum::Bool(max)) if min <= max => {
-            Some((*max as u8 - *min as u8 + 1) as f64)
-        }
-        (Datum::Int(min), Datum::Int(max)) if min <= max => {
-            Some((*max as i128 - *min as i128 + 1) as f64)
-        }
-        (Datum::UInt(min), Datum::UInt(max)) if min <= max => {
-            Some((*max as u128 - *min as u128 + 1) as f64)
-        }
-        _ => None,
-    };
-    let Some(domain_ndv) = domain_ndv else {
+    let Some(domain_ndv) = discrete_domain_size(min, max) else {
         return (ndv, false);
     };
     let bounded = StatEstimate::new(

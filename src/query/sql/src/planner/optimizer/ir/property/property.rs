@@ -69,6 +69,11 @@ pub struct StatInfo {
 }
 
 impl StatInfo {
+    /// The largest input size this estimate must plan for.
+    pub(crate) fn risk_cardinality(&self) -> f64 {
+        self.max_cardinality.max(self.cardinality)
+    }
+
     pub(crate) fn cardinality_is_severely_underestimated(&self) -> bool {
         let cardinality = self.cardinality;
         let max_cardinality = self.max_cardinality.max(cardinality);
