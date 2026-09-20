@@ -1,5 +1,5 @@
-name: "05_unknown_ndv_outer_join_build"
-description: "A huge scan with unknown-NDV integer equality filters must not become the outer-join build side instead of a small time-window input"
+name: "06_never_analyzed_outer_join_build"
+description: "Replay of a never-analyzed fuse table (stats_row_count = 0): the provider must keep the [min, max]-bounded NDV for status-like columns, so a huge scan with equality filters is not estimated as one row and turned into the outer-join broadcast build side"
 
 sql: |
   SELECT a.id, a.member_id, a.network, a.coin, a.amount, a.note,
@@ -32,10 +32,13 @@ node_num: 3
 table_statistics:
   activity_source:
     num_rows: 1361110981
+    stats_row_count: 0
   pending_lookup:
     num_rows: 1361298
+    stats_row_count: 0
   settlement_source:
     num_rows: 1548415710
+    stats_row_count: 0
 
 column_statistics:
   activity_source.member_id:
@@ -96,6 +99,6 @@ column_statistics:
     null_count: 0
 
 tables:
-  activity_source: basic/05_activity_source.sql
-  pending_lookup: basic/05_pending_lookup.sql
-  settlement_source: basic/05_settlement_source.sql
+  activity_source: basic/06_activity_source.sql
+  pending_lookup: basic/06_pending_lookup.sql
+  settlement_source: basic/06_settlement_source.sql

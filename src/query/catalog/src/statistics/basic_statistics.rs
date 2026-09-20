@@ -66,13 +66,14 @@ impl BasicColumnStatistics {
         self.in_memory_size += other.in_memory_size;
     }
 
-    // If the data type is int and max - min + 1 < ndv, then adjust ndv to max - min + 1.
-    fn adjust_ndv_by_min_max(ndv: Option<u64>, mut min: Datum, mut max: Datum) -> Option<u64> {
-        let mut range = match (&mut min, &mut max) {
+    // The number of distinct values a column can hold within `[min, max]`.
+    // `None` when the domain cannot be derived (long or empty strings).
+    fn domain_size(mut min: Datum, mut max: Datum) -> Option<u64> {
+        let range = match (&mut min, &mut max) {
             (Datum::Bytes(min), Datum::Bytes(max)) => {
                 // There are 128 characters in ASCII code and 128^4 = 268435456 < 2^32 < 128^5.
                 if min.is_empty() || max.is_empty() || min.len() > 4 || max.len() > 4 {
-                    return ndv;
+                    return None;
                 }
                 let mut min_value: u32 = 0;
                 let mut max_value: u32 = 0;
@@ -96,7 +97,14 @@ impl BasicColumnStatistics {
                 (max - min) as u64
             }
         };
-        range = range.saturating_add(1);
+        Some(range.saturating_add(1))
+    }
+
+    // If the data type is int and max - min + 1 < ndv, then adjust ndv to max - min + 1.
+    fn adjust_ndv_by_min_max(ndv: Option<u64>, min: Datum, max: Datum) -> Option<u64> {
+        let Some(range) = Self::domain_size(min, max) else {
+            return ndv;
+        };
         let ndv = match ndv {
             Some(ndv) if range > ndv && ndv != 0 => ndv,
             _ => range,
@@ -113,31 +121,45 @@ impl BasicColumnStatistics {
         if self.min.as_ref().unwrap().is_bytes() ^ self.max.as_ref().unwrap().is_bytes() {
             return None;
         }
-        let ndv = Self::adjust_ndv_by_min_max(
-            self.ndv,
-            self.min.clone().unwrap(),
-            self.max.clone().unwrap(),
-        );
+        let min = self.min.clone().unwrap();
+        let max = self.max.clone().unwrap();
+        let ndv = Self::adjust_ndv_by_min_max(self.ndv, min.clone(), max.clone());
         let ndv = match ndv {
-            None => Some(num_rows),
-            Some(v) => Some(Self::estimate_ndv(v, stats_row_count, num_rows)),
+            None => num_rows,
+            Some(v) => Self::estimate_ndv(v, stats_row_count, num_rows),
+        };
+        // The sample-based extrapolation can overshoot badly when only a few
+        // rows have been analyzed (e.g. a legacy table that received a handful
+        // of writes after an upgrade). Whatever the sample says, the column
+        // cannot hold more distinct values than its `[min, max]` domain.
+        let ndv = match Self::domain_size(min, max) {
+            Some(range) if range > 0 => ndv.min(range),
+            _ => ndv,
         };
         Some(Self {
             min: self.min.clone(),
             max: self.max.clone(),
-            ndv,
+            ndv: Some(ndv),
             null_count: self.null_count,
             in_memory_size: self.in_memory_size,
         })
     }
 
     // Inspired by duckdb (https://github.com/duckdb/duckdb/blob/main/src/storage/statistics/distinct_statistics.cpp#L55-L69)
+    //
+    // `ndv` has already been bounded by the `[min, max]` domain, so it stays a
+    // valid upper bound even when it did not come from a sample. Only scale it
+    // up when a sample covering `stats_row_count < num_rows` rows exists.
     fn estimate_ndv(ndv: u64, stats_row_count: u64, num_rows: u64) -> u64 {
-        if stats_row_count == 0 || ndv == 0 {
+        if ndv == 0 {
             return num_rows;
         }
 
-        if stats_row_count >= num_rows {
+        // No sample was collected (the table was never analyzed), or the sample
+        // already covers the whole table. The domain bound is the best estimate
+        // available; falling back to `num_rows` would make an equality filter on
+        // a low-cardinality column look like it matches a single row.
+        if stats_row_count == 0 || stats_row_count >= num_rows {
             return ndv.min(num_rows);
         }
 
@@ -156,6 +178,7 @@ impl BasicColumnStatistics {
 #[cfg(test)]
 mod tests {
     use super::BasicColumnStatistics;
+    use super::Datum;
 
     #[test]
     fn test_estimate_ndv() {
@@ -166,5 +189,66 @@ mod tests {
             BasicColumnStatistics::estimate_ndv(6000, 10000, 1000000),
             219840
         );
+        // Without a sample the domain-bounded ndv must be kept instead of
+        // degrading to the row count.
+        assert_eq!(BasicColumnStatistics::estimate_ndv(9, 0, 1_548_415_710), 9);
+        assert_eq!(BasicColumnStatistics::estimate_ndv(0, 0, 100), 100);
+        assert_eq!(BasicColumnStatistics::estimate_ndv(500, 0, 100), 100);
+    }
+
+    #[test]
+    fn test_useful_stat_without_sample_keeps_domain_bounded_ndv() {
+        // Mirrors `FuseTableColumnStatisticsProvider` for a table that was never
+        // analyzed: the ndv defaults to the row count and `stats_row_count` is 0.
+        // A status-like integer column in `[0, 8]` must not end up with an ndv
+        // equal to the row count, which estimates `status = 7` as one row.
+        let num_rows = 1_548_415_710;
+        let stat = BasicColumnStatistics {
+            min: Some(Datum::Int(0)),
+            max: Some(Datum::Int(8)),
+            ndv: Some(num_rows),
+            null_count: 0,
+            in_memory_size: 0,
+        };
+        let useful = stat.get_useful_stat(num_rows, 0).unwrap();
+        assert_eq!(useful.ndv, Some(9));
+
+        // A wide-domain column still falls back to the row count.
+        let stat = BasicColumnStatistics {
+            min: Some(Datum::Int(10_000_001)),
+            max: Some(Datum::Int(1_278_189_672)),
+            ndv: Some(num_rows),
+            null_count: 0,
+            in_memory_size: 0,
+        };
+        let useful = stat.get_useful_stat(num_rows, 0).unwrap();
+        assert_eq!(useful.ndv, Some(1_268_189_672));
+
+        // A tiny sample (a few rows written after the upgrade) must not let the
+        // Good-Turing extrapolation exceed the domain either.
+        let stat = BasicColumnStatistics {
+            min: Some(Datum::Int(0)),
+            max: Some(Datum::Int(8)),
+            ndv: Some(3),
+            null_count: 0,
+            in_memory_size: 0,
+        };
+        assert_eq!(
+            BasicColumnStatistics::estimate_ndv(3, 100, num_rows),
+            41_810
+        );
+        let useful = stat.get_useful_stat(num_rows, 100).unwrap();
+        assert_eq!(useful.ndv, Some(9));
+
+        // A collected sample is still scaled with the Good-Turing estimator.
+        let stat = BasicColumnStatistics {
+            min: Some(Datum::Int(0)),
+            max: Some(Datum::Int(1_000_000)),
+            ndv: Some(6000),
+            null_count: 0,
+            in_memory_size: 0,
+        };
+        let useful = stat.get_useful_stat(1_000_000, 10_000).unwrap();
+        assert_eq!(useful.ndv, Some(219_840));
     }
 }

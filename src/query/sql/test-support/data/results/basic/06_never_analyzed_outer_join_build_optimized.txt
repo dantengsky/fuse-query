@@ -15,26 +15,23 @@ EvalScalar
                     ├── other filters: []
                     ├── Exchange(Hash)
                     │   ├── Exchange(Hash): keys: [pending_lookup.txn_ref (#12), pending_lookup.member_id (#11)]
-                    │   └── Join(Right)
-                    │       ├── build keys: [activity_source.note (#9), activity_source.member_id (#1)]
-                    │       ├── probe keys: [pending_lookup.req_ref (#10), pending_lookup.member_id (#11)]
+                    │   └── Join(Left)
+                    │       ├── build keys: [pending_lookup.req_ref (#10), pending_lookup.member_id (#11)]
+                    │       ├── probe keys: [activity_source.note (#9), activity_source.member_id (#1)]
                     │       ├── other filters: []
-                    │       ├── Exchange(Hash)
-                    │       │   ├── Exchange(Hash): keys: [activity_source.note (#9), activity_source.member_id (#1)]
-                    │       │   └── Scan
-                    │       │       ├── table: default.activity_source (#0)
-                    │       │       ├── filters: [eq(activity_source.kind (#4), 3), eq(activity_source.state (#5), 6), gte(activity_source.apply_at (#7), '2026-09-18 08:00:00.000000'), lte(activity_source.apply_at (#7), '2026-09-18 10:00:00.000000'), eq(activity_source.auto_state (#6), '2'), eq(substring(activity_source.note (#9), 1, 1), 'd')]
-                    │       │       ├── order by: []
-                    │       │       └── limit: NONE
-                    │       └── Exchange(Hash)
-                    │           ├── Exchange(Hash): keys: [pending_lookup.req_ref (#10), pending_lookup.member_id (#11)]
-                    │           └── EvalScalar
-                    │               ├── scalars: [pending_lookup.req_ref (#10) AS (#10), pending_lookup.member_id (#11) AS (#11), pending_lookup.txn_ref (#12) AS (#12), pending_lookup.updated_at (#13) AS (#21)]
-                    │               └── Scan
-                    │                   ├── table: default.pending_lookup (#1)
-                    │                   ├── filters: [gt(pending_lookup.updated_at (#13), '2026-09-18 07:00:00.000000'), eq(substring(pending_lookup.req_ref (#10), 1, 1), 'd')]
-                    │                   ├── order by: []
-                    │                   └── limit: NONE
+                    │       ├── Exchange(Broadcast)
+                    │       │   └── EvalScalar
+                    │       │       ├── scalars: [pending_lookup.req_ref (#10) AS (#10), pending_lookup.member_id (#11) AS (#11), pending_lookup.txn_ref (#12) AS (#12), pending_lookup.updated_at (#13) AS (#21)]
+                    │       │       └── Scan
+                    │       │           ├── table: default.pending_lookup (#1)
+                    │       │           ├── filters: [gt(pending_lookup.updated_at (#13), '2026-09-18 07:00:00.000000'), eq(substring(pending_lookup.req_ref (#10), 1, 1), 'd')]
+                    │       │           ├── order by: []
+                    │       │           └── limit: NONE
+                    │       └── Scan
+                    │           ├── table: default.activity_source (#0)
+                    │           ├── filters: [eq(activity_source.kind (#4), 3), eq(activity_source.state (#5), 6), gte(activity_source.apply_at (#7), '2026-09-18 08:00:00.000000'), lte(activity_source.apply_at (#7), '2026-09-18 10:00:00.000000'), eq(activity_source.auto_state (#6), '2'), eq(substring(activity_source.note (#9), 1, 1), 'd')]
+                    │           ├── order by: []
+                    │           └── limit: NONE
                     └── Exchange(Hash)
                         ├── Exchange(Hash): keys: [settlement_source.txn_ref (#14), settlement_source.member_id (#15)]
                         └── EvalScalar

@@ -1,0 +1,77 @@
+Limit
+├── output columns: [settlement_source.member_id (#15), settlement_source.coin (#16), settlement_source.network (#17), settlement_source.moved_amount (#18), a.id (#0), a.member_id (#1), a.coin (#2), a.amount (#3), a.network (#8), a.note (#9), pending_lookup.txn_ref (#12)]
+├── limit: 100
+├── offset: 0
+├── estimated rows: 100.00
+└── Exchange
+    ├── output columns: [settlement_source.member_id (#15), settlement_source.coin (#16), settlement_source.network (#17), settlement_source.moved_amount (#18), a.id (#0), a.member_id (#1), a.coin (#2), a.amount (#3), a.network (#8), a.note (#9), pending_lookup.txn_ref (#12)]
+    ├── exchange type: Merge
+    └── Limit
+        ├── output columns: [settlement_source.member_id (#15), settlement_source.coin (#16), settlement_source.network (#17), settlement_source.moved_amount (#18), a.id (#0), a.member_id (#1), a.coin (#2), a.amount (#3), a.network (#8), a.note (#9), pending_lookup.txn_ref (#12)]
+        ├── limit: 100
+        ├── offset: 0
+        ├── estimated rows: 100.00
+        └── Filter
+            ├── output columns: [settlement_source.member_id (#15), settlement_source.coin (#16), settlement_source.network (#17), settlement_source.moved_amount (#18), a.id (#0), a.member_id (#1), a.coin (#2), a.amount (#3), a.network (#8), a.note (#9), pending_lookup.txn_ref (#12)]
+            ├── filters: [is_true(abs(a.amount (#3) - if(CAST(NOT is_not_null(c.moved_amount (#18)) AS Boolean NULL), 0.000000000000000000, c.moved_amount (#18))) > 0.00000001)]
+            ├── estimated rows: 108888.88
+            └── HashJoin
+                ├── output columns: [settlement_source.member_id (#15), settlement_source.coin (#16), settlement_source.network (#17), settlement_source.moved_amount (#18), a.id (#0), a.member_id (#1), a.coin (#2), a.amount (#3), a.network (#8), a.note (#9), pending_lookup.txn_ref (#12)]
+                ├── join type: RIGHT OUTER
+                ├── build keys: [b.txn_ref (#12), b.member_id (#11)]
+                ├── probe keys: [c.txn_ref (#14), c.member_id (#15)]
+                ├── keys is null equal: [false, false]
+                ├── filters: []
+                ├── build join filters(distributed):
+                │   ├── filter id:0, build key:b.txn_ref (#12), probe targets:[c.txn_ref (#14)@scan2], filter type:bloom,inlist,min_max
+                │   └── filter id:1, build key:b.member_id (#11), probe targets:[c.member_id (#15)@scan2], filter type:bloom,inlist,min_max
+                ├── estimated rows: 544444.39
+                ├── Exchange(Build)
+                │   ├── output columns: [a.id (#0), a.member_id (#1), a.coin (#2), a.amount (#3), a.network (#8), a.note (#9), pending_lookup.member_id (#11), pending_lookup.txn_ref (#12)]
+                │   ├── exchange type: Hash(b.txn_ref (#12), b.member_id (#11))
+                │   └── HashJoin
+                │       ├── output columns: [a.id (#0), a.member_id (#1), a.coin (#2), a.amount (#3), a.network (#8), a.note (#9), pending_lookup.member_id (#11), pending_lookup.txn_ref (#12)]
+                │       ├── join type: LEFT OUTER
+                │       ├── build keys: [b.req_ref (#10), b.member_id (#11)]
+                │       ├── probe keys: [a.note (#9), a.member_id (#1)]
+                │       ├── keys is null equal: [false, false]
+                │       ├── filters: []
+                │       ├── estimated rows: 544444.39
+                │       ├── Exchange(Build)
+                │       │   ├── output columns: [pending_lookup.req_ref (#10), pending_lookup.member_id (#11), pending_lookup.txn_ref (#12)]
+                │       │   ├── exchange type: Broadcast
+                │       │   └── TableScan
+                │       │       ├── table: default.default.pending_lookup
+                │       │       ├── scan id: 1
+                │       │       ├── output columns: [req_ref (#10), member_id (#11), txn_ref (#12)]
+                │       │       ├── read rows: 0
+                │       │       ├── read size: 0
+                │       │       ├── partitions total: 0
+                │       │       ├── partitions scanned: 0
+                │       │       ├── push downs: [filters: [pending_lookup.updated_at (#13) > '2026-09-18 07:00:00.000000' and substr(pending_lookup.req_ref (#10), 1, 1) = 'd'], limit: NONE]
+                │       │       └── estimated rows: 544.52
+                │       └── TableScan(Probe)
+                │           ├── table: default.default.activity_source
+                │           ├── scan id: 0
+                │           ├── output columns: [id (#0), member_id (#1), coin (#2), amount (#3), network (#8), note (#9)]
+                │           ├── read rows: 0
+                │           ├── read size: 0
+                │           ├── partitions total: 0
+                │           ├── partitions scanned: 0
+                │           ├── push downs: [filters: [activity_source.kind (#4) = 3 and activity_source.state (#5) = 6 and activity_source.apply_at (#7) >= '2026-09-18 08:00:00.000000' and activity_source.apply_at (#7) <= '2026-09-18 10:00:00.000000' and activity_source.auto_state (#6) = '2' and substr(activity_source.note (#9), 1, 1) = 'd'], limit: NONE]
+                │           └── estimated rows: 544444.39
+                └── Exchange(Probe)
+                    ├── output columns: [settlement_source.txn_ref (#14), settlement_source.member_id (#15), settlement_source.coin (#16), settlement_source.network (#17), settlement_source.moved_amount (#18)]
+                    ├── exchange type: Hash(c.txn_ref (#14), c.member_id (#15))
+                    └── TableScan
+                        ├── table: default.default.settlement_source
+                        ├── scan id: 2
+                        ├── output columns: [txn_ref (#14), member_id (#15), coin (#16), network (#17), moved_amount (#18)]
+                        ├── read rows: 0
+                        ├── read size: 0
+                        ├── partitions total: 0
+                        ├── partitions scanned: 0
+                        ├── push downs: [filters: [settlement_source.state (#19) = 7 and settlement_source.return_state (#20) = 5], limit: NONE]
+                        ├── apply join filters: [#0, #1]
+                        └── estimated rows: 172046190.00
+

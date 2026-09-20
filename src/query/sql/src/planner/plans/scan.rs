@@ -28,7 +28,6 @@ use databend_common_expression::stat_distribution::StatCardinality;
 use databend_common_expression::stat_distribution::StatCount;
 use databend_common_expression::stat_distribution::StatEstimate;
 use databend_common_statistics::DEFAULT_HISTOGRAM_BUCKETS;
-use databend_common_statistics::Datum;
 use databend_common_statistics::Histogram;
 use databend_storages_common_table_meta::table::ChangeType;
 
@@ -47,7 +46,6 @@ use crate::optimizer::ir::RequiredProperty;
 use crate::optimizer::ir::SelectivityEstimator;
 use crate::optimizer::ir::StatInfo;
 use crate::optimizer::ir::Statistics as OpStatistics;
-use crate::optimizer::ir::discrete_domain_size;
 use crate::plans::Operator;
 use crate::plans::RelOp;
 use crate::plans::ScalarExpr;
@@ -218,27 +216,15 @@ impl Scan {
     }
 }
 
-fn derive_scan_ndv(
-    ndv: Option<u64>,
-    null_count: u64,
-    num_rows: Option<u64>,
-    min: &Datum,
-    max: &Datum,
-) -> StatEstimate {
-    if let Some(ndv) = ndv {
-        return StatEstimate::exact(ndv as f64);
-    }
-
-    // Without a collected NDV, the distinct non-null values are still bounded
-    // by the row count and, for discrete datums, by the `[min, max]` domain.
-    // Assuming every row is distinct would make an equality filter on a
-    // low-cardinality integer column look like it matches a single row.
+fn derive_scan_ndv(ndv: Option<u64>, null_count: u64, num_rows: Option<u64>) -> StatEstimate {
     let max_non_null_count = num_rows
         .map(|num_rows| num_rows.saturating_sub(null_count) as f64)
         .unwrap_or(u64::MAX as f64);
-    let upper = discrete_domain_size(min, max)
-        .map_or(max_non_null_count, |domain| domain.min(max_non_null_count));
-    StatEstimate::new(0.0, upper, upper)
+
+    match ndv {
+        Some(ndv) => StatEstimate::exact(ndv as f64),
+        None => StatEstimate::new(0.0, max_non_null_count, max_non_null_count),
+    }
 }
 
 impl PartialEq for Scan {
@@ -343,7 +329,7 @@ impl Operator for Scan {
                 };
 
                 let null_count = StatCount::exact(col_stat.null_count);
-                let ndv = derive_scan_ndv(col_stat.ndv, col_stat.null_count, num_rows, &min, &max);
+                let ndv = derive_scan_ndv(col_stat.ndv, col_stat.null_count, num_rows);
 
                 let histogram = if let Some(histogram) = self.statistics.histograms.get(k)
                     && histogram.is_some()
@@ -478,33 +464,6 @@ impl Operator for Scan {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_unknown_scan_ndv_is_bounded_by_discrete_domain() {
-        // A status-like integer column without collected NDV cannot hold more
-        // distinct values than its `[min, max]` domain, so an equality filter
-        // must not be estimated as matching a single row of a huge table.
-        let ndv = derive_scan_ndv(None, 0, Some(1_548_415_710), &Datum::Int(0), &Datum::Int(8));
-        assert_eq!(ndv, StatEstimate::new(0.0, 9.0, 9.0));
-
-        // The row count still bounds a wide domain.
-        let ndv = derive_scan_ndv(None, 10, Some(100), &Datum::Int(0), &Datum::Int(1_000_000));
-        assert_eq!(ndv, StatEstimate::new(0.0, 90.0, 90.0));
-
-        // Non-discrete bounds keep the row-count fallback.
-        let ndv = derive_scan_ndv(
-            None,
-            0,
-            Some(100),
-            &Datum::Bytes(b"a".to_vec()),
-            &Datum::Bytes(b"a".to_vec()),
-        );
-        assert_eq!(ndv, StatEstimate::new(0.0, 100.0, 100.0));
-
-        // Collected NDV is trusted as-is.
-        let ndv = derive_scan_ndv(Some(50), 0, Some(100), &Datum::Int(0), &Datum::Int(8));
-        assert_eq!(ndv, StatEstimate::exact(50.0));
-    }
 
     #[test]
     fn test_derive_scan_preserves_bind_time_metadata() {
