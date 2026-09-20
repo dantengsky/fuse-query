@@ -267,18 +267,33 @@ impl SubqueryDecorrelatorOptimizer {
             .iter()
             .map(|old| derived_columns.must_resolve(*old))
             .collect::<Result<ColumnSet>>()?;
+        // A correlated column may resolve to an index this EvalScalar already
+        // projects as an identity (`b.id AS #2` with `a.id -> #2`). Keep that
+        // item: its binding carries the table index and column name, which the
+        // prewhere push-down needs to absorb filters into the scan. Only
+        // synthesize an `outer.` item for indexes that have no projection here.
+        let identity_indexes: ColumnSet = eval_scalar
+            .items
+            .iter()
+            .filter(|item| !correlated_columns.contains(&item.index))
+            .filter(|item| {
+                matches!(&item.scalar, ScalarExpr::BoundColumnRef(column)
+                    if column.column.index == item.index)
+            })
+            .map(|item| item.index)
+            .collect();
         let items: Vec<ScalarItem> = eval_scalar
             .items
             .iter()
             .filter(|item| !correlated_columns.contains(&item.index))
-            // Only remove redundant identity projections, never computations.
-            .filter(|item| {
-                !reemitted_indexes.contains(&item.index)
-                    || !matches!(&item.scalar, ScalarExpr::BoundColumnRef(column)
-                    if column.column.index == item.index)
-            })
             .map(Item::Scalar)
-            .chain(reemitted_indexes.iter().copied().map(Item::Index))
+            .chain(
+                reemitted_indexes
+                    .iter()
+                    .copied()
+                    .filter(|index| !identity_indexes.contains(index))
+                    .map(Item::Index),
+            )
             .map(|item| match item {
                 Item::Scalar(item) => Ok(ScalarItem {
                     scalar: self.flatten_scalar(

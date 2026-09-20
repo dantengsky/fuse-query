@@ -181,6 +181,15 @@ async fn test_decorrelate_correlated_alias_regressions() -> Result<()> {
         )
     "#,
         },
+        SqlTestCase {
+            name: "identity_projection_keeps_table_binding",
+            description: "When a correlated column resolves to an index the subquery already projects as an identity, keep that item so the remaining filter still carries a table binding and is absorbed into the scan instead of staying as a redundant Filter.",
+            setup_sqls: &[
+                "CREATE TABLE a(id INT, c1 INT NULL)",
+                "CREATE TABLE b(id INT, c1 INT NULL)",
+            ],
+            sql: "SELECT * FROM a WHERE a.id = (SELECT id FROM b WHERE a.id = b.id)",
+        },
     ];
 
     for case in &cases {

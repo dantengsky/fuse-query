@@ -169,3 +169,48 @@ Exchange(Merge)
                 └── num_rows: [1]
 
 
+=== identity_projection_keeps_table_binding ===
+description: When a correlated column resolves to an index the subquery already projects as an identity, keep that item so the remaining filter still carries a table binding and is absorbed into the scan instead of staying as a redundant Filter.
+sql: SELECT * FROM a WHERE a.id = (SELECT id FROM b WHERE a.id = b.id)
+raw_plan:
+EvalScalar
+├── scalars: [a.id (#0) AS (#0), a.c1 (#1) AS (#1)]
+└── Filter
+    ├── filters: [eq(a.id (#0), SUBQUERY AS (#2))]
+    ├── subquerys
+    │   └── Subquery (Scalar)
+    │       ├── output_column: b.id (#2)
+    │       └── EvalScalar
+    │           ├── scalars: [b.id (#2) AS (#2)]
+    │           └── Filter
+    │               ├── filters: [eq(a.id (#0), b.id (#2))]
+    │               └── Scan
+    │                   ├── table: default.b (#1)
+    │                   ├── filters: []
+    │                   ├── order by: []
+    │                   └── limit: NONE
+    └── Scan
+        ├── table: default.a (#0)
+        ├── filters: []
+        ├── order by: []
+        └── limit: NONE
+
+optimized_plan:
+EvalScalar
+├── scalars: [a.id (#0) AS (#0), a.c1 (#1) AS (#1), b.id (#2) AS (#4)]
+└── Join(Inner)
+    ├── build keys: [b.id (#2), b.id (#2)]
+    ├── probe keys: [a.id (#0), a.id (#0)]
+    ├── other filters: []
+    ├── Scan
+    │   ├── table: default.b (#1)
+    │   ├── filters: [eq(b.id (#2), b.id (#2))]
+    │   ├── order by: []
+    │   └── limit: NONE
+    └── Scan
+        ├── table: default.a (#0)
+        ├── filters: []
+        ├── order by: []
+        └── limit: NONE
+
+
