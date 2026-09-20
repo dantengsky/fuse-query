@@ -16,7 +16,6 @@ use std::sync::Arc;
 
 use databend_common_exception::Result;
 
-use crate::optimizer::ir::MAX_CARDINALITY_UNDERESTIMATION_RATIO;
 use crate::optimizer::ir::Matcher;
 use crate::optimizer::ir::RelExpr;
 use crate::optimizer::ir::SExpr;
@@ -34,28 +33,17 @@ fn contains_recursive_cte(expr: &SExpr) -> bool {
         || expr.children().any(contains_recursive_cte)
 }
 
-/// Cardinality used to order a hash build candidate against the alternative
-/// build input.
-///
-/// Expected rows drive the choice. A severely underestimated input is ordered
-/// by its risk bound instead, but only while that bound also dwarfs the
-/// alternative build: shielding a cheap build from a possibly huge one is
-/// worthwhile, whereas preferring an input that is already expected to be
-/// large over a small expected input with a comparable worst case is not.
-fn build_cardinality(candidate: &StatInfo, alternative: &StatInfo) -> f64 {
-    if candidate.cardinality_is_severely_underestimated()
-        && candidate.risk_cardinality()
-            > alternative.risk_cardinality() * MAX_CARDINALITY_UNDERESTIMATION_RATIO
-    {
-        candidate.risk_cardinality()
-    } else {
-        candidate.cardinality
-    }
-}
-
 fn should_commute(join_type: JoinType, left: &StatInfo, right: &StatInfo) -> bool {
-    let left_build_cardinality = build_cardinality(left, right);
-    let right_build_cardinality = build_cardinality(right, left);
+    let left_build_cardinality = if left.cardinality_is_severely_underestimated() {
+        left.max_cardinality.max(left.cardinality)
+    } else {
+        left.cardinality
+    };
+    let right_build_cardinality = if right.cardinality_is_severely_underestimated() {
+        right.max_cardinality.max(right.cardinality)
+    } else {
+        right.cardinality
+    };
     if left_build_cardinality < right_build_cardinality
         || (left_build_cardinality == right_build_cardinality
             && left.cardinality < right.cardinality)
@@ -237,41 +225,6 @@ mod tests {
 
         assert!(should_commute(JoinType::Inner, &selective_left, &right));
         assert!(!should_commute(JoinType::Inner, &right, &selective_left));
-    }
-
-    #[test]
-    fn test_severe_underestimate_yields_to_comparably_large_certain_build() {
-        // A stale time window estimates one row with a risk bound of a fifth of
-        // its source, while the other outer-join input is expected to hold more
-        // than a hundred million rows. Building the large input is certain to be
-        // expensive, so the small expected input stays the build side.
-        let mut stale_window = estimated_stat(1.0);
-        stale_window.max_cardinality = 272_222_196.2;
-        let large_certain = estimated_stat(172_046_190.0);
-
-        assert!(should_commute(
-            JoinType::Left,
-            &stale_window,
-            &large_certain
-        ));
-        assert!(!should_commute(
-            JoinType::Right,
-            &large_certain,
-            &stale_window
-        ));
-
-        // A cheap certain build is still shielded from the possibly huge input.
-        let cheap_certain = estimated_stat(100_000.0);
-        assert!(!should_commute(
-            JoinType::Left,
-            &stale_window,
-            &cheap_certain
-        ));
-        assert!(should_commute(
-            JoinType::Right,
-            &cheap_certain,
-            &stale_window
-        ));
     }
 
     #[test]

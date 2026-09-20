@@ -27,25 +27,6 @@ use crate::Symbol;
 
 pub type ColumnStatSet = HashMap<Symbol, ColumnStat>;
 
-/// Number of values that a discrete column domain `[min, max]` can hold.
-///
-/// Only exact discrete datums are considered. String bounds may be truncated
-/// and floating point or decimal bounds do not describe a countable domain.
-pub fn discrete_domain_size(min: &Datum, max: &Datum) -> Option<f64> {
-    match (min, max) {
-        (Datum::Bool(min), Datum::Bool(max)) if min <= max => {
-            Some((*max as u8 - *min as u8 + 1) as f64)
-        }
-        (Datum::Int(min), Datum::Int(max)) if min <= max => {
-            Some((*max as i128 - *min as i128 + 1) as f64)
-        }
-        (Datum::UInt(min), Datum::UInt(max)) if min <= max => {
-            Some((*max as u128 - *min as u128 + 1) as f64)
-        }
-        _ => None,
-    }
-}
-
 #[derive(Debug, Clone)]
 /// Statistics information of a column
 pub struct ColumnStat {

@@ -70,6 +70,13 @@ struct TestSpec {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TableStats {
     pub num_rows: Option<u64>,
+    /// Row count covered by collected (ANALYZE) statistics. When set, column
+    /// statistics are derived the way `FuseTableColumnStatisticsProvider` does:
+    /// a missing `ndv` defaults to `num_rows` and the result goes through
+    /// `BasicColumnStatistics::get_useful_stat`. `0` models a table that has
+    /// never been analyzed.
+    #[serde(default)]
+    pub stats_row_count: Option<u64>,
     pub data_size: Option<u64>,
     pub data_size_compressed: Option<u64>,
     pub index_size: Option<u64>,
@@ -429,8 +436,13 @@ impl SExprVisitor for StatsApplier<'_> {
             let table = metadata.table(scan.table_index);
 
             if let Some(stats) = self.table_stats.get(table.name()) {
-                let column_stats =
-                    self.build_column_stats(&metadata, scan.table_index, table.name());
+                let column_stats = self.build_column_stats(
+                    &metadata,
+                    scan.table_index,
+                    table.name(),
+                    stats.num_rows,
+                    stats.stats_row_count,
+                );
                 let table_stats = TableStatistics {
                     num_rows: stats.num_rows,
                     data_size: stats.data_size,
@@ -467,6 +479,8 @@ impl StatsApplier<'_> {
         metadata: &Metadata,
         table_index: IndexType,
         table_name: &str,
+        num_rows: Option<u64>,
+        stats_row_count: Option<u64>,
     ) -> HashMap<Symbol, Option<BasicColumnStatistics>> {
         let mut result = HashMap::new();
 
@@ -479,20 +493,28 @@ impl StatsApplier<'_> {
             {
                 let full_name = format!("{table_name}.{column_name}");
                 if let Some(stats) = self.column_stats.get(&full_name) {
+                    let basic = BasicColumnStatistics {
+                        min: to_datum(&stats.min)
+                            .or_else(|| default_min_datum(&column.data_type())),
+                        max: to_datum(&stats.max)
+                            .or_else(|| default_max_datum(&column.data_type())),
+                        ndv: stats.ndv,
+                        null_count: stats.null_count.unwrap_or(0),
+                        in_memory_size: 0,
+                    };
+                    let basic = match (stats_row_count, num_rows) {
+                        // Replay the fuse provider: an uncollected ndv defaults to
+                        // the row count before the min/max and sample adjustment.
+                        (Some(stats_row_count), Some(num_rows)) => BasicColumnStatistics {
+                            ndv: Some(basic.ndv.unwrap_or(num_rows)),
+                            ..basic
+                        }
+                        .get_useful_stat(num_rows, stats_row_count),
+                        _ => Some(basic),
+                    };
                     // Scan statistics are keyed by the metadata column index, not
                     // by the column position inside the table.
-                    result.insert(
-                        *column_index,
-                        Some(BasicColumnStatistics {
-                            min: to_datum(&stats.min)
-                                .or_else(|| default_min_datum(&column.data_type())),
-                            max: to_datum(&stats.max)
-                                .or_else(|| default_max_datum(&column.data_type())),
-                            ndv: stats.ndv,
-                            null_count: stats.null_count.unwrap_or(0),
-                            in_memory_size: 0,
-                        }),
-                    );
+                    result.insert(*column_index, basic);
                 }
             }
         }

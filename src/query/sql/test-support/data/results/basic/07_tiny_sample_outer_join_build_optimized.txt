@@ -1,0 +1,44 @@
+EvalScalar
+├── scalars: [activity_source.id (#0) AS (#0), activity_source.member_id (#1) AS (#1), activity_source.coin (#2) AS (#2), activity_source.amount (#3) AS (#3), activity_source.network (#8) AS (#8), activity_source.note (#9) AS (#9), pending_lookup.txn_ref (#12) AS (#12), settlement_source.member_id (#15) AS (#15), settlement_source.coin (#16) AS (#16), settlement_source.network (#17) AS (#17), settlement_source.moved_amount (#18) AS (#18), activity_source.kind (#4) AS (#24), activity_source.state (#5) AS (#25), activity_source.apply_at (#7) AS (#26), activity_source.auto_state (#6) AS (#27)]
+└── Limit
+    ├── limit: [100]
+    ├── offset: [0]
+    └── Exchange(Merge)
+        └── Limit
+            ├── limit: [100]
+            ├── offset: [0]
+            └── Filter
+                ├── filters: [gt(abs(minus(activity_source.amount (#3), if(not(is_not_null(settlement_source.moved_amount (#18))), 0, settlement_source.moved_amount (#18)))), 0.00000001)]
+                └── Join(Right)
+                    ├── build keys: [pending_lookup.txn_ref (#12), pending_lookup.member_id (#11)]
+                    ├── probe keys: [settlement_source.txn_ref (#14), settlement_source.member_id (#15)]
+                    ├── other filters: []
+                    ├── Exchange(Hash)
+                    │   ├── Exchange(Hash): keys: [pending_lookup.txn_ref (#12), pending_lookup.member_id (#11)]
+                    │   └── Join(Left)
+                    │       ├── build keys: [pending_lookup.req_ref (#10), pending_lookup.member_id (#11)]
+                    │       ├── probe keys: [activity_source.note (#9), activity_source.member_id (#1)]
+                    │       ├── other filters: []
+                    │       ├── Exchange(Broadcast)
+                    │       │   └── EvalScalar
+                    │       │       ├── scalars: [pending_lookup.req_ref (#10) AS (#10), pending_lookup.member_id (#11) AS (#11), pending_lookup.txn_ref (#12) AS (#12), pending_lookup.updated_at (#13) AS (#21)]
+                    │       │       └── Scan
+                    │       │           ├── table: default.pending_lookup (#1)
+                    │       │           ├── filters: [gt(pending_lookup.updated_at (#13), '2026-09-18 07:00:00.000000'), eq(substring(pending_lookup.req_ref (#10), 1, 1), 'd')]
+                    │       │           ├── order by: []
+                    │       │           └── limit: NONE
+                    │       └── Scan
+                    │           ├── table: default.activity_source (#0)
+                    │           ├── filters: [eq(activity_source.kind (#4), 3), eq(activity_source.state (#5), 6), gte(activity_source.apply_at (#7), '2026-09-18 08:00:00.000000'), lte(activity_source.apply_at (#7), '2026-09-18 10:00:00.000000'), eq(activity_source.auto_state (#6), '2'), eq(substring(activity_source.note (#9), 1, 1), 'd')]
+                    │           ├── order by: []
+                    │           └── limit: NONE
+                    └── Exchange(Hash)
+                        ├── Exchange(Hash): keys: [settlement_source.txn_ref (#14), settlement_source.member_id (#15)]
+                        └── EvalScalar
+                            ├── scalars: [settlement_source.txn_ref (#14) AS (#14), settlement_source.member_id (#15) AS (#15), settlement_source.coin (#16) AS (#16), settlement_source.network (#17) AS (#17), settlement_source.moved_amount (#18) AS (#18), settlement_source.state (#19) AS (#22), settlement_source.return_state (#20) AS (#23)]
+                            └── Scan
+                                ├── table: default.settlement_source (#2)
+                                ├── filters: [eq(settlement_source.state (#19), 7), eq(settlement_source.return_state (#20), 5)]
+                                ├── order by: []
+                                └── limit: NONE
+
