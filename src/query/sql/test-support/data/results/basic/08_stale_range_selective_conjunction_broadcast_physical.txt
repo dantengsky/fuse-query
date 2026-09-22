@@ -1,0 +1,53 @@
+Limit
+├── output columns: [d.mode (#12), d.custom_value (#13), d.tier (#14), d.modified_at (#15), d.suggested_value (#16), recent_event_source.event_id (#0), recent_event_source.member_id (#1), recent_event_source.created_at (#4), recent_event_source.channel (#5), dim_key (#7), tier_hint (#8), mode_hint (#9)]
+├── limit: 100
+├── offset: 0
+├── estimated rows: 0.60
+└── Exchange
+    ├── output columns: [d.mode (#12), d.custom_value (#13), d.tier (#14), d.modified_at (#15), d.suggested_value (#16), recent_event_source.event_id (#0), recent_event_source.member_id (#1), recent_event_source.created_at (#4), recent_event_source.channel (#5), dim_key (#7), tier_hint (#8), mode_hint (#9)]
+    ├── exchange type: Merge
+    └── Limit
+        ├── output columns: [d.mode (#12), d.custom_value (#13), d.tier (#14), d.modified_at (#15), d.suggested_value (#16), recent_event_source.event_id (#0), recent_event_source.member_id (#1), recent_event_source.created_at (#4), recent_event_source.channel (#5), dim_key (#7), tier_hint (#8), mode_hint (#9)]
+        ├── limit: 100
+        ├── offset: 0
+        ├── estimated rows: 0.60
+        └── Filter
+            ├── output columns: [d.mode (#12), d.custom_value (#13), d.tier (#14), d.modified_at (#15), d.suggested_value (#16), recent_event_source.event_id (#0), recent_event_source.member_id (#1), recent_event_source.created_at (#4), recent_event_source.channel (#5), dim_key (#7), tier_hint (#8), mode_hint (#9)]
+            ├── filters: [o.mode_hint (#9) <> upper(d.mode (#12)) or d.tier (#14) = 'T1' and NOT (o.tier_hint (#8) = 'X1' OR o.tier_hint (#8) = 'X2') or d.tier (#14) = 'T2' and NOT (o.tier_hint (#8) = 'Y1' OR o.tier_hint (#8) = 'Y2')]
+            ├── estimated rows: 0.60
+            └── HashJoin
+                ├── output columns: [d.mode (#12), d.custom_value (#13), d.tier (#14), d.modified_at (#15), d.suggested_value (#16), recent_event_source.event_id (#0), recent_event_source.member_id (#1), recent_event_source.created_at (#4), recent_event_source.channel (#5), dim_key (#7), tier_hint (#8), mode_hint (#9)]
+                ├── join type: INNER
+                ├── build keys: [CAST(o.dim_key (#7) AS Decimal(38, 5) NULL)]
+                ├── probe keys: [CAST(d.id (#11) AS Decimal(38, 5) NULL)]
+                ├── keys is null equal: [false]
+                ├── filters: [o.created_at (#4) > d.modified_at (#15)]
+                ├── estimated rows: 3.00
+                ├── Exchange(Build)
+                │   ├── output columns: [recent_event_source.event_id (#0), recent_event_source.member_id (#1), recent_event_source.created_at (#4), recent_event_source.channel (#5), dim_key (#7), tier_hint (#8), mode_hint (#9)]
+                │   ├── exchange type: Broadcast
+                │   └── EvalScalar
+                │       ├── output columns: [recent_event_source.event_id (#0), recent_event_source.member_id (#1), recent_event_source.created_at (#4), recent_event_source.channel (#5), dim_key (#7), tier_hint (#8), mode_hint (#9)]
+                │       ├── expressions: [if(CAST(is_not_null(json_extract_path_text(recent_event_source.payload (#6), '$.dim_key')) AS Boolean NULL), CAST(assume_not_null(json_extract_path_text(recent_event_source.payload (#6), '$.dim_key')) AS String NULL), true, '', NULL), if(CAST(is_not_null(json_extract_path_text(recent_event_source.payload (#6), '$.tier')) AS Boolean NULL), CAST(assume_not_null(json_extract_path_text(recent_event_source.payload (#6), '$.tier')) AS String NULL), true, '', NULL), upper(json_extract_path_text(recent_event_source.payload (#6), '$.mode'))]
+                │       ├── estimated rows: 3.00
+                │       └── TableScan
+                │           ├── table: default.default.recent_event_source
+                │           ├── scan id: 0
+                │           ├── output columns: [event_id (#0), member_id (#1), created_at (#4), channel (#5), payload (#6)]
+                │           ├── read rows: 0
+                │           ├── read size: 0
+                │           ├── partitions total: 0
+                │           ├── partitions scanned: 0
+                │           ├── push downs: [filters: [recent_event_source.status (#2) = 2 and recent_event_source.created_at (#4) >= '2030-01-01 00:00:00.000000' and recent_event_source.created_at (#4) <= '2030-01-01 00:30:00.000000' and (recent_event_source.channel (#5) = 'A' or recent_event_source.channel (#5) = 'B' or recent_event_source.channel (#5) = 'C') and is_not_null(json_extract_path_text(recent_event_source.payload (#6), '$.dim_key')) and json_extract_path_text(recent_event_source.payload (#6), '$.dim_key') <> ''], limit: NONE]
+                │           └── estimated rows: 3.00
+                └── TableScan(Probe)
+                    ├── table: default.default.preset_dimension
+                    ├── scan id: 1
+                    ├── output columns: [id (#11), mode (#12), custom_value (#13), tier (#14), modified_at (#15), suggested_value (#16)]
+                    ├── read rows: 0
+                    ├── read size: 0
+                    ├── partitions total: 0
+                    ├── partitions scanned: 0
+                    ├── push downs: [filters: [], limit: NONE]
+                    └── estimated rows: 120000000.00
+
