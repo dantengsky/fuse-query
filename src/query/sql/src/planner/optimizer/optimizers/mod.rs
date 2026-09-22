@@ -23,6 +23,8 @@ pub mod recursive;
 pub mod rule;
 mod sync_materialized_cte_ref;
 pub use cascades::CascadesOptimizer;
+pub use cascades::DEFAULT_TASK_LIMIT;
+pub use cascades::SchedulerStat;
 pub use cse::CommonSubexpressionOptimizer;
 pub use cte_filter_pushdown::CTEFilterPushdownOptimizer;
 pub use eliminate_self_join::EliminateSelfJoinOptimizer;
