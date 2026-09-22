@@ -101,7 +101,11 @@ impl Operator for Filter {
         let stale_range_statistics =
             stat_info.stale_range_statistics || uses_stale_range_statistics;
         if stat_info.stale_range_statistics {
-            max_cardinality = max_cardinality.max(stat_info.max_cardinality);
+            // The input bound is conservative (stale range fallback), so carry it
+            // through scaled by this filter's own conservative selectivity rather
+            // than by the expected one derived from the input's expected rows.
+            max_cardinality =
+                max_cardinality.max(sb.bound_cardinality(cardinality, stat_info.max_cardinality));
         }
         let precise_cardinality = sb.is_proven_empty().then_some(0);
         // Derive column statistics

@@ -1,0 +1,93 @@
+name: "08_stale_range_selective_conjunction_broadcast"
+description: "A stale time window combined with selective equality predicates on a huge never-analyzed table: the broadcast risk bound must honour the non-stale conjuncts, so the tiny build is broadcast instead of shuffling the large probe"
+
+sql: |
+  WITH recent AS (
+      SELECT event_id,
+             COALESCE(json_extract_path_text(payload, '$.dim_key'), '') AS dim_key,
+             COALESCE(json_extract_path_text(payload, '$.tier'), '') AS tier_hint,
+             UPPER(json_extract_path_text(payload, '$.mode')) AS mode_hint,
+             member_id,
+             channel,
+             COALESCE(ratio, 0) AS ratio,
+             created_at
+      FROM recent_event_source
+      WHERE created_at BETWEEN TIMESTAMP '2030-01-01 00:00:00' AND TIMESTAMP '2030-01-01 00:30:00'
+        AND channel IN ('A', 'B', 'C')
+        AND status = 2
+        AND json_extract_path_text(payload, '$.dim_key') IS NOT NULL
+        AND json_extract_path_text(payload, '$.dim_key') <> ''
+  )
+  SELECT o.event_id, o.dim_key, o.member_id, o.channel, o.mode_hint, o.tier_hint,
+         d.tier, d.mode, d.custom_value, d.suggested_value, d.modified_at, o.created_at
+  FROM recent AS o
+  LEFT OUTER JOIN preset_dimension AS d ON o.dim_key = d.id
+  WHERE o.created_at > d.modified_at
+    AND (o.mode_hint <> UPPER(d.mode)
+         OR (d.tier = 'T1' AND o.tier_hint NOT IN ('X1', 'X2'))
+         OR (d.tier = 'T2' AND o.tier_hint NOT IN ('Y1', 'Y2')))
+  LIMIT 100;
+
+node_num: 3
+
+table_statistics:
+  recent_event_source:
+    num_rows: 600000000
+    stats_row_count: 0
+  preset_dimension:
+    num_rows: 120000000
+    stats_row_count: 0
+
+column_statistics:
+  recent_event_source.event_id:
+    min: ""
+    max: "zzzz"
+    null_count: 0
+  recent_event_source.member_id:
+    min: 1
+    max: 1000000000
+    null_count: 0
+  recent_event_source.status:
+    min: 0
+    max: 8
+    null_count: 0
+  recent_event_source.created_at:
+    min: 1500000000000000
+    max: 1800000000000000
+    null_count: 0
+  recent_event_source.channel:
+    min: ""
+    max: "zzzz"
+    null_count: 0
+  recent_event_source.payload:
+    min: ""
+    max: "zzzz"
+    null_count: 0
+  preset_dimension.id:
+    min: 1
+    max: 120000000
+    null_count: 0
+  preset_dimension.mode:
+    min: ""
+    max: "zzzz"
+    null_count: 0
+  preset_dimension.custom_value:
+    min: ""
+    max: "zzzz"
+    null_count: 0
+  preset_dimension.tier:
+    min: ""
+    max: "zzzz"
+    null_count: 0
+  preset_dimension.modified_at:
+    min: 1500000000000000
+    max: 1800000000000000
+    null_count: 0
+  preset_dimension.suggested_value:
+    min: ""
+    max: "zzzz"
+    null_count: 0
+
+tables:
+  recent_event_source: basic/08_recent_event_source.sql
+  preset_dimension: basic/08_preset_dimension.sql

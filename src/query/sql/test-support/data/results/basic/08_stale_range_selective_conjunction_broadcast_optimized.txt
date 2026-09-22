@@ -1,0 +1,29 @@
+EvalScalar
+├── scalars: [recent_event_source.event_id (#0) AS (#0), recent_event_source.member_id (#1) AS (#1), recent_event_source.created_at (#4) AS (#4), recent_event_source.channel (#5) AS (#5), dim_key (#7) AS (#7), tier_hint (#8) AS (#8), mode_hint (#9) AS (#9), preset_dimension.mode (#12) AS (#12), preset_dimension.custom_value (#13) AS (#13), preset_dimension.tier (#14) AS (#14), preset_dimension.modified_at (#15) AS (#15), preset_dimension.suggested_value (#16) AS (#16), status (#17) AS (#19), payload (#18) AS (#20)]
+└── Limit
+    ├── limit: [100]
+    ├── offset: [0]
+    └── Exchange(Merge)
+        └── Limit
+            ├── limit: [100]
+            ├── offset: [0]
+            └── Filter
+                ├── filters: [or_filters(noteq(mode_hint (#9), upper(preset_dimension.mode (#12))), and_filters(eq(preset_dimension.tier (#14), 'T1'), not(or(eq(tier_hint (#8), 'X1'), eq(tier_hint (#8), 'X2')))), and_filters(eq(preset_dimension.tier (#14), 'T2'), not(or(eq(tier_hint (#8), 'Y1'), eq(tier_hint (#8), 'Y2')))))]
+                └── Join(Inner)
+                    ├── build keys: [dim_key (#7)]
+                    ├── probe keys: [preset_dimension.id (#11)]
+                    ├── other filters: [gt(recent_event_source.created_at (#4), preset_dimension.modified_at (#15))]
+                    ├── Exchange(Broadcast)
+                    │   └── EvalScalar
+                    │       ├── scalars: [recent_event_source.event_id (#0) AS (#0), recent_event_source.member_id (#1) AS (#1), recent_event_source.created_at (#4) AS (#4), recent_event_source.channel (#5) AS (#5), if(is_not_null(json_extract_path_text(recent_event_source.payload (#6), '$.dim_key')), assume_not_null(json_extract_path_text(recent_event_source.payload (#6), '$.dim_key')), true, '', NULL) AS (#7), if(is_not_null(json_extract_path_text(recent_event_source.payload (#6), '$.tier')), assume_not_null(json_extract_path_text(recent_event_source.payload (#6), '$.tier')), true, '', NULL) AS (#8), upper(json_extract_path_text(recent_event_source.payload (#6), '$.mode')) AS (#9), if(is_not_null(recent_event_source.ratio (#3)), assume_not_null(recent_event_source.ratio (#3)), true, 0, NULL) AS (#10), recent_event_source.status (#2) AS (#17), recent_event_source.payload (#6) AS (#18)]
+                    │       └── Scan
+                    │           ├── table: default.recent_event_source (#0)
+                    │           ├── filters: [eq(recent_event_source.status (#2), 2), gte(recent_event_source.created_at (#4), '2030-01-01 00:00:00.000000'), lte(recent_event_source.created_at (#4), '2030-01-01 00:30:00.000000'), or_filters(eq(recent_event_source.channel (#5), 'A'), eq(recent_event_source.channel (#5), 'B'), eq(recent_event_source.channel (#5), 'C')), is_not_null(json_extract_path_text(recent_event_source.payload (#6), '$.dim_key')), noteq(json_extract_path_text(recent_event_source.payload (#6), '$.dim_key'), '')]
+                    │           ├── order by: []
+                    │           └── limit: NONE
+                    └── Scan
+                        ├── table: default.preset_dimension (#1)
+                        ├── filters: []
+                        ├── order by: []
+                        └── limit: NONE
+
