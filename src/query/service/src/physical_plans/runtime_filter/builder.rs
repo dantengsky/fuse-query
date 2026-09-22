@@ -260,23 +260,25 @@ fn lineage_types_compatible(metadata: &MetadataRef, output: Symbol, input: Symbo
 /// rows that survive above them: removing input rows whose key is not in the build set only
 /// removes output rows that could never match the join.
 ///
-/// Row-preserving maps (`EvalScalar`, `Filter`, `Exchange`), inner joins, non-recursive unions,
-/// sorts without a limit and plain aggregates qualify. `Window`, `Limit`, top-n sorts, ranked or
-/// grouping-set aggregates, outer joins and recursive CTEs do not: their output depends on which
-/// other rows are present, so a filter applied below them would change results (for example
-/// `row_number()` values or which rows a `LIMIT` keeps).
+/// Row-preserving maps (`EvalScalar`, `Filter`, `Exchange`), joins, non-recursive unions, sorts
+/// without a limit and plain aggregates qualify. Joins of any type are fine: an outer join can
+/// only turn the removed rows' partners into NULL-padded rows, whose key is NULL and never
+/// matches either. `Window`, `Limit`, top-n sorts, ranked or grouping-set aggregates, CTE
+/// materialization and recursive CTEs do not qualify: their output depends on which other rows
+/// are present, so a filter applied below them would change results (for example `row_number()`
+/// values or which rows a `LIMIT` keeps).
 fn is_row_filter_transparent(plan: &RelOperator) -> bool {
     match plan {
         RelOperator::Scan(_)
         | RelOperator::EvalScalar(_)
         | RelOperator::Filter(_)
-        | RelOperator::Exchange(_) => true,
+        | RelOperator::Exchange(_)
+        | RelOperator::Join(_) => true,
         RelOperator::UnionAll(union) => union.cte_scan_names.is_empty(),
         RelOperator::Sort(sort) => sort.limit.is_none(),
         RelOperator::Aggregate(aggregate) => {
             aggregate.rank_limit.is_none() && aggregate.grouping_sets.is_none()
         }
-        RelOperator::Join(join) => matches!(join.join_type, JoinType::Inner),
         _ => false,
     }
 }
@@ -475,6 +477,11 @@ pub async fn build_runtime_filter(
 
         let probe_targets =
             find_probe_targets(metadata, probe_side, &probe_key, scan_id, column_idx)?;
+        if probe_targets.is_empty() {
+            // Every candidate scan sits below an operator whose output depends on the rows
+            // that are present (`Window`, `LIMIT`, ...); filtering there would change results.
+            continue;
+        }
 
         let build_table_rows =
             get_build_table_rows(ctx.clone(), metadata, build_table_index).await?;
@@ -580,14 +587,36 @@ fn find_probe_targets(
 
     let equiv_class = uf.get_equivalence_class(probe_key_col_idx);
 
+    // A runtime filter drops probe rows at the scan. That is only safe when every operator
+    // between the scan and this join is row-filter transparent; a scan feeding a `Window`,
+    // `LIMIT` or top-n sort must keep all its rows even though most of them never match.
+    let mut filterable_scans = HashSet::new();
+    collect_filterable_scan_ids(s_expr, &mut filterable_scans);
+
     let mut result = Vec::new();
     for idx in equiv_class {
         if let Some((remote_expr, scan_id)) = column_to_remote.get(&idx) {
-            result.push((remote_expr.clone(), *scan_id));
+            if filterable_scans.contains(scan_id) {
+                result.push((remote_expr.clone(), *scan_id));
+            }
         }
     }
 
     Ok(result)
+}
+
+/// Scan ids reachable from the probe side root through [`is_row_filter_transparent`] operators
+/// only. Subtrees below a non-transparent operator are not entered.
+fn collect_filterable_scan_ids(s_expr: &SExpr, scan_ids: &mut HashSet<usize>) {
+    if !is_row_filter_transparent(s_expr.plan()) {
+        return;
+    }
+    if let RelOperator::Scan(scan) = s_expr.plan() {
+        scan_ids.insert(scan.scan_id);
+    }
+    for child in s_expr.children() {
+        collect_filterable_scan_ids(child, scan_ids);
+    }
 }
 
 fn collect_equi_conditions(s_expr: &SExpr) -> Result<Vec<JoinEquiCondition>> {
@@ -725,6 +754,8 @@ mod tests {
     use databend_common_sql::plans::Limit;
     use databend_common_sql::plans::ScalarItem;
     use databend_common_sql::plans::Scan;
+    use databend_common_sql::plans::Sort;
+    use databend_common_sql::plans::SortItem;
     use databend_common_sql::plans::UnionAll;
 
     use super::*;
@@ -1094,6 +1125,63 @@ mod tests {
             resolve_runtime_filter_probe_column(&metadata, &limited, output),
             None
         );
+    }
+
+    /// `b JOIN (t1 JOIN (SELECT ... FROM t2 ORDER BY x LIMIT 5) ...)`: `t1` may be filtered at
+    /// the scan, `t2` may not because the top-n sort above it decides which rows survive.
+    #[test]
+    fn test_filterable_scans_exclude_scans_below_top_n() {
+        let metadata = MetadataRef::default();
+        let int64 = TableDataType::Number(NumberDataType::Int64);
+        let plain = base_column(&metadata, "uid", int64.clone(), 1, 1);
+        let topn = base_column(&metadata, "uid", int64, 2, 2);
+
+        let topn_branch = SExpr::create_unary(
+            Arc::new(RelOperator::Sort(Sort {
+                items: vec![SortItem {
+                    index: topn,
+                    asc: true,
+                    nulls_first: false,
+                }],
+                limit: Some(5),
+                after_exchange: None,
+                pre_projection: None,
+                window_partition: None,
+            })),
+            Arc::new(scan_expr(2, 2, topn)),
+        );
+        let probe_side = SExpr::create_binary(
+            Arc::new(RelOperator::Join(Join {
+                join_type: JoinType::Left,
+                ..Default::default()
+            })),
+            Arc::new(scan_expr(1, 1, plain)),
+            Arc::new(topn_branch),
+        );
+
+        let mut scan_ids = HashSet::new();
+        collect_filterable_scan_ids(&probe_side, &mut scan_ids);
+        assert_eq!(scan_ids, HashSet::from([1]));
+
+        // Without the limit the sort is only a reordering and both scans qualify.
+        let RelOperator::Sort(sort) = probe_side.child(1).unwrap().plan() else {
+            unreachable!()
+        };
+        let plain_sort = SExpr::create_unary(
+            Arc::new(RelOperator::Sort(Sort {
+                limit: None,
+                ..sort.clone()
+            })),
+            Arc::new(scan_expr(2, 2, topn)),
+        );
+        let probe_side = SExpr::create_binary(
+            Arc::new(probe_side.plan().clone()),
+            Arc::new(scan_expr(1, 1, plain)),
+            Arc::new(plain_sort),
+        );
+        let mut scan_ids = HashSet::new();
+        collect_filterable_scan_ids(&probe_side, &mut scan_ids);
+        assert_eq!(scan_ids, HashSet::from([1, 2]));
     }
 
     #[test]

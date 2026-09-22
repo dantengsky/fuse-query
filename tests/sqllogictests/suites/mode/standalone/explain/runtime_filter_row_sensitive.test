@@ -1,0 +1,205 @@
+statement ok
+drop table if exists rf_rs_build;
+
+statement ok
+drop table if exists rf_rs_probe;
+
+statement ok
+create table rf_rs_build (k Int32);
+
+statement ok
+create table rf_rs_probe (a Int32, b Int32) row_per_block = 1000;
+
+statement ok
+insert into rf_rs_build values (50), (60);
+
+statement ok
+insert into rf_rs_probe select number, number from numbers(10000);
+
+statement ok
+set max_threads = 1;
+
+statement ok
+set enable_join_runtime_filter = 1;
+
+statement ok
+set runtime_filter_wait_timeout_ms = 5000;
+
+statement ok
+set inlist_runtime_filter_threshold = 1000;
+
+statement ok
+set min_max_runtime_filter_threshold = 1000;
+
+statement ok
+set bloom_runtime_filter_threshold = 1000;
+
+statement ok
+set join_runtime_filter_selectivity_threshold = 101;
+
+# A runtime filter must not be pushed below a Window: the window result depends on every input
+# row, not only on the rows that can match the join.
+query T
+EXPLAIN SELECT b.k, h.rn
+FROM rf_rs_build b
+JOIN (SELECT a, row_number() OVER (ORDER BY b DESC) AS rn FROM rf_rs_probe) h ON b.k = h.a;
+----
+HashJoin
+├── output columns: [row_number() OVER (ORDER BY b DESC) (#3), b.k (#0)]
+├── join type: INNER
+├── build keys: [b.k (#0)]
+├── probe keys: [h.a (#1)]
+├── keys is null equal: [false]
+├── filters: []
+├── estimated rows: 2.00
+├── TableScan(Build)
+│   ├── table: default.default.rf_rs_build
+│   ├── scan id: 0
+│   ├── output columns: [k (#0)]
+│   ├── read rows: 2
+│   ├── read size: < 1 KiB
+│   ├── partitions total: 1
+│   ├── partitions scanned: 1
+│   ├── pruning stats: [segments: <range pruning: 1 to 1 cost: <slt:ignore>>, blocks: <range pruning: 1 to 1 cost: <slt:ignore>>]
+│   ├── push downs: [filters: [], limit: NONE]
+│   └── estimated rows: 2.00
+└── Window(Probe)
+    ├── output columns: [rf_rs_probe.a (#1), rf_rs_probe.b (#2), row_number() OVER (ORDER BY b DESC) (#3)]
+    ├── aggregate function: [row_number]
+    ├── partition by: []
+    ├── order by: [b]
+    ├── frame: [Range: Preceding(None) ~ CurrentRow]
+    └── Sort(Single)
+        ├── output columns: [rf_rs_probe.a (#1), rf_rs_probe.b (#2)]
+        ├── sort keys: [b DESC NULLS LAST]
+        ├── estimated rows: 10000.00
+        └── TableScan
+            ├── table: default.default.rf_rs_probe
+            ├── scan id: 1
+            ├── output columns: [a (#1), b (#2)]
+            ├── read rows: 10000
+            ├── read size: 40.26 KiB
+            ├── partitions total: 10
+            ├── partitions scanned: 10
+            ├── pruning stats: [segments: <range pruning: 1 to 1 cost: <slt:ignore>>, blocks: <range pruning: 10 to 10 cost: <slt:ignore>>]
+            ├── push downs: [filters: [], limit: NONE]
+            └── estimated rows: 10000.00
+
+query II
+SELECT b.k, h.rn
+FROM rf_rs_build b
+JOIN (SELECT a, row_number() OVER (ORDER BY b DESC) AS rn FROM rf_rs_probe) h ON b.k = h.a
+ORDER BY b.k;
+----
+50 9950
+60 9940
+
+query II
+SELECT b.k, h.total
+FROM rf_rs_build b
+JOIN (SELECT a, count() OVER () AS total FROM rf_rs_probe) h ON b.k = h.a
+ORDER BY b.k;
+----
+50 10000
+60 10000
+
+# LIMIT / top-n: which rows survive must not depend on the build side.
+query II
+SELECT b.k, h.b
+FROM rf_rs_build b
+JOIN (SELECT a, b FROM rf_rs_probe ORDER BY b DESC LIMIT 5) h ON b.k = h.a;
+----
+
+query II
+SELECT b.k, h.b
+FROM rf_rs_build b
+JOIN (SELECT a, b FROM rf_rs_probe ORDER BY b LIMIT 100) h ON b.k = h.a
+ORDER BY b.k;
+----
+50 50
+60 60
+
+# Plain GROUP BY on the key and a sort without limit stay filterable.
+query T
+EXPLAIN SELECT b.k, h.cnt
+FROM rf_rs_build b
+JOIN (SELECT a, count() AS cnt FROM rf_rs_probe GROUP BY a) h ON b.k = h.a;
+----
+HashJoin
+├── output columns: [count() (#3), b.k (#0)]
+├── join type: INNER
+├── build keys: [b.k (#0)]
+├── probe keys: [h.a (#1)]
+├── keys is null equal: [false]
+├── filters: []
+├── build join filters:
+│   └── filter id:0, build key:b.k (#0), probe targets:[h.a (#1)@scan1], filter type:bloom,inlist,min_max
+├── estimated rows: 2.00
+├── TableScan(Build)
+│   ├── table: default.default.rf_rs_build
+│   ├── scan id: 0
+│   ├── output columns: [k (#0)]
+│   ├── read rows: 2
+│   ├── read size: < 1 KiB
+│   ├── partitions total: 1
+│   ├── partitions scanned: 1
+│   ├── pruning stats: [segments: <range pruning: 1 to 1 cost: <slt:ignore>>, blocks: <range pruning: 1 to 1 cost: <slt:ignore>>]
+│   ├── push downs: [filters: [], limit: NONE]
+│   └── estimated rows: 2.00
+└── AggregateFinal(Probe)
+    ├── output columns: [count() (#3), rf_rs_probe.a (#1)]
+    ├── group by: [a]
+    ├── aggregate functions: [count()]
+    ├── estimated rows: 10000.00
+    └── AggregatePartial
+        ├── group by: [a]
+        ├── aggregate functions: [count()]
+        ├── estimated rows: 10000.00
+        └── TableScan
+            ├── table: default.default.rf_rs_probe
+            ├── scan id: 1
+            ├── output columns: [a (#1)]
+            ├── read rows: 10000
+            ├── read size: 20.13 KiB
+            ├── partitions total: 10
+            ├── partitions scanned: 10
+            ├── pruning stats: [segments: <range pruning: 1 to 1 cost: <slt:ignore>>, blocks: <range pruning: 10 to 10 cost: <slt:ignore>>]
+            ├── push downs: [filters: [], limit: NONE]
+            ├── apply join filters: [#0]
+            └── estimated rows: 10000.00
+
+query II
+SELECT b.k, h.cnt
+FROM rf_rs_build b
+JOIN (SELECT a, count() AS cnt FROM rf_rs_probe GROUP BY a) h ON b.k = h.a
+ORDER BY b.k;
+----
+50 1
+60 1
+
+statement ok
+unset enable_join_runtime_filter;
+
+statement ok
+unset runtime_filter_wait_timeout_ms;
+
+statement ok
+unset join_runtime_filter_selectivity_threshold;
+
+statement ok
+unset inlist_runtime_filter_threshold;
+
+statement ok
+unset min_max_runtime_filter_threshold;
+
+statement ok
+unset bloom_runtime_filter_threshold;
+
+statement ok
+unset max_threads;
+
+statement ok
+drop table rf_rs_build;
+
+statement ok
+drop table rf_rs_probe;
