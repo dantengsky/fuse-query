@@ -290,6 +290,14 @@ impl AccumulatingTransform for NewTransformPartialAggregate {
 
                 self.statistics.log_finish_statistics(&hashtable);
 
+                // Nothing was aggregated by this processor. Do not emit a block of
+                // empty payloads: downstream does not need it, and each block costs
+                // several processor hops (exchange serializer, async barrier, flight
+                // sink, ...) on the critical path of the query.
+                if hashtable.payload.len() == 0 {
+                    return Ok(blocks);
+                }
+
                 let payloads = hashtable
                     .payload
                     .payloads
