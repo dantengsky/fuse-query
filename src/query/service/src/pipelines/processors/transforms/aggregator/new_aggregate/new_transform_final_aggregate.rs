@@ -43,7 +43,6 @@ use crate::pipelines::processors::transforms::aggregator::NewAggregateSpiller;
 use crate::pipelines::processors::transforms::aggregator::NewSpilledPayload;
 use crate::pipelines::processors::transforms::aggregator::SerializedPayload;
 use crate::pipelines::processors::transforms::aggregator::statistics::AggregationStatistics;
-use crate::pipelines::processors::transforms::aggregator::transform_aggregate_partial::HashTable;
 use crate::sessions::QueryContext;
 use crate::sessions::TableContextSettings;
 
@@ -73,7 +72,11 @@ pub struct NewTransformFinalAggregate {
     stage: Stage,
     spilled_occurred: bool,
 
-    hashtable: HashTable,
+    // Created lazily on the first non-empty input. In bucket shuffle mode there
+    // are many final processors and most of them may never receive any rows,
+    // so eagerly allocating a hash table (and its hash index) for each of them
+    // is pure overhead.
+    hashtable: Option<AggregateHashTable>,
     params: Arc<AggregatorParams>,
     flush_state: PayloadFlushState,
     statistics: AggregationStatistics,
@@ -106,7 +109,6 @@ impl NewTransformFinalAggregate {
         let max_aggregate_spill_level =
             (settings.get_max_aggregate_spill_level()? as usize).min(max_partition_depth);
 
-        let hashtable = Self::create_hashtable(&params, base_consumed_bits, 0);
         let flush_state = PayloadFlushState::default();
 
         let spiller = NewAggregateSpiller::try_create(
@@ -126,7 +128,7 @@ impl NewTransformFinalAggregate {
             rx,
             stage: Stage::Input,
             spilled_occurred: false,
-            hashtable: HashTable::AggregateHashTable(hashtable),
+            hashtable: None,
             params,
             flush_state,
             statistics: AggregationStatistics::new("NewFinalAggregate"),
@@ -170,14 +172,23 @@ impl NewTransformFinalAggregate {
         )
     }
 
+    /// Drop the current hash table and switch to `spilled_depth`. The new hash
+    /// table is created lazily by `hashtable_mut` when data arrives.
     fn reset_hashtable(&mut self, spilled_depth: usize) {
         let partition_depth = spilled_depth.min(self.max_partition_depth);
-        self.hashtable = HashTable::AggregateHashTable(Self::create_hashtable(
-            &self.params,
-            self.base_consumed_bits,
-            partition_depth,
-        ));
+        self.hashtable = None;
         self.current_partition_depth = partition_depth;
+    }
+
+    fn hashtable_mut<'a>(
+        hashtable: &'a mut Option<AggregateHashTable>,
+        params: &Arc<AggregatorParams>,
+        base_consumed_bits: u64,
+        partition_depth: usize,
+    ) -> &'a mut AggregateHashTable {
+        hashtable.get_or_insert_with(|| {
+            Self::create_hashtable(params, base_consumed_bits, partition_depth)
+        })
     }
 
     // One final-aggregate processor handles both the original input stream and
@@ -210,9 +221,13 @@ impl NewTransformFinalAggregate {
             Arc::new(Bump::new()),
         )?;
 
-        if let HashTable::AggregateHashTable(ht) = &mut self.hashtable {
-            ht.combine_payloads(&partitioned_payload, &mut self.flush_state)?;
-        }
+        let ht = Self::hashtable_mut(
+            &mut self.hashtable,
+            &self.params,
+            self.base_consumed_bits,
+            self.current_partition_depth,
+        );
+        ht.combine_payloads(&partitioned_payload, &mut self.flush_state)?;
 
         Ok(())
     }
@@ -222,9 +237,17 @@ impl NewTransformFinalAggregate {
         let bytes = payload.payload.memory_size();
         self.statistics.record_block(rows, bytes);
 
-        if let HashTable::AggregateHashTable(ht) = &mut self.hashtable {
-            ht.combine_payload(&payload.payload, &mut self.flush_state)?;
+        if rows == 0 {
+            return Ok(());
         }
+
+        let ht = Self::hashtable_mut(
+            &mut self.hashtable,
+            &self.params,
+            self.base_consumed_bits,
+            self.current_partition_depth,
+        );
+        ht.combine_payload(&payload.payload, &mut self.flush_state)?;
 
         Ok(())
     }
@@ -270,7 +293,8 @@ impl NewTransformFinalAggregate {
 
     fn spill_out(&mut self) -> Result<()> {
         self.spilled_occurred = true;
-        if let HashTable::AggregateHashTable(v) = mem::take(&mut self.hashtable) {
+        // No hash table means nothing has been aggregated since the last reset.
+        if let Some(v) = self.hashtable.take() {
             for (bucket, payload) in v.payload.payloads.into_iter().enumerate() {
                 if payload.len() == 0 {
                     continue;
@@ -279,8 +303,6 @@ impl NewTransformFinalAggregate {
                 let data_block = payload.aggregate_flush_all()?.consume_convert_to_full();
                 self.spiller.spill(bucket, data_block)?;
             }
-        } else {
-            unreachable!("[TRANSFORM-AGGREGATOR] Invalid hash table state during spill check")
         }
         self.reset_hashtable(self.current_partition_depth);
         Ok(())
@@ -294,10 +316,8 @@ impl NewTransformFinalAggregate {
     ) -> Result<()> {
         if self.spilled_occurred {
             let (output_rows, hash_index_resizes) = match &self.hashtable {
-                HashTable::AggregateHashTable(ht) => {
-                    (ht.payload.len(), ht.hash_index_resize_count())
-                }
-                _ => unreachable!("[TRANSFORM-AGGREGATOR] Invalid hash table state before spill"),
+                Some(ht) => (ht.payload.len(), ht.hash_index_resize_count()),
+                None => (0, 0),
             };
             self.spill_finish(spilled_depth, tx)?;
             if let Some(task_id) = task_id {
@@ -317,7 +337,7 @@ impl NewTransformFinalAggregate {
             return Ok(());
         }
 
-        if let HashTable::AggregateHashTable(mut ht) = mem::take(&mut self.hashtable) {
+        if let Some(mut ht) = self.hashtable.take() {
             let mut blocks = vec![];
             self.flush_state.clear();
 
@@ -350,6 +370,22 @@ impl NewTransformFinalAggregate {
                 );
             } else {
                 self.statistics.log_finish_statistics(&ht);
+            }
+            self.reset_hashtable(self.current_partition_depth);
+        } else {
+            // No hash table was created, so nothing was aggregated and there is
+            // nothing to output.
+            if let Some(task_id) = task_id {
+                self.statistics.log_task_finish_statistics(
+                    task_id,
+                    self._id,
+                    spilled_depth,
+                    0,
+                    0,
+                    false,
+                );
+            } else {
+                self.statistics.log_empty_finish_statistics();
             }
             self.reset_hashtable(self.current_partition_depth);
         }
