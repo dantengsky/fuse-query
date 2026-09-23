@@ -433,7 +433,7 @@ impl VectorIndexPruner {
         F: Fn(VectorIndexReader, usize, String) -> Fut + Clone + Send + 'static,
         Fut: Future<Output = Result<Vec<ScoredPointOffset>>> + Send,
     {
-        let pruning_runtime = &self.pruning_ctx.pruning_runtime;
+        let pruning_runtime = self.pruning_ctx.pruning_runtime()?;
         let pruning_semaphore = &self.pruning_ctx.pruning_semaphore;
 
         let mut block_meta_indexes = metas.into_iter().enumerate();
