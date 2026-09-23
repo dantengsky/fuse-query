@@ -60,6 +60,11 @@ impl AggregationStatistics {
         );
     }
 
+    /// Log statistics when no hash table was ever created, i.e. no rows were aggregated.
+    pub fn log_empty_finish_statistics(&mut self) {
+        self.log_finish(0, 0, None);
+    }
+
     pub fn log_task_finish_statistics(
         &mut self,
         task_id: u64,
