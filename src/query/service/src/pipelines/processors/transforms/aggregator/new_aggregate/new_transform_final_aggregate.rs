@@ -448,7 +448,14 @@ impl Processor for NewTransformFinalAggregate {
 
     fn event(&mut self) -> Result<Event> {
         if self.output.is_finished() {
+            // Drop every sender we hold, including the one carried by a task that
+            // was received but not processed yet. Sibling processors block in
+            // `rx.recv()` until all senders are gone; keeping one alive here would
+            // hang the query when downstream finishes early (e.g. the other side
+            // of a join turned out to be empty).
             let _ = self.tx.take();
+            let _ = self.channel_data.take();
+            let _ = self.input_data.take();
             self.input.finish();
             return Ok(Event::Finished);
         }
