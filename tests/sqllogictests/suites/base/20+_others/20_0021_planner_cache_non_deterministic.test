@@ -1,0 +1,114 @@
+# Repeat identical top-level SELECTs: only these can hit the planner cache.
+statement ok
+DROP DATABASE IF EXISTS db20_21;
+
+statement ok
+CREATE DATABASE db20_21;
+
+statement ok
+USE db20_21;
+
+statement ok
+SET enable_planner_cache = 1;
+
+statement ok
+CREATE TABLE t (a INT NOT NULL, ts TIMESTAMP NOT NULL);
+
+statement ok
+INSERT INTO t VALUES (1, '2020-01-01 00:00:00'), (2, '2020-01-02 00:00:00');
+
+# now() stays symbolic in the cached logical plan; physical pruning is rebuilt.
+query I
+SELECT count(*) FROM t WHERE ts > subtract_minutes(now(), 15);
+----
+0
+
+query I
+SELECT count(*) FROM t WHERE ts > subtract_minutes(now(), 15);
+----
+0
+
+# No writes between these two statements. The cached logical plan must use
+# a fresh timestamp when building the second physical scan and prune result.
+statement ok
+INSERT INTO t VALUES (3, now() + interval 2 second);
+
+query I
+SELECT count(*) FROM t WHERE ts < now();
+----
+2
+
+statement ok
+SELECT sleep(3);
+
+query I
+SELECT count(*) FROM t WHERE ts < now();
+----
+3
+
+# Constant scalar subqueries and VALUES are evaluated while planning. Reusing
+# either logical plan would freeze the timestamp from the first execution.
+query B
+SELECT (SELECT now()) < now() - interval 1 second FROM t LIMIT 1;
+----
+0
+
+statement ok
+SELECT sleep(2);
+
+query B
+SELECT (SELECT now()) < now() - interval 1 second FROM t LIMIT 1;
+----
+0
+
+query B
+SELECT v.n < now() - interval 1 second FROM (VALUES (now())) AS v(n), t LIMIT 1;
+----
+0
+
+statement ok
+SELECT sleep(2);
+
+query B
+SELECT v.n < now() - interval 1 second FROM (VALUES (now())) AS v(n), t LIMIT 1;
+----
+0
+
+# Binding flags the result cache as ineligible. A planner-cache hit must also
+# restore that flag, even though binding is skipped.
+statement ok
+SET enable_query_result_cache = 1;
+
+statement ok
+SET query_result_cache_min_execute_secs = 0;
+
+query B
+SELECT max(now()) > TIMESTAMP '2000-01-01 00:00:00' FROM t;
+----
+1
+
+query B
+SELECT max(now()) > TIMESTAMP '2000-01-01 00:00:00' FROM t;
+----
+1
+
+query I
+SELECT count() FROM system.query_cache;
+----
+0
+
+query I
+SELECT max(a) FROM t;
+----
+3
+
+query I
+SELECT count() FROM system.query_cache;
+----
+1
+
+statement ok
+SET enable_query_result_cache = 0;
+
+statement ok
+DROP DATABASE db20_21;
