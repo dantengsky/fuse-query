@@ -46,6 +46,12 @@ pub struct PlanCacheItem {
     pub(crate) plan: Plan,
     pub(crate) setting_changes: Vec<(String, ChangeValue)>,
     pub(crate) variables: HashMap<String, Scalar>,
+    /// The statement calls a non-deterministic function such as `now()` or `rand()`.
+    ///
+    /// The type checker keeps such calls symbolic in the logical plan, so the plan can be reused.
+    /// Binding is where the query result cache is normally marked unusable for these statements;
+    /// a plan cache hit skips binding, so the flag is kept here and re-applied on hit.
+    pub(crate) contains_non_deterministic_function: bool,
 }
 
 static PLAN_CACHE: LazyLock<InMemoryLruCache<PlanCacheItem>> =
@@ -117,6 +123,9 @@ impl Planner {
                         snapshot == Some(&ss.1)
                     })
                 }) {
+                    if plan_item.contains_non_deterministic_function {
+                        self.ctx.result_cache_state().set_cacheable(false);
+                    }
                     return (!visitor.cache_miss, Some(plan_item.as_ref().clone()));
                 }
             }
@@ -127,6 +136,11 @@ impl Planner {
     }
 
     pub fn set_cache(&self, key: String, plan: Plan) {
+        if !self.ctx.result_cache_state().plan_cacheable() {
+            // An execution-time value was folded into this plan; it must not be reused.
+            return;
+        }
+
         let setting_changes = self
             .ctx
             .get_settings()
@@ -142,6 +156,7 @@ impl Planner {
             plan,
             setting_changes,
             variables,
+            contains_non_deterministic_function: !self.ctx.result_cache_state().cacheable(),
         };
         let cache = LazyLock::force(&PLAN_CACHE);
         cache.insert(key, plan_item);

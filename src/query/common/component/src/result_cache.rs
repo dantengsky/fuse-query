@@ -20,6 +20,11 @@ pub struct ResultCacheState {
     partitions_shas: RwLock<Vec<String>>,
     cache_key_extras: RwLock<Vec<String>>,
     cacheable: AtomicBool,
+    /// Whether the logical plan built for this query may be reused by later queries with the
+    /// same statement text. Cleared when planning folds an execution-time value (for example
+    /// the result of `now()` or `rand()`) into the plan itself, so that the value observed by
+    /// this query does not leak into other executions through the planner cache.
+    plan_cacheable: AtomicBool,
 }
 
 impl Default for ResultCacheState {
@@ -28,6 +33,7 @@ impl Default for ResultCacheState {
             partitions_shas: Default::default(),
             cache_key_extras: Default::default(),
             cacheable: AtomicBool::new(true),
+            plan_cacheable: AtomicBool::new(true),
         }
     }
 }
@@ -65,5 +71,15 @@ impl ResultCacheState {
 
     pub fn set_cacheable(&self, cacheable: bool) {
         self.cacheable.store(cacheable, Ordering::Release);
+    }
+
+    pub fn plan_cacheable(&self) -> bool {
+        self.plan_cacheable.load(Ordering::Acquire)
+    }
+
+    /// Marks the logical plan of this query as carrying an execution-time value, so the
+    /// planner must not put it into the plan cache.
+    pub fn set_plan_not_cacheable(&self) {
+        self.plan_cacheable.store(false, Ordering::Release);
     }
 }

@@ -38,16 +38,25 @@ pub fn is_builtin_function(name: &str) -> bool {
         || ASYNC_FUNCTIONS.contains(&name)
 }
 
-// The plan of search function, async function and udf contains some arguments defined in meta,
-// which may be modified by user at any time. Those functions are not not suitable for caching.
+/// Whether a query calling `name` may have its logical plan cached by the planner.
+///
+/// The plan of search function, async function and udf contains some arguments defined in meta,
+/// which may be modified by user at any time. Those functions are not suitable for caching.
+///
+/// `now()` (and its alias `current_timestamp`) is also eligible: the type checker keeps
+/// it symbolic in the cached logical plan. Planning paths that fold it into a value mark
+/// that plan non-cacheable; other non-deterministic builtins retain their existing policy.
 pub fn is_cacheable_function(name: &str) -> bool {
-    let n = name;
-    let name = Ascii::new(name);
-    (BUILTIN_FUNCTIONS.contains(name.into_inner())
-        && !BUILTIN_FUNCTIONS.get_property(n).unwrap().non_deterministic)
-        || AggregateFunctionFactory::instance().contains(name.into_inner())
-        || GENERAL_WINDOW_FUNCTIONS.contains(&name)
-        || GENERAL_LAMBDA_FUNCTIONS.contains(&name)
+    let ascii_name = Ascii::new(name);
+    (BUILTIN_FUNCTIONS.contains(ascii_name.into_inner())
+        && (!BUILTIN_FUNCTIONS
+            .get_property(name)
+            .unwrap()
+            .non_deterministic
+            || matches!(name, "now" | "current_timestamp")))
+        || AggregateFunctionFactory::instance().contains(ascii_name.into_inner())
+        || GENERAL_WINDOW_FUNCTIONS.contains(&ascii_name)
+        || GENERAL_LAMBDA_FUNCTIONS.contains(&ascii_name)
 }
 
 #[ctor]
