@@ -165,6 +165,10 @@ impl Binder {
         let database = self.ctx.get_current_database();
         let tables = metadata.read().tables().to_vec();
 
+        // Resolved once for the whole statement, on first use: one meta round trip instead of
+        // one per table referenced by the query.
+        let mut tenant_indexes = None;
+
         for table_entry in tables {
             let table = table_entry.table();
             // Avoid death loop
@@ -178,9 +182,18 @@ impl Binder {
                 && table.support_index()
                 && !matches!(table.engine(), "VIEW" | "STREAM")
             {
-                let indexes = self
-                    .resolve_table_indexes(&self.ctx.get_tenant(), catalog.as_str(), table.get_id())
-                    .await?;
+                if tenant_indexes.is_none() {
+                    tenant_indexes = Some(
+                        self.resolve_tenant_indexes(&self.ctx.get_tenant(), catalog.as_str())
+                            .await?,
+                    );
+                }
+                // The same table can appear more than once (e.g. a self join); each entry
+                // gets the full list, as before.
+                let indexes = tenant_indexes
+                    .as_ref()
+                    .and_then(|indexes| indexes.get(&table.get_id()).cloned())
+                    .unwrap_or_default();
 
                 let mut s_exprs = Vec::with_capacity(indexes.len());
                 for (index_id, _, index_meta) in indexes {

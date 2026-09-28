@@ -836,13 +836,17 @@ impl Binder {
         })
     }
 
+    /// Lists every index of the tenant, grouped by the table it is defined on.
+    ///
+    /// The meta service implements `list_indexes` as a prefix scan over all indexes of the
+    /// tenant followed by a `table_id` filter, so asking once for all of them costs the same
+    /// round trip as asking for a single table.
     #[async_backtrace::framed]
-    pub(crate) async fn resolve_table_indexes(
+    pub(crate) async fn resolve_tenant_indexes(
         &self,
         tenant: &Tenant,
         catalog_name: &str,
-        table_id: MetaId,
-    ) -> Result<Vec<(u64, String, IndexMeta)>> {
+    ) -> Result<HashMap<MetaId, Vec<(u64, String, IndexMeta)>>> {
         let catalog = self
             .catalogs
             .get_catalog(
@@ -852,9 +856,16 @@ impl Binder {
             )
             .await?;
         let index_metas = catalog
-            .list_indexes(ListIndexesReq::new(tenant, Some(table_id)))
+            .list_indexes(ListIndexesReq::new(tenant, None))
             .await?;
 
-        Ok(index_metas)
+        let mut indexes_by_table: HashMap<MetaId, Vec<(u64, String, IndexMeta)>> = HashMap::new();
+        for index in index_metas {
+            indexes_by_table
+                .entry(index.2.table_id)
+                .or_default()
+                .push(index);
+        }
+        Ok(indexes_by_table)
     }
 }

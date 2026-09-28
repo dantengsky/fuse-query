@@ -1,0 +1,54 @@
+# A multi-table query must see the indexes of every table, even though
+# the binder fetches the tenant's index list only once per statement.
+statement ok
+DROP DATABASE IF EXISTS test_multi_index_lookup;
+
+statement ok
+CREATE DATABASE test_multi_index_lookup;
+
+statement ok
+USE test_multi_index_lookup;
+
+statement ok
+CREATE TABLE t1 (a INT, b INT);
+
+statement ok
+CREATE TABLE t2 (a INT, b INT);
+
+statement ok
+INSERT INTO t1 VALUES (1, 10), (2, 20);
+
+statement ok
+INSERT INTO t2 VALUES (1, 100), (2, 200);
+
+statement ok
+CREATE AGGREGATING INDEX idx_multi_t1 AS SELECT b, SUM(a) FROM t1 GROUP BY b;
+
+statement ok
+CREATE AGGREGATING INDEX idx_multi_t2 AS SELECT b, SUM(a) FROM t2 GROUP BY b;
+
+query II rowsort
+SELECT b, SUM(a) FROM t1 GROUP BY b
+UNION ALL
+SELECT b, SUM(a) FROM t2 GROUP BY b;
+----
+10 1
+100 1
+20 2
+200 2
+
+# Two references to the same table must each get its index candidates.
+query III rowsort
+SELECT l.b, SUM(l.a), SUM(r.a) FROM t1 AS l JOIN t1 AS r ON l.b = r.b GROUP BY l.b;
+----
+10 1 1
+20 2 2
+
+statement ok
+DROP AGGREGATING INDEX idx_multi_t1;
+
+statement ok
+DROP AGGREGATING INDEX idx_multi_t2;
+
+statement ok
+DROP DATABASE test_multi_index_lookup;
