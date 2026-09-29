@@ -43,9 +43,11 @@ pub fn is_builtin_function(name: &str) -> bool {
 /// The plan of search function, async function and udf contains some arguments defined in meta,
 /// which may be modified by user at any time. Those functions are not suitable for caching.
 ///
-/// `now()` (and its alias `current_timestamp`) is also eligible: the type checker keeps
-/// it symbolic in the cached logical plan. Planning paths that fold it into a value mark
-/// that plan non-cacheable; other non-deterministic builtins retain their existing policy.
+/// The query-time functions in [`PLAN_CACHEABLE_QUERY_TIME_FUNCTIONS`] are also eligible:
+/// the type checker keeps them symbolic in the cached logical plan and they are folded from
+/// the current query context when the physical plan is built. Planning paths that fold
+/// them into a value mark that plan non-cacheable; other non-deterministic builtins retain
+/// their existing policy.
 pub fn is_cacheable_function(name: &str) -> bool {
     let ascii_name = Ascii::new(name);
     (BUILTIN_FUNCTIONS.contains(ascii_name.into_inner())
@@ -53,11 +55,25 @@ pub fn is_cacheable_function(name: &str) -> bool {
             .get_property(name)
             .unwrap()
             .non_deterministic
-            || matches!(name, "now" | "current_timestamp")))
+            || PLAN_CACHEABLE_QUERY_TIME_FUNCTIONS.contains(&ascii_name)))
         || AggregateFunctionFactory::instance().contains(ascii_name.into_inner())
         || GENERAL_WINDOW_FUNCTIONS.contains(&ascii_name)
         || GENERAL_LAMBDA_FUNCTIONS.contains(&ascii_name)
 }
+
+/// Non-deterministic builtins that only read the query start time (and session time zone)
+/// from the function context. They are the same family as `now()`: kept symbolic in the
+/// logical plan, folded per execution, so a cached logical plan stays correct. Time-window
+/// queries phrased with `today()` are as common as ones phrased with `now()`.
+pub const PLAN_CACHEABLE_QUERY_TIME_FUNCTIONS: [Ascii<&str>; 7] = [
+    Ascii::new("now"),
+    Ascii::new("current_timestamp"),
+    Ascii::new("current_time"),
+    Ascii::new("today"),
+    Ascii::new("current_date"),
+    Ascii::new("yesterday"),
+    Ascii::new("tomorrow"),
+];
 
 #[ctor]
 pub static BUILTIN_FUNCTIONS: FunctionRegistry = builtin_functions();

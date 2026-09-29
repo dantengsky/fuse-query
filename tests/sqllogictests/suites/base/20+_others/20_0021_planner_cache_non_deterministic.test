@@ -46,6 +46,40 @@ SELECT count(*) FROM t WHERE ts < now();
 ----
 3
 
+# today() / yesterday() / tomorrow() are derived from the same query start time as
+# now() and stay symbolic in the cached logical plan too. Repeat a today()-window
+# query over a snapshot that has not changed: the second run reuses the plan and
+# must still fold today() into the physical scan filter and prune correctly.
+query I
+SELECT count(*) FROM t WHERE ts >= DATE_SUB(HOUR, 26, today()) AND ts < DATE_SUB(HOUR, -26, today());
+----
+1
+
+query I
+SELECT count(*) FROM t WHERE ts >= DATE_SUB(HOUR, 26, today()) AND ts < DATE_SUB(HOUR, -26, today());
+----
+1
+
+query I
+SELECT count(*) FROM t WHERE ts >= yesterday() AND ts < tomorrow() + 1;
+----
+1
+
+query I
+SELECT count(*) FROM t WHERE ts >= yesterday() AND ts < tomorrow() + 1;
+----
+1
+
+query I
+SELECT count(*) FROM t WHERE ts < today() - 365;
+----
+2
+
+query I
+SELECT count(*) FROM t WHERE ts < today() - 365;
+----
+2
+
 # Constant scalar subqueries and VALUES are evaluated while planning. Reusing
 # either logical plan would freeze the timestamp from the first execution.
 query B
