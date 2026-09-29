@@ -1,0 +1,133 @@
+# Distributed queries dispatch INIT_QUERY_FRAGMENTS / START_PREPARED_QUERY to every node.
+# Both the concurrent (default) and the sequential dispatch must produce the same results,
+# including when every scan is pruned to zero rows and the partial aggregates never see a
+# block (their hash table is created lazily on first input).
+
+statement ok
+DROP DATABASE IF EXISTS db_dispatch;
+
+statement ok
+CREATE DATABASE db_dispatch;
+
+statement ok
+USE db_dispatch;
+
+statement ok
+CREATE TABLE orders(id BIGINT, user_id BIGINT, ref STRING, status STRING, created_at TIMESTAMP);
+
+statement ok
+CREATE TABLE payments(id BIGINT, order_ref STRING, amount DECIMAL(20, 8), paid_at TIMESTAMP);
+
+statement ok
+INSERT INTO orders VALUES
+  (1, 10, 'r1', 'SUCCESS', '2020-01-01 00:00:00'),
+  (2, 11, 'r2', 'SUCCESS', '2020-01-01 01:00:00'),
+  (3, 12, 'r3', 'FAILED',  '2020-01-01 02:00:00'),
+  (4, 13, 'r4', 'SUCCESS', '2020-01-02 00:00:00');
+
+statement ok
+INSERT INTO payments VALUES
+  (1, 'r1', 10.5, '2020-01-01 00:00:00'),
+  (2, 'r2', 20.0, '2020-01-01 01:00:00'),
+  (3, 'r9', 30.0, '2020-01-01 03:00:00'),
+  (4, 'r4', 40.0, '2020-01-02 00:00:00');
+
+statement ok
+SET enable_experiment_aggregate = 1;
+
+# --- concurrent dispatch (default) -------------------------------------------------------
+
+query T
+SELECT value FROM system.settings WHERE name = 'enable_concurrent_query_fragments_dispatch';
+----
+1
+
+# All scans pruned to zero rows: only fixed per-processor work happens.
+query I
+SELECT count(*) FROM (
+  SELECT o.user_id, p.amount FROM orders o LEFT JOIN payments p ON o.ref = p.order_ref
+   WHERE o.created_at > '2030-01-01' AND o.status = 'SUCCESS'
+  UNION
+  SELECT o.user_id, p.amount FROM payments p LEFT JOIN orders o ON o.ref = p.order_ref
+   WHERE p.paid_at > '2030-01-01'
+) t;
+----
+0
+
+query TIT
+SELECT CONCAT('x_', CAST(ROW_NUMBER() OVER (ORDER BY user_id) AS STRING)), user_id, amount FROM (
+  SELECT o.user_id, p.amount FROM orders o LEFT JOIN payments p ON o.ref = p.order_ref
+   WHERE o.created_at < '2020-01-02' AND o.status = 'SUCCESS'
+  UNION
+  SELECT o.user_id, p.amount FROM payments p LEFT JOIN orders o ON o.ref = p.order_ref
+   WHERE p.paid_at < '2020-01-02'
+) t ORDER BY user_id;
+----
+x_1 10 10.50000000
+x_2 11 20.00000000
+x_3 NULL 30.00000000
+
+# --- sequential dispatch ------------------------------------------------------------------
+
+statement ok
+SET enable_concurrent_query_fragments_dispatch = 0;
+
+query I
+SELECT count(*) FROM (
+  SELECT o.user_id, p.amount FROM orders o LEFT JOIN payments p ON o.ref = p.order_ref
+   WHERE o.created_at > '2030-01-01' AND o.status = 'SUCCESS'
+  UNION
+  SELECT o.user_id, p.amount FROM payments p LEFT JOIN orders o ON o.ref = p.order_ref
+   WHERE p.paid_at > '2030-01-01'
+) t;
+----
+0
+
+query TIT
+SELECT CONCAT('x_', CAST(ROW_NUMBER() OVER (ORDER BY user_id) AS STRING)), user_id, amount FROM (
+  SELECT o.user_id, p.amount FROM orders o LEFT JOIN payments p ON o.ref = p.order_ref
+   WHERE o.created_at < '2020-01-02' AND o.status = 'SUCCESS'
+  UNION
+  SELECT o.user_id, p.amount FROM payments p LEFT JOIN orders o ON o.ref = p.order_ref
+   WHERE p.paid_at < '2020-01-02'
+) t ORDER BY user_id;
+----
+x_1 10 10.50000000
+x_2 11 20.00000000
+x_3 NULL 30.00000000
+
+statement ok
+UNSET enable_concurrent_query_fragments_dispatch;
+
+# --- lazily created partial aggregate table with spill forced ----------------------------
+
+statement ok
+SET force_aggregate_data_spill = 1;
+
+query II
+SELECT status_len, count(*) FROM (
+  SELECT length(status) AS status_len, user_id FROM orders WHERE created_at > '2030-01-01'
+  UNION ALL
+  SELECT length(order_ref), id FROM payments WHERE paid_at > '2030-01-01'
+) t GROUP BY status_len ORDER BY status_len;
+----
+
+query II
+SELECT status, count(DISTINCT user_id) FROM orders GROUP BY status ORDER BY status;
+----
+FAILED 1
+SUCCESS 3
+
+query I
+SELECT count(*) FROM (SELECT user_id FROM orders UNION SELECT id FROM payments);
+----
+8
+
+statement ok
+UNSET force_aggregate_data_spill;
+
+statement ok
+UNSET enable_experiment_aggregate;
+
+statement ok
+DROP DATABASE db_dispatch;
