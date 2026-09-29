@@ -56,6 +56,7 @@ use super::exchange_sink::ExchangeSink;
 use super::exchange_transform::ExchangeTransform;
 use super::statistics_receiver::StatisticsReceiver;
 use super::statistics_sender::StatisticsSender;
+use crate::clusters::Cluster;
 use crate::clusters::ClusterHelper;
 use crate::clusters::FlightParams;
 use crate::physical_plans::PhysicalPlan;
@@ -71,6 +72,8 @@ use crate::servers::flight::FlightExchange;
 use crate::servers::flight::FlightReceiver;
 use crate::servers::flight::FlightSender;
 use crate::servers::flight::keep_alive::build_keep_alive_config;
+use crate::servers::flight::v1::actions::FINISH_QUERY;
+use crate::servers::flight::v1::actions::FinishQueryPacket;
 use crate::servers::flight::v1::actions::INIT_QUERY_FRAGMENTS;
 use crate::servers::flight::v1::actions::START_PREPARED_QUERY;
 use crate::servers::flight::v1::actions::init_query_fragments;
@@ -735,12 +738,41 @@ impl DataExchangeManager {
             retry_times: settings.get_flight_max_retry_times()?,
             retry_interval: settings.get_flight_retry_interval()?,
             keep_alive: settings.get_flight_keep_alive_params()?,
+            concurrent: settings.get_enable_concurrent_query_fragments_dispatch()?,
         };
+
+        let query_env = actions.get_query_env()?;
+        let query_id = ctx.get_id();
+        let cluster = ctx.get_cluster();
+
+        match self
+            .commit_actions_inner(ctx, &actions, &query_env, flight_params)
+            .await
+        {
+            Ok(build_res) => Ok(build_res),
+            Err(cause) => {
+                // Some nodes may already hold the query env or fragments. Release them
+                // now rather than leaving them to the leaked-query sweeper; this matters
+                // more with concurrent dispatch, where a failure on one node no longer
+                // prevents the requests to the other nodes from landing.
+                self.finish_remote_query(&cluster, &query_env, &query_id, &cause, flight_params)
+                    .await;
+                Err(cause)
+            }
+        }
+    }
+
+    async fn commit_actions_inner(
+        &self,
+        ctx: Arc<QueryContext>,
+        actions: &QueryFragmentsActions,
+        query_env: &QueryEnv,
+        flight_params: FlightParams,
+    ) -> Result<PipelineBuildResult> {
         let mut root_fragment_ids = actions.get_root_fragment_ids()?;
         let conf = GlobalConfig::instance();
 
         // Initialize query env between cluster nodes
-        let query_env = actions.get_query_env()?;
         query_env.init(&ctx, flight_params).await?;
 
         // Submit distributed tasks to all nodes.
@@ -768,6 +800,49 @@ impl DataExchangeManager {
             .await?;
 
         Ok(build_res)
+    }
+
+    /// Best-effort release of a query that failed during `commit_actions` on every remote
+    /// node of its dataflow diagram. Nodes that never received the query simply ignore it.
+    async fn finish_remote_query(
+        &self,
+        cluster: &Arc<Cluster>,
+        query_env: &QueryEnv,
+        query_id: &str,
+        cause: &ErrorCode,
+        flight_params: FlightParams,
+    ) {
+        let local_id = GlobalConfig::instance().query.node_id.clone();
+        let packet = FinishQueryPacket {
+            query_id: query_id.to_string(),
+            cause: cause.message(),
+        };
+
+        let message = query_env
+            .dataflow_diagram
+            .node_weights()
+            .filter(|node| node.id != local_id)
+            .map(|node| (node.id.clone(), packet.clone()))
+            .collect::<HashMap<_, _>>();
+
+        if message.is_empty() {
+            return;
+        }
+
+        // Do not retry: a node that is unreachable here has already lost the query.
+        let finish_params = FlightParams {
+            retry_times: 0,
+            ..flight_params
+        };
+        if let Err(finish_error) = cluster
+            .do_action::<_, ()>(FINISH_QUERY, message, finish_params)
+            .await
+        {
+            warn!(
+                "Failed to finish query {} on remote nodes after commit failure: {}",
+                query_id, finish_error
+            );
+        }
     }
 
     fn get_root_pipeline(
