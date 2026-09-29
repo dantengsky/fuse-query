@@ -73,6 +73,7 @@ fn test_bloom_filter() {
     test_specify(file);
     test_long_string(file);
     test_cast(file);
+    test_nullable_or_filters(file);
 }
 
 #[test]
@@ -639,6 +640,45 @@ fn test_cast(file: &mut impl Write) {
     );
 }
 
+// `or_filters` over nullable columns: the bloom index rewrites each missing
+// constant into a `{FALSE} ∪ {NULL}` domain, and the disjunction must still fold
+// to `false` so the block is pruned.
+fn test_nullable_or_filters(file: &mut impl Write) {
+    let columns = [
+        (
+            "x",
+            TableDataType::Nullable(Box::new(TableDataType::String)),
+            StringType::from_opt_data(vec![Some("k1-1"), None, Some("k1-2")]),
+        ),
+        (
+            "y",
+            TableDataType::Nullable(Box::new(TableDataType::String)),
+            StringType::from_opt_data(vec![Some("k2-1"), Some("k2-2"), None]),
+        ),
+        (
+            "z",
+            TableDataType::Nullable(Box::new(TableDataType::Number(NumberDataType::Int32))),
+            Int32Type::from_opt_data(vec![Some(1), None, Some(3)]),
+        ),
+    ];
+
+    eval_text(file, "or_filters(x = 'k1-9', y = 'k2-8')", &columns, &[
+        0, 1,
+    ]);
+    eval_text(
+        file,
+        "or_filters(x = 'k1-9', and_filters(y = 'k2-8', z > 1, z < 3))",
+        &columns,
+        &[0, 1],
+    );
+    eval_text(
+        file,
+        "or_filters(x = 'k1-9', and_filters(y = 'k2-2', z > 1, z < 3))",
+        &columns,
+        &[0, 1],
+    );
+}
+
 fn eval_text(
     file: &mut impl Write,
     text: &str,
@@ -741,11 +781,23 @@ fn eval_index_expr(
         .filter_map(|(i, entry)| {
             let field = bloom_columns.get(&i)?;
             let column = entry.as_column().unwrap();
-            let null_count = column
-                .as_nullable()
-                .map(|nullable| nullable.validity.null_count())
-                .unwrap_or_default() as u64;
-            let (min, max) = column.domain().to_minmax();
+            // Mirror the fuse statistics: min/max are collected over the non-null
+            // values, while NULLs are only accounted for in `null_count`.
+            let (null_count, min, max) = match column.as_nullable() {
+                Some(nullable) => {
+                    let null_count = nullable.validity.null_count() as u64;
+                    let (min, max) = nullable
+                        .column
+                        .filter(&nullable.validity)
+                        .domain()
+                        .to_minmax();
+                    (null_count, min, max)
+                }
+                None => {
+                    let (min, max) = column.domain().to_minmax();
+                    (0, min, max)
+                }
+            };
             Some((field.column_id, ColumnStatistics {
                 min,
                 max,

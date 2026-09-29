@@ -421,3 +421,45 @@ domains  : {"x": Number(Int16(SimpleDomain { min: 0, max: 100 }))}
 result   : Uncertain
 
 
++-----------+-------------+---------------------------------------------------------------------------------------+
+| Column ID | Type        | Column Data                                                                           |
++-----------+-------------+---------------------------------------------------------------------------------------+
+| 0         | String NULL | Column(NullableColumn { column: StringColumn[k1-1, , k1-2], validity: [0b_____101] }) |
+| 1         | String NULL | Column(NullableColumn { column: StringColumn[k2-1, k2-2, ], validity: [0b_____011] }) |
+| 2         | Int32 NULL  | Column(NullableColumn { column: Int32([1, 0, 3]), validity: [0b_____101] })           |
++-----------+-------------+---------------------------------------------------------------------------------------+
+expr     : or_filters<Boolean NULL, Boolean NULL>(eq<String NULL, String NULL>(x, CAST<String>("k1-9" AS String NULL)), eq<String NULL, String NULL>(y, CAST<String>("k2-8" AS String NULL)))
+fold_expr: or_filters<Boolean NULL, Boolean NULL>(eq<String NULL, String NULL>(x, "k1-9"), eq<String NULL, String NULL>(y, "k2-8"))
+filter   : or_filters<Boolean NULL, Boolean NULL>(__bloom_column_x_1, __bloom_column_y_2)
+domains  : {"__bloom_column_x_1": Nullable(NullableDomain { has_null: true, value: Some(Boolean(BooleanDomain { has_false: true, has_true: false })) }), "__bloom_column_y_2": Nullable(NullableDomain { has_null: true, value: Some(Boolean(BooleanDomain { has_false: true, has_true: false })) }), "x": Nullable(NullableDomain { has_null: true, value: Some(String(StringDomain { min: "k1-1", max: Some("k1-2") })) }), "y": Nullable(NullableDomain { has_null: true, value: Some(String(StringDomain { min: "k2-1", max: Some("k2-2") })) })}
+result   : MustFalse
+
+
++-----------+-------------+---------------------------------------------------------------------------------------+
+| Column ID | Type        | Column Data                                                                           |
++-----------+-------------+---------------------------------------------------------------------------------------+
+| 0         | String NULL | Column(NullableColumn { column: StringColumn[k1-1, , k1-2], validity: [0b_____101] }) |
+| 1         | String NULL | Column(NullableColumn { column: StringColumn[k2-1, k2-2, ], validity: [0b_____011] }) |
+| 2         | Int32 NULL  | Column(NullableColumn { column: Int32([1, 0, 3]), validity: [0b_____101] })           |
++-----------+-------------+---------------------------------------------------------------------------------------+
+expr     : or_filters<Boolean NULL, Boolean>(eq<String NULL, String NULL>(x, CAST<String>("k1-9" AS String NULL)), and_filters<Boolean NULL, Boolean NULL, Boolean NULL>(eq<String NULL, String NULL>(y, CAST<String>("k2-8" AS String NULL)), gt<Int32 NULL, Int32 NULL>(z, CAST<UInt8>(1_u8 AS Int32 NULL)), lt<Int32 NULL, Int32 NULL>(z, CAST<UInt8>(3_u8 AS Int32 NULL))))
+fold_expr: or_filters<Boolean NULL, Boolean>(eq<String NULL, String NULL>(x, "k1-9"), and_filters<Boolean NULL, Boolean NULL, Boolean NULL>(eq<String NULL, String NULL>(y, "k2-8"), gt<Int32 NULL, Int32 NULL>(z, 1_i32), lt<Int32 NULL, Int32 NULL>(z, 3_i32)))
+filter   : or_filters<Boolean NULL, Boolean>(__bloom_column_x_1, and_filters<Boolean NULL, Boolean NULL, Boolean NULL>(__bloom_column_y_2, gt<Int32 NULL, Int32 NULL>(z, 1_i32), lt<Int32 NULL, Int32 NULL>(z, 3_i32)))
+domains  : {"__bloom_column_x_1": Nullable(NullableDomain { has_null: true, value: Some(Boolean(BooleanDomain { has_false: true, has_true: false })) }), "__bloom_column_y_2": Nullable(NullableDomain { has_null: true, value: Some(Boolean(BooleanDomain { has_false: true, has_true: false })) }), "x": Nullable(NullableDomain { has_null: true, value: Some(String(StringDomain { min: "k1-1", max: Some("k1-2") })) }), "y": Nullable(NullableDomain { has_null: true, value: Some(String(StringDomain { min: "k2-1", max: Some("k2-2") })) }), "z": Nullable(NullableDomain { has_null: true, value: Some(Number(Int32(SimpleDomain { min: -2147483648, max: 2147483647 }))) })}
+result   : MustFalse
+
+
++-----------+-------------+---------------------------------------------------------------------------------------+
+| Column ID | Type        | Column Data                                                                           |
++-----------+-------------+---------------------------------------------------------------------------------------+
+| 0         | String NULL | Column(NullableColumn { column: StringColumn[k1-1, , k1-2], validity: [0b_____101] }) |
+| 1         | String NULL | Column(NullableColumn { column: StringColumn[k2-1, k2-2, ], validity: [0b_____011] }) |
+| 2         | Int32 NULL  | Column(NullableColumn { column: Int32([1, 0, 3]), validity: [0b_____101] })           |
++-----------+-------------+---------------------------------------------------------------------------------------+
+expr     : or_filters<Boolean NULL, Boolean>(eq<String NULL, String NULL>(x, CAST<String>("k1-9" AS String NULL)), and_filters<Boolean NULL, Boolean NULL, Boolean NULL>(eq<String NULL, String NULL>(y, CAST<String>("k2-2" AS String NULL)), gt<Int32 NULL, Int32 NULL>(z, CAST<UInt8>(1_u8 AS Int32 NULL)), lt<Int32 NULL, Int32 NULL>(z, CAST<UInt8>(3_u8 AS Int32 NULL))))
+fold_expr: or_filters<Boolean NULL, Boolean>(eq<String NULL, String NULL>(x, "k1-9"), and_filters<Boolean NULL, Boolean NULL, Boolean NULL>(eq<String NULL, String NULL>(y, "k2-2"), gt<Int32 NULL, Int32 NULL>(z, 1_i32), lt<Int32 NULL, Int32 NULL>(z, 3_i32)))
+filter   : or_filters<Boolean NULL, Boolean>(__bloom_column_x_1, and_filters<Boolean NULL, Boolean NULL, Boolean NULL>(eq<String NULL, String NULL>(y, "k2-2"), gt<Int32 NULL, Int32 NULL>(z, 1_i32), lt<Int32 NULL, Int32 NULL>(z, 3_i32)))
+domains  : {"__bloom_column_x_1": Nullable(NullableDomain { has_null: true, value: Some(Boolean(BooleanDomain { has_false: true, has_true: false })) }), "x": Nullable(NullableDomain { has_null: true, value: Some(String(StringDomain { min: "k1-1", max: Some("k1-2") })) }), "y": Nullable(NullableDomain { has_null: true, value: Some(String(StringDomain { min: "k2-1", max: Some("k2-2") })) }), "z": Nullable(NullableDomain { has_null: true, value: Some(Number(Int32(SimpleDomain { min: -2147483648, max: 2147483647 }))) })}
+result   : Uncertain
+
+
