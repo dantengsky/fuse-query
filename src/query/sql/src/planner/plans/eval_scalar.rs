@@ -94,6 +94,12 @@ impl EvalScalar {
         cardinality: StatCardinality,
     ) -> Result<Option<ColumnStat>> {
         let expr = scalar.as_symbol_expr()?;
+        // Query-time functions such as `now()` stay symbolic in the logical plan
+        // and would evaluate to the Unix epoch under the default function
+        // context, so their derived statistics cannot be trusted.
+        if !expr.is_deterministic(&BUILTIN_FUNCTIONS) {
+            return Ok(None);
+        }
         let column_refs = expr.column_refs();
         let mut input_stats = HashMap::with_capacity(column_refs.len());
         for (index, data_type) in column_refs {
