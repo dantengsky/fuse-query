@@ -1,0 +1,66 @@
+statement ok
+CREATE OR REPLACE TABLE t_query_time AS
+  SELECT number, to_timestamp('2025-01-01 00:00:00') + number * 1000000 AS ts FROM numbers(1000);
+
+# `now()`/`today()` stay symbolic in the logical plan. Cardinality estimation has no
+# query context and used to fold them to the Unix epoch, which turned
+# `ts >= '2025-01-01' AND ts < now()` into a proven-empty filter: the estimate was 0
+# rows and `COUNT(*)` on top of it was folded to the constant 0.
+query I
+SELECT count(*) FROM t_query_time WHERE ts >= '2025-01-01' AND ts < now();
+----
+1000
+
+query I
+SELECT count(*) FROM t_query_time WHERE ts > '2024-01-01' AND ts < today();
+----
+1000
+
+query I
+SELECT count(*) FROM t_query_time WHERE ts < to_date(subtract_days(now(), 2));
+----
+1000
+
+# The comparison against a query-time function is an unknown filter (default
+# selectivity), not a statistics-derived zero.
+query T
+EXPLAIN SELECT * FROM t_query_time WHERE ts < now();
+----
+TableScan
+├── table: default.default.t_query_time
+├── scan id: 0
+├── output columns: [number (#0), ts (#1)]
+├── read rows: 1000
+├── read size: <slt:ignore>
+├── partitions total: 1
+├── partitions scanned: 1
+├── pruning stats: [segments: <range pruning: 1 to 1 cost: <slt:ignore>>, blocks: <range pruning: 1 to 1 cost: <slt:ignore>>]
+├── push downs: [filters: [is_true(t_query_time.ts (#1) < '<slt:ignore>')], limit: NONE]
+└── estimated rows: 200.00
+
+query T
+EXPLAIN SELECT count(*) FROM t_query_time WHERE ts >= '2025-01-01' AND ts < now();
+----
+AggregateFinal
+├── output columns: [COUNT(*) (#2)]
+├── group by: []
+├── aggregate functions: [count()]
+├── estimated rows: 1.00
+└── AggregatePartial
+    ├── group by: []
+    ├── aggregate functions: [count()]
+    ├── estimated rows: 1.00
+    └── TableScan
+        ├── table: default.default.t_query_time
+        ├── scan id: 0
+        ├── output columns: []
+        ├── read rows: 1000
+        ├── read size: <slt:ignore>
+        ├── partitions total: 1
+        ├── partitions scanned: 1
+        ├── pruning stats: [segments: <range pruning: 1 to 1 cost: <slt:ignore>>, blocks: <range pruning: 1 to 1 cost: <slt:ignore>>]
+        ├── push downs: [filters: [t_query_time.ts (#1) >= '2025-01-01 00:00:00.000000' and t_query_time.ts (#1) < '<slt:ignore>'], limit: NONE]
+        └── estimated rows: 200.00
+
+statement ok
+DROP TABLE t_query_time;
