@@ -25,10 +25,12 @@ use databend_common_expression::types::Decimal64Type;
 use databend_common_expression::types::DecimalSize;
 use databend_common_expression::types::Int32Type;
 use databend_common_expression::types::NullableType;
+use databend_common_expression::types::NumberDataType;
 use databend_common_expression::types::StringType;
 use databend_common_expression::types::TimestampType;
 use databend_common_expression::types::number::Int64Type;
 use databend_common_expression::types::number::UInt64Type;
+use databend_common_functions::aggregates::AggregateFunctionFactory;
 use databend_common_functions::aggregates::AggregateFunctionSortDesc;
 use databend_common_io::HybridBitmap;
 use goldenfile::Mint;
@@ -1876,4 +1878,54 @@ fn test_agg_st_collect(file: &mut impl Write, simulator: impl AggregationSimulat
         simulator,
         vec![],
     );
+}
+
+// Regression test for heap-backed min/max/any states (#20146): every argument
+// type whose owned scalar holds heap memory must request a manual drop,
+// otherwise the state is leaked when the aggregate arena is released.
+#[test]
+fn test_min_max_any_need_manual_drop_state() -> Result<()> {
+    let factory = AggregateFunctionFactory::instance();
+    let int32 = DataType::Number(NumberDataType::Int32);
+
+    let heap_backed = vec![
+        DataType::String,
+        DataType::Binary,
+        DataType::Bitmap,
+        DataType::Variant,
+        DataType::Geometry,
+        DataType::Array(Box::new(int32.clone())),
+        DataType::Array(Box::new(DataType::String)),
+        DataType::Map(Box::new(DataType::Tuple(vec![
+            int32.clone(),
+            int32.clone(),
+        ]))),
+        DataType::Tuple(vec![int32.clone(), int32.clone()]),
+        DataType::Array(Box::new(int32.clone())).wrap_nullable(),
+    ];
+    let inline = vec![
+        int32.clone(),
+        int32.wrap_nullable(),
+        DataType::Boolean,
+        DataType::Date,
+        DataType::Timestamp,
+    ];
+
+    for name in ["min", "max", "any"] {
+        for data_type in &heap_backed {
+            let func = factory.get(name, vec![], vec![data_type.clone()], vec![])?;
+            assert!(
+                func.need_manual_drop_state(),
+                "{name}({data_type}) must drop its heap-backed state"
+            );
+        }
+        for data_type in &inline {
+            let func = factory.get(name, vec![], vec![data_type.clone()], vec![])?;
+            assert!(
+                !func.need_manual_drop_state(),
+                "{name}({data_type}) should not need a manual drop"
+            );
+        }
+    }
+    Ok(())
 }
