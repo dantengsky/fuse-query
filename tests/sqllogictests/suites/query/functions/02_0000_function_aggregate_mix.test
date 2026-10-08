@@ -187,6 +187,25 @@ SELECT arg_max(id, arr), arg_min(id, arr) FROM (SELECT id, arr FROM t2)
 ----
 3 1
 
+# min/max over heap-backed states in many groups must be dropped correctly (#20146)
+query III
+SELECT count(), sum(mx[1]), sum(mn[1]) FROM (SELECT number % 100 AS g, max([number, number + 1]) AS mx, min([number, number + 1]) AS mn FROM numbers(10000) GROUP BY g)
+----
+100 994950 4950
+
+query IT
+SELECT number % 2 AS g, max(if(number % 3 = 0, NULL, [number])) FROM numbers(10) GROUP BY g ORDER BY g
+----
+0 [8]
+1 [7]
+
+query ITT
+SELECT number % 3 AS g, max((number, number::String)), min(['v' || number::String]) FROM numbers(10) GROUP BY g ORDER BY g
+----
+0 (9,"9") ["v0"]
+1 (7,"7") ["v1"]
+2 (8,"8") ["v2"]
+
 query IIRI
 select number % 3,   sum(number), avg(number),  count() from numbers(100) group by number % 3  order by number % 3
 ----
