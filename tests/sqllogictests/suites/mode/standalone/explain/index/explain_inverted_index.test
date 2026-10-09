@@ -190,15 +190,18 @@ Filter
 query T
 EXPLAIN SELECT id, content FROM t2 WHERE query('content:a') ORDER BY id LIMIT 1;
 ----
-Limit
+TopN(Final)
 ├── output columns: [t2.id (#0), t2.content (#1)]
+├── sort keys: [id ASC NULLS LAST]
 ├── limit: 1
 ├── offset: 0
 ├── estimated rows: 1.00
-└── Sort(Single)
-    ├── output columns: [t2.id (#0), t2.content (#1)]
+└── TopN(Partial)
+    ├── output columns: [t2.id (#0), t2.content (#1), #_order_col]
     ├── sort keys: [id ASC NULLS LAST]
-    ├── estimated rows: 5.00
+    ├── limit: 1
+    ├── offset: 0
+    ├── estimated rows: 1.00
     └── Filter
         ├── output columns: [t2.id (#0), t2.content (#1)]
         ├── filters: [t2._search_matched (#2)]
