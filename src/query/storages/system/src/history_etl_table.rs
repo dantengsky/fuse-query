@@ -197,7 +197,9 @@ impl HistoryEtlTable {
 
 #[cfg(test)]
 mod tests {
-    use databend_meta_client::types::KVMeta;
+    // `databend_meta_client::types` (databend-meta v260205.9.0) does not re-export
+    // `KVMeta`; build it from the protobuf `KvMeta` via its `From` impl instead.
+    use databend_meta_client::types::protobuf::KvMeta;
 
     use super::*;
 
@@ -229,10 +231,7 @@ mod tests {
         let rows = collect_rows(prefix, vec![
             (
                 format!("{prefix}query_history/batch_number"),
-                checkpoint(Some(KVMeta {
-                    expire_at: None,
-                    proposed_at_ms: Some(1788834023067),
-                })),
+                checkpoint(Some(KvMeta::new(None, Some(1788834023067)).into())),
             ),
             (
                 format!("{prefix}log_history/batch_number"),
