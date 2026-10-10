@@ -1,0 +1,38 @@
+Exchange
+├── output columns: [d.join_key (#3)]
+├── exchange type: Merge
+└── HashJoin
+    ├── output columns: [d.join_key (#3)]
+    ├── join type: INNER
+    ├── build keys: [s.join_key (#0)]
+    ├── probe keys: [d.join_key (#3)]
+    ├── keys is null equal: [false]
+    ├── filters: []
+    ├── build join filters:
+    │   └── filter id:0, build key:s.join_key (#0), probe targets:[d.join_key (#3)@scan1], filter type:bloom,inlist,min_max
+    ├── estimated rows: 225000000.00
+    ├── Exchange(Build)
+    │   ├── output columns: [stale_range_source.join_key (#0)]
+    │   ├── exchange type: Broadcast
+    │   └── TableScan
+    │       ├── table: default.default.stale_range_source
+    │       ├── scan id: 0
+    │       ├── output columns: [join_key (#0)]
+    │       ├── read rows: 0
+    │       ├── read size: 0
+    │       ├── partitions total: 0
+    │       ├── partitions scanned: 0
+    │       ├── push downs: [filters: [stale_range_source.range_value (#1) > 10 and stale_range_source.selective_value (#2) = 42], limit: NONE]
+    │       └── estimated rows: 80000000.00
+    └── TableScan(Probe)
+        ├── table: default.default.large_dimension
+        ├── scan id: 1
+        ├── output columns: [join_key (#3)]
+        ├── read rows: 0
+        ├── read size: 0
+        ├── partitions total: 0
+        ├── partitions scanned: 0
+        ├── push downs: [filters: [], limit: NONE]
+        ├── apply join filters: [#0]
+        └── estimated rows: 225000000.00
+
