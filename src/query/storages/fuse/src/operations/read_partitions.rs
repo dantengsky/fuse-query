@@ -432,6 +432,7 @@ impl FuseTable {
         plan_id: u32,
     ) -> Result<()> {
         let max_threads = ctx.get_settings().get_max_threads()? as usize;
+        let max_io_requests = self.adjust_io_request(&ctx)?;
         prune_pipeline.add_source(
             |output| LazySegmentReceiverSource::create(ctx.clone(), segment_rx.clone(), output),
             max_threads,
@@ -442,6 +443,11 @@ impl FuseTable {
             Default::default(),
         )?;
 
+        // Segment pruning is dominated by fetching segment files from storage, so
+        // give it the same I/O concurrency as the non-pipeline pruner
+        // (`max_storage_io_requests`) instead of `max_threads`. With a cold
+        // cache and many segments this is otherwise several times slower.
+        prune_pipeline.try_resize(max_io_requests)?;
         prune_pipeline.add_transform(|input, output| {
             SegmentPruneTransform::<PrunedCompactSegmentMeta>::create(
                 input,
@@ -450,6 +456,8 @@ impl FuseTable {
                 pruner.pruning_ctx.clone(),
             )
         })?;
+        // Block-level pruning below is CPU bound; go back to `max_threads`.
+        prune_pipeline.try_resize(max_threads)?;
 
         // Under runtime TopN (`enable_top_n`), schedule the most promising
         // segments first so the shared boundary converges early.
