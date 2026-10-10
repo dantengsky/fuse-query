@@ -301,6 +301,13 @@ select * from t join t1 on t.a = t1.b
 3 1 1
 3 2.0 1
 
+query II
+select l.number, r.number from numbers(3) l join numbers(3) r on cast(l.number as int64) = cast(cast(r.number as int64) as string) order by l.number
+----
+0 0
+1 1
+2 2
+
 statement ok
 drop table if exists t;
 
