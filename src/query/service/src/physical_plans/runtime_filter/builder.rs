@@ -25,6 +25,7 @@ use databend_common_sql::MetadataRef;
 use databend_common_sql::Symbol;
 use databend_common_sql::TypeCheck;
 use databend_common_sql::optimizer::ir::SExpr;
+use databend_common_sql::plans::Aggregate;
 use databend_common_sql::plans::Exchange;
 use databend_common_sql::plans::Join;
 use databend_common_sql::plans::JoinEquiCondition;
@@ -69,6 +70,113 @@ pub fn supported_join_type_for_runtime_filter(join_type: &JoinType) -> bool {
             | JoinType::RightAnti
             | JoinType::LeftMark
     )
+}
+
+/// Resolve the table statistics used to decide whether a bloom runtime filter is selective.
+///
+/// Most build keys directly reference a base-table column. A grouped `MIN` or `MAX`, however,
+/// produces a derived column even though every value still comes from one base-table column. If
+/// the aggregate reads exactly one table, use that table as the statistics source as well. This
+/// keeps the runtime selectivity check available for the common "join to latest row" pattern
+/// without enabling bloom filters for arbitrary derived expressions or multi-table aggregates.
+pub(in crate::physical_plans) fn resolve_runtime_filter_build_table_index(
+    metadata: &MetadataRef,
+    build_side: &SExpr,
+    build_column: Symbol,
+) -> Option<IndexType> {
+    if let ColumnEntry::BaseTableColumn(column) = metadata.read().column(build_column) {
+        return Some(column.table_index);
+    }
+
+    resolve_min_max_aggregate_table_index(metadata, build_side, build_column)
+}
+
+fn resolve_min_max_aggregate_table_index(
+    metadata: &MetadataRef,
+    s_expr: &SExpr,
+    output_column: Symbol,
+) -> Option<IndexType> {
+    match s_expr.plan() {
+        RelOperator::Aggregate(aggregate) => {
+            if let Some(table_index) = min_max_aggregate_table_index(
+                metadata,
+                aggregate,
+                s_expr.unary_child(),
+                output_column,
+            ) {
+                return Some(table_index);
+            }
+            None
+        }
+        RelOperator::EvalScalar(eval_scalar) => {
+            if let Some(item) = eval_scalar
+                .items
+                .iter()
+                .find(|item| item.index == output_column)
+            {
+                let ScalarExpr::BoundColumnRef(column) = &item.scalar else {
+                    return None;
+                };
+                return resolve_min_max_aggregate_table_index(
+                    metadata,
+                    s_expr.unary_child(),
+                    column.column.index,
+                );
+            }
+            resolve_min_max_aggregate_table_index(metadata, s_expr.unary_child(), output_column)
+        }
+        RelOperator::Filter(_)
+        | RelOperator::Sort(_)
+        | RelOperator::Limit(_)
+        | RelOperator::Exchange(_) => {
+            resolve_min_max_aggregate_table_index(metadata, s_expr.unary_child(), output_column)
+        }
+        _ => None,
+    }
+}
+
+fn min_max_aggregate_table_index(
+    metadata: &MetadataRef,
+    aggregate: &Aggregate,
+    input: &SExpr,
+    output_column: Symbol,
+) -> Option<IndexType> {
+    let item = aggregate
+        .aggregate_functions
+        .iter()
+        .find(|item| item.index == output_column)?;
+    let ScalarExpr::AggregateFunction(function) = &item.scalar else {
+        return None;
+    };
+    if !matches!(function.func_name.as_str(), "min" | "max")
+        || function.distinct
+        || function.args.len() != 1
+    {
+        return None;
+    }
+
+    let ScalarExpr::BoundColumnRef(source_column) = &function.args[0] else {
+        return None;
+    };
+    let table_index = match metadata.read().column(source_column.column.index) {
+        ColumnEntry::BaseTableColumn(column) => column.table_index,
+        _ => return None,
+    };
+
+    (single_scan_table_index(input) == Some(table_index)).then_some(table_index)
+}
+
+fn single_scan_table_index(s_expr: &SExpr) -> Option<IndexType> {
+    match s_expr.plan() {
+        RelOperator::Scan(scan) => Some(scan.table_index),
+        RelOperator::Aggregate(_)
+        | RelOperator::EvalScalar(_)
+        | RelOperator::Filter(_)
+        | RelOperator::Sort(_)
+        | RelOperator::Limit(_)
+        | RelOperator::Exchange(_) => single_scan_table_index(s_expr.unary_child()),
+        _ => None,
+    }
 }
 
 /// Build runtime filters for a join operation
@@ -369,5 +477,124 @@ impl UnionFind {
             .into_iter()
             .filter(|&k| self.find(k) == root)
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use databend_common_expression::TableDataType;
+    use databend_common_expression::types::DataType;
+    use databend_common_expression::types::NumberDataType;
+    use databend_common_sql::ColumnBindingBuilder;
+    use databend_common_sql::ColumnSet;
+    use databend_common_sql::MetadataRef;
+    use databend_common_sql::Visibility;
+    use databend_common_sql::optimizer::ir::SExpr;
+    use databend_common_sql::plans::Aggregate;
+    use databend_common_sql::plans::AggregateFunction;
+    use databend_common_sql::plans::AggregateMode;
+    use databend_common_sql::plans::BoundColumnRef;
+    use databend_common_sql::plans::Exchange;
+    use databend_common_sql::plans::RelOperator;
+    use databend_common_sql::plans::ScalarExpr;
+    use databend_common_sql::plans::ScalarItem;
+    use databend_common_sql::plans::Scan;
+
+    use super::resolve_runtime_filter_build_table_index;
+
+    fn aggregate_build_side(
+        function_name: &str,
+        scan_table_index: usize,
+    ) -> (MetadataRef, SExpr, databend_common_sql::Symbol) {
+        let metadata = MetadataRef::default();
+        let data_type = DataType::Number(NumberDataType::UInt64);
+        let source_column = metadata.write().add_base_table_column(
+            "id".to_string(),
+            TableDataType::Number(NumberDataType::UInt64),
+            scan_table_index,
+            None,
+            0,
+            None,
+            None,
+        );
+        let aggregate_column = metadata
+            .write()
+            .add_derived_column(format!("{function_name}(id)"), data_type.clone());
+
+        let source_expr = ScalarExpr::BoundColumnRef(BoundColumnRef {
+            span: None,
+            column: ColumnBindingBuilder::new(
+                "id".to_string(),
+                source_column,
+                Box::new(data_type.clone()),
+                Visibility::Visible,
+            )
+            .table_index(Some(scan_table_index))
+            .build(),
+        });
+        let aggregate = Aggregate {
+            mode: AggregateMode::Final,
+            group_items: vec![],
+            aggregate_functions: vec![ScalarItem {
+                index: aggregate_column,
+                scalar: ScalarExpr::AggregateFunction(AggregateFunction {
+                    span: None,
+                    func_name: function_name.to_string(),
+                    distinct: false,
+                    params: vec![],
+                    args: vec![source_expr],
+                    return_type: Box::new(data_type),
+                    sort_descs: vec![],
+                    display_name: format!("{function_name}(id)"),
+                }),
+            }],
+            from_distinct: false,
+            rank_limit: None,
+            grouping_sets: None,
+        };
+        let scan = Scan {
+            table_index: scan_table_index,
+            columns: ColumnSet::from([source_column]),
+            ..Default::default()
+        };
+        let partial = SExpr::create_unary(
+            Arc::new(RelOperator::Aggregate(Aggregate {
+                mode: AggregateMode::Partial,
+                ..aggregate.clone()
+            })),
+            Arc::new(SExpr::create_leaf(Arc::new(RelOperator::Scan(scan)))),
+        );
+        let exchange = SExpr::create_unary(
+            Arc::new(RelOperator::Exchange(Exchange::Merge)),
+            Arc::new(partial),
+        );
+        let build_side = SExpr::create_unary(
+            Arc::new(RelOperator::Aggregate(aggregate)),
+            Arc::new(exchange),
+        );
+
+        (metadata, build_side, aggregate_column)
+    }
+
+    #[test]
+    fn test_resolve_min_max_aggregate_build_table() {
+        for function_name in ["min", "max"] {
+            let (metadata, build_side, aggregate_column) = aggregate_build_side(function_name, 7);
+            assert_eq!(
+                resolve_runtime_filter_build_table_index(&metadata, &build_side, aggregate_column),
+                Some(7)
+            );
+        }
+    }
+
+    #[test]
+    fn test_do_not_resolve_arbitrary_aggregate_build_table() {
+        let (metadata, build_side, aggregate_column) = aggregate_build_side("sum", 7);
+        assert_eq!(
+            resolve_runtime_filter_build_table_index(&metadata, &build_side, aggregate_column),
+            None
+        );
     }
 }
