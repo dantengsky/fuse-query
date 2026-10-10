@@ -14,42 +14,49 @@
 
 use crate::pipelines::processors::transforms::hash_join::desc::RuntimeFilterDesc;
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct RuntimeFilterDecision {
+    pub enabled: bool,
+    pub adaptive: bool,
+}
+
 pub(super) fn should_enable_runtime_filter(
     desc: &RuntimeFilterDesc,
     build_num_rows: usize,
     selectivity_threshold: u64,
-) -> bool {
+) -> RuntimeFilterDecision {
     if build_num_rows == 0 {
-        return false;
+        return RuntimeFilterDecision::default();
     }
 
-    let has_table_statistics = desc.build_table_rows.is_some_and(|rows| rows != 0)
-        || desc.probe_table_rows.is_some_and(|rows| rows != 0);
-    if !has_table_statistics {
+    let decision = runtime_filter_decision(
+        build_num_rows,
+        desc.build_table_rows,
+        desc.probe_table_rows,
+        selectivity_threshold,
+    );
+    if decision.enabled && !decision.adaptive {
         log::info!(
-            "RUNTIME-FILTER: Disable bloom runtime filter {} - no table statistics available",
-            desc.id
+            "RUNTIME-FILTER: Enable bloom runtime filter {} - selective against build table (threshold={}%, build_rows={}, build_table_rows={:?})",
+            desc.id,
+            selectivity_threshold,
+            build_num_rows,
+            desc.build_table_rows,
         );
-        return false;
-    }
-
-    let enabled =
-        selectivity_below_threshold(build_num_rows, desc.build_table_rows, selectivity_threshold)
-            || selectivity_below_threshold(
-                build_num_rows,
-                desc.probe_table_rows,
-                selectivity_threshold,
-            );
-    if enabled {
+    } else if decision.enabled {
         log::info!(
-            "RUNTIME-FILTER: Enable bloom runtime filter {} - selective against build or probe table (threshold={}%, build_rows={}, build_table_rows={:?}, probe_table_rows={:?})",
+            "RUNTIME-FILTER: Enable adaptive bloom runtime filter {} - selective against probe table (threshold={}%, build_rows={}, build_table_rows={:?}, probe_table_rows={:?})",
             desc.id,
             selectivity_threshold,
             build_num_rows,
             desc.build_table_rows,
             desc.probe_table_rows,
         );
-        true
+    } else if desc.build_table_rows.is_none() && desc.probe_table_rows.is_none() {
+        log::info!(
+            "RUNTIME-FILTER: Disable bloom runtime filter {} - no table statistics available",
+            desc.id
+        );
     } else {
         log::info!(
             "RUNTIME-FILTER: Disable bloom runtime filter {} - unselective against build and probe tables (threshold={}%, build_rows={}, build_table_rows={:?}, probe_table_rows={:?})",
@@ -59,7 +66,33 @@ pub(super) fn should_enable_runtime_filter(
             desc.build_table_rows,
             desc.probe_table_rows,
         );
-        false
+    }
+
+    decision
+}
+
+fn runtime_filter_decision(
+    build_num_rows: usize,
+    build_table_rows: Option<u64>,
+    probe_table_rows: Option<u64>,
+    threshold_percent: u64,
+) -> RuntimeFilterDecision {
+    if build_num_rows == 0 {
+        return RuntimeFilterDecision::default();
+    }
+
+    if selectivity_below_threshold(build_num_rows, build_table_rows, threshold_percent) {
+        RuntimeFilterDecision {
+            enabled: true,
+            adaptive: false,
+        }
+    } else if selectivity_below_threshold(build_num_rows, probe_table_rows, threshold_percent) {
+        RuntimeFilterDecision {
+            enabled: true,
+            adaptive: true,
+        }
+    } else {
+        RuntimeFilterDecision::default()
     }
 }
 
@@ -80,9 +113,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn selectivity_can_use_probe_table_size() {
-        assert!(!selectivity_below_threshold(200_000, Some(200_000), 10));
-        assert!(selectivity_below_threshold(200_000, Some(20_000_000), 10));
+    fn probe_table_selectivity_is_adaptive() {
+        assert_eq!(
+            runtime_filter_decision(200_000, Some(200_000), Some(20_000_000), 10),
+            RuntimeFilterDecision {
+                enabled: true,
+                adaptive: true,
+            }
+        );
+    }
+
+    #[test]
+    fn missing_probe_statistics_preserves_original_decision() {
+        assert_eq!(
+            runtime_filter_decision(200_000, Some(200_000), None, 10),
+            RuntimeFilterDecision::default()
+        );
+    }
+
+    #[test]
+    fn build_table_selectivity_is_not_adaptive() {
+        assert_eq!(
+            runtime_filter_decision(10_000, Some(200_000), Some(20_000_000), 10),
+            RuntimeFilterDecision {
+                enabled: true,
+                adaptive: false,
+            }
+        );
     }
 
     #[test]

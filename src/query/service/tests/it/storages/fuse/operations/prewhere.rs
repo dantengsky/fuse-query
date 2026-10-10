@@ -368,6 +368,7 @@ async fn prepare_prewhere_data() -> Result<PrewhereTestSetup> {
                 stats: Arc::new(RuntimeFilterStats::default()),
                 build_rows: 1,
                 build_table_rows: None,
+                adaptive_bloom: false,
                 enabled: true,
             },
             RuntimeFilterEntry {
@@ -388,6 +389,7 @@ async fn prepare_prewhere_data() -> Result<PrewhereTestSetup> {
                 stats: Arc::new(RuntimeFilterStats::default()),
                 build_rows: 1,
                 build_table_rows: None,
+                adaptive_bloom: false,
                 enabled: true,
             },
         ],
