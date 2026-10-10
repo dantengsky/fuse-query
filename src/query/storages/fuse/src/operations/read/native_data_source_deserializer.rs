@@ -675,7 +675,7 @@ impl NativeDeserializeDataTransform {
 
                 let unset_bits = bitmap.null_count();
                 let elapsed = start.elapsed();
-                runtime_filter.stats.record_bloom(
+                runtime_filter.stats.record_adaptive_bloom(
                     elapsed.as_nanos() as u64,
                     unset_bits as u64,
                     bitmap.len() as u64,

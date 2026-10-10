@@ -135,6 +135,7 @@ fn build_runtime_filter_entry(
         stats: Arc::new(RuntimeFilterStats::new()),
         build_rows: 0,
         build_table_rows: None,
+        adaptive_bloom: false,
         enabled: true,
     }
 }

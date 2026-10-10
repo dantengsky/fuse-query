@@ -66,7 +66,7 @@ pub async fn build_runtime_filter_infos(
     // Iterate over all runtime filter packets
     for packet in packets.into_values() {
         let desc = runtime_filter_descs.get(&packet.id).unwrap();
-        let bloom_enabled =
+        let bloom_decision =
             should_enable_runtime_filter(desc, total_build_rows, selectivity_threshold);
 
         // Apply this single runtime filter to all probe targets (scan_id, probe_key pairs)
@@ -102,7 +102,7 @@ pub async fn build_runtime_filter_infos(
             } else {
                 (None, 0)
             };
-            let bloom = if bloom_enabled {
+            let bloom = if bloom_decision.enabled {
                 if let Some(ref bloom) = packet.bloom {
                     Some(build_bloom_filter(bloom.clone(), probe_key, max_threads, desc.id).await?)
                 } else {
@@ -123,6 +123,7 @@ pub async fn build_runtime_filter_infos(
             };
             let enabled =
                 bloom.is_some() || inlist.is_some() || min_max.is_some() || spatial.is_some();
+            let adaptive_bloom = bloom.is_some() && bloom_decision.adaptive;
 
             let runtime_entry = RuntimeFilterEntry {
                 id: desc.id,
@@ -135,6 +136,7 @@ pub async fn build_runtime_filter_infos(
                 stats: Arc::new(RuntimeFilterStats::new()),
                 build_rows: total_build_rows,
                 build_table_rows: desc.build_table_rows,
+                adaptive_bloom,
                 enabled,
             };
 

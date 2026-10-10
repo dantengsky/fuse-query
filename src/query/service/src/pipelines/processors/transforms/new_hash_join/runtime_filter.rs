@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
 
 use databend_common_catalog::runtime_filter_info::RuntimeFilterReady;
 use databend_common_exception::ErrorCode;
@@ -37,6 +38,7 @@ pub struct RuntimeFiltersDesc {
     pub min_max_threshold: usize,
     pub spatial_threshold: usize,
     pub selectivity_threshold: u64,
+    pub observed_build_rows: Arc<AtomicUsize>,
 
     broadcast_id: Option<u32>,
     pub filters_desc: Vec<RuntimeFilterDesc>,
@@ -76,6 +78,7 @@ impl RuntimeFiltersDesc {
             min_max_threshold,
             spatial_threshold,
             selectivity_threshold,
+            observed_build_rows: Arc::new(AtomicUsize::new(0)),
             runtime_filters_ready,
             ctx: ctx.clone(),
             broadcast_id: join.broadcast_id,
