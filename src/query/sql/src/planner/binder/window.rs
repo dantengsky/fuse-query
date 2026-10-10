@@ -26,6 +26,7 @@ use itertools::Itertools;
 use super::select::SelectList;
 use crate::BindContext;
 use crate::Binder;
+use crate::ColumnSet;
 use crate::MetadataRef;
 use crate::Symbol;
 use crate::Visibility;
@@ -599,15 +600,25 @@ pub fn bind_window_function_info(
 
     // eval scalars before sort
     // Generate a `EvalScalar` as the input of `Window`.
+    // These sources overlap: a WITHIN GROUP sort key may repeat an aggregate argument, a partition
+    // item or an order-by item. Keeping the first occurrence is safe because `replace_expr` reuses
+    // a bound column's binding and derives a fresh index for anything else, so one index always
+    // carries one scalar.
+    let mut defined_indexes = ColumnSet::new();
     let mut scalar_items: Vec<ScalarItem> = Vec::new();
+    let mut push_scalar_item = |item: &ScalarItem, items: &mut Vec<ScalarItem>| {
+        if defined_indexes.insert(item.index) {
+            items.push(item.clone());
+        }
+    };
     for arg in &window_plan.arguments {
-        scalar_items.push(arg.clone());
+        push_scalar_item(arg, &mut scalar_items);
     }
     for part in &window_plan.partition_by {
-        scalar_items.push(part.clone());
+        push_scalar_item(part, &mut scalar_items);
     }
     for order in &window_plan.order_by {
-        scalar_items.push(order.order_by_item.clone())
+        push_scalar_item(&order.order_by_item, &mut scalar_items);
     }
 
     let child = if !scalar_items.is_empty() {
