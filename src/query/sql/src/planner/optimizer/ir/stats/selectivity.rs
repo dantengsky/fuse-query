@@ -155,13 +155,23 @@ impl SelectivityEstimator {
             }),
         };
         let expr = scalar_expr.as_expr()?;
-        let input_domains = self.build_constraint_domains(&expr)?;
-        let (expr, output_domain) = ConstantFolder::fold_with_domain(
-            &expr,
-            &input_domains,
-            &FunctionContext::default(),
-            &BUILTIN_FUNCTIONS,
-        );
+        // Statistics derivation has no query context, so it folds with
+        // `FunctionContext::default()`. Query-time functions such as `now()` and
+        // `today()` stay symbolic in the logical plan and would fold to the Unix
+        // epoch here, turning `ts < now()` into a provably false predicate. Keep
+        // non-deterministic predicates unfolded; the visitor below treats their
+        // comparisons as unknown filters instead.
+        let (expr, output_domain) = if expr.is_deterministic(&BUILTIN_FUNCTIONS) {
+            let input_domains = self.build_constraint_domains(&expr)?;
+            ConstantFolder::fold_with_domain(
+                &expr,
+                &input_domains,
+                &FunctionContext::default(),
+                &BUILTIN_FUNCTIONS,
+            )
+        } else {
+            (expr, None)
+        };
 
         // ConstantFolder owns expression/domain reasoning: boolean shortcuts and
         // contradictions visible from input column domains. It can still leave
@@ -533,11 +543,18 @@ impl SelectivityVisitor<'_> {
             StatCardinality::Estimate(0.0) => return Ok(Selectivity::N(0.0)),
             cardinality => cardinality.value(),
         };
-        let Some(input_stats) = self.build_input_stats(&Expr::FunctionCall(func.clone()))? else {
+        let expr = Expr::FunctionCall(func.clone());
+        // Non-deterministic arguments (`now()`, `today()`, `rand()`, ...) cannot be
+        // evaluated without the query context; the default context would read
+        // them as the Unix epoch and report a statistics-derived zero.
+        if !expr.is_deterministic(&BUILTIN_FUNCTIONS) {
+            return Ok(Selectivity::Unknown);
+        }
+        let Some(input_stats) = self.build_input_stats(&expr)? else {
             return Ok(Selectivity::Unknown);
         };
         let Some(stat) = StatEvaluator::run(
-            &Expr::FunctionCall(func.clone()),
+            &expr,
             &FunctionContext::default(),
             &BUILTIN_FUNCTIONS,
             self.cardinality,
@@ -1388,6 +1405,88 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    // Statistics are derived without the query context, so `now()` would fold to
+    // the Unix epoch. A range predicate against it must be an unknown filter,
+    // not a statistics-derived zero, and it must never prove the filter empty.
+    #[test]
+    fn test_query_time_function_comparison_is_unknown_filter() -> Result<()> {
+        let column_index = Symbol::new(0);
+        let mut column_stats = ColumnStatSet::new();
+        // Timestamps in 2025, well after the epoch.
+        column_stats.insert(column_index, ColumnStat {
+            min: Datum::Int(1_735_689_600_000_000),
+            max: Datum::Int(1_767_225_600_000_000),
+            ndv: StatEstimate::exact(100.0),
+            null_count: StatCount::Exact(0),
+            histogram: None,
+        });
+
+        let before_now = timestamp_comparison_predicate(
+            column_index,
+            ComparisonOp::LT,
+            ScalarExpr::FunctionCall(FunctionCall {
+                span: None,
+                func_name: "now".to_string(),
+                params: vec![],
+                arguments: vec![],
+            }),
+        );
+        let mut estimator =
+            SelectivityEstimator::new(column_stats.clone(), StatCardinality::estimate(100.0));
+        assert_eq!(
+            estimator.apply(std::slice::from_ref(&before_now))?,
+            100.0 * DEFAULT_SELECTIVITY
+        );
+        assert!(!estimator.is_proven_empty());
+        assert!(!estimator.uses_stale_range_statistics());
+
+        // `ts >= <in-range constant> AND ts < now()` used to fold to a
+        // contradiction (`ts < 1970-01-01`) and prove the filter empty.
+        let after_start = timestamp_comparison_predicate(
+            column_index,
+            ComparisonOp::GTE,
+            ScalarExpr::TypedConstantExpr(
+                ConstantExpr {
+                    span: None,
+                    value: Scalar::Timestamp(1_735_689_600_000_000),
+                },
+                DataType::Timestamp,
+            ),
+        );
+        let mut estimator = SelectivityEstimator::new(column_stats, StatCardinality::exact(100));
+        assert_eq!(
+            estimator.apply(&[after_start, before_now])?,
+            100.0 * DEFAULT_SELECTIVITY
+        );
+        assert!(!estimator.is_proven_empty());
+        Ok(())
+    }
+
+    fn timestamp_comparison_predicate(
+        column_index: Symbol,
+        op: ComparisonOp,
+        bound: ScalarExpr,
+    ) -> ScalarExpr {
+        ScalarExpr::FunctionCall(FunctionCall {
+            span: None,
+            func_name: op.to_func_name().to_string(),
+            params: vec![],
+            arguments: vec![
+                ScalarExpr::BoundColumnRef(BoundColumnRef {
+                    span: None,
+                    column: ColumnBindingBuilder::new(
+                        "ts".to_string(),
+                        column_index,
+                        Box::new(DataType::Timestamp),
+                        Visibility::Visible,
+                    )
+                    .build(),
+                }),
+                bound,
+            ],
+        })
     }
 
     fn uint_comparison_predicate(column_index: Symbol, op: ComparisonOp, value: u64) -> ScalarExpr {
