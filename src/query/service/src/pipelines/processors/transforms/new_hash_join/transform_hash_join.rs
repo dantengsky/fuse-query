@@ -273,7 +273,18 @@ impl Processor for TransformHashJoin {
                 );
 
                 self.instant = Instant::now();
-                Stage::Probe(ProbeState::new())
+                if self.rf_desc.build_side_empty() && self.join.can_skip_probe() {
+                    self.probe_port.finish();
+                    self.joined_port.finish();
+
+                    let mut finished = FinishedJoin::create();
+                    std::mem::swap(&mut finished, &mut self.join);
+                    drop(finished);
+
+                    Stage::Finished
+                } else {
+                    Stage::Probe(ProbeState::new())
+                }
             }
             Stage::Probe(_) => {
                 let wait_elapsed = self.instant.elapsed() - elapsed;

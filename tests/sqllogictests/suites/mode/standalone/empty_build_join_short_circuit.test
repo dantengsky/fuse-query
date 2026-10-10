@@ -1,0 +1,192 @@
+# An empty build side must finish the probe input without scanning it, for every join type
+# whose output is empty once the build side is empty.
+#
+# `explain analyze partial` reports per-operator execution metrics. A skipped probe emits no
+# `output rows` line for its TableScan at all; consuming the input and returning an empty
+# stream per block would report the full row count. That distinction is what these tests pin.
+#
+# Note the probe key below is evaluated inside the join's own probe_block, not by a separate
+# EvalScalar in the probe pipeline. A query that merely fails to raise a probe-side evaluation
+# error therefore does NOT prove the pipeline was cancelled: probe_block returns early on an
+# empty build before evaluating keys, independently of pipeline cancellation.
+#
+# The cancellation implemented so far is local to a pipeline, so these tests cover standalone
+# only. A remote probe Exchange may still do work before the receiving join sees the empty
+# build. TODO: extend empty-build cancellation to remote probe fragments and add the
+# corresponding cluster regression if that stronger guarantee is implemented. Passing these
+# tests must not be taken as evidence that remote work is skipped.
+statement ok
+set enable_experimental_new_join = 1;
+
+statement ok
+create or replace table empty_build(a bigint);
+
+query T
+explain analyze partial select n.number from numbers(1000000) n inner join empty_build e on n.number = e.a;
+----
+HashJoin: INNER
+├── estimated rows: 0.00
+├── TableScan
+│   ├── table: default.default.empty_build
+│   └── estimated rows: 0.00
+└── TableScan
+    ├── table: default.system.numbers
+    └── estimated rows: 1000000.00
+
+query T
+explain analyze partial select n.number from numbers(1000000) n left semi join empty_build e on n.number = e.a;
+----
+HashJoin: LEFT SEMI
+├── estimated rows: 0.00
+├── TableScan
+│   ├── table: default.default.empty_build
+│   └── estimated rows: 0.00
+└── TableScan
+    ├── table: default.system.numbers
+    └── estimated rows: 1000000.00
+
+query T
+explain analyze partial select n.number from numbers(1000000) n right join empty_build e on n.number = e.a;
+----
+HashJoin: RIGHT OUTER
+├── estimated rows: 0.00
+├── TableScan
+│   ├── table: default.default.empty_build
+│   └── estimated rows: 0.00
+└── TableScan
+    ├── table: default.system.numbers
+    └── estimated rows: 1000000.00
+
+query T
+explain analyze partial select e.a from numbers(1000000) n right semi join empty_build e on n.number = e.a;
+----
+HashJoin: RIGHT SEMI
+├── estimated rows: 0.00
+├── TableScan
+│   ├── table: default.default.empty_build
+│   └── estimated rows: 0.00
+└── TableScan
+    ├── table: default.system.numbers
+    └── estimated rows: 1000000.00
+
+query T
+explain analyze partial select e.a from numbers(1000000) n right anti join empty_build e on n.number = e.a;
+----
+HashJoin: RIGHT ANTI
+├── estimated rows: 0.00
+├── TableScan
+│   ├── table: default.default.empty_build
+│   └── estimated rows: 0.00
+└── TableScan
+    ├── table: default.system.numbers
+    └── estimated rows: 1000000.00
+
+# Controls: these join types preserve unmatched probe rows, so they must keep scanning the
+# probe input. Their TableScan reporting `output rows` is what makes the assertions above
+# meaningful rather than an artifact of how `explain analyze partial` renders any empty join.
+query T
+explain analyze partial select n.number from numbers(1000000) n left anti join empty_build e on n.number = e.a;
+----
+HashJoin: LEFT ANTI
+├── estimated rows: 1000000.00
+├── output rows: 1 million
+├── TableScan
+│   ├── table: default.default.empty_build
+│   └── estimated rows: 0.00
+└── TableScan
+    ├── table: default.system.numbers
+    ├── estimated rows: 1000000.00
+    └── output rows: 1 million
+
+query T
+explain analyze partial select n.number from numbers(1000000) n left join empty_build e on n.number = e.a;
+----
+HashJoin: LEFT OUTER
+├── estimated rows: 1000000.00
+├── output rows: 1 million
+├── TableScan
+│   ├── table: default.default.empty_build
+│   └── estimated rows: 0.00
+└── TableScan
+    ├── table: default.system.numbers
+    ├── estimated rows: 1000000.00
+    └── output rows: 1 million
+
+# Emptiness must be detected without runtime filters. With none configured there is no
+# runtime-filter builder, so the build row count cannot come from one.
+statement ok
+set enable_join_runtime_filter = 0;
+
+query T
+explain analyze partial select n.number from numbers(1000000) n left semi join empty_build e on n.number = e.a;
+----
+HashJoin: LEFT SEMI
+├── estimated rows: 0.00
+├── TableScan
+│   ├── table: default.default.empty_build
+│   └── estimated rows: 0.00
+└── TableScan
+    ├── table: default.system.numbers
+    └── estimated rows: 1000000.00
+
+statement ok
+unset enable_join_runtime_filter;
+
+# Spill repartitioning resets the in-memory build row count, so the logical build input count
+# is what must drive the decision.
+statement ok
+set force_join_data_spill = 1;
+
+query T
+explain analyze partial select n.number from numbers(1000000) n left semi join empty_build e on n.number = e.a;
+----
+HashJoin: LEFT SEMI
+├── estimated rows: 0.00
+├── TableScan
+│   ├── table: default.default.empty_build
+│   └── estimated rows: 0.00
+└── TableScan
+    ├── table: default.system.numbers
+    └── estimated rows: 1000000.00
+
+statement ok
+unset force_join_data_spill;
+
+# Separate mechanism, kept from the assertion 504adc0dfa originally added here: probe_block
+# returns early on an empty build before evaluating probe keys, so a key that would fail to
+# evaluate is never reached. This holds independently of pipeline cancellation -- it passed
+# before cancellation existed -- so it pins the per-block guard, not the short circuit above.
+statement ok
+create or replace table guard_probe(a int);
+
+statement ok
+insert into guard_probe values (7), (3), (5);
+
+statement ok
+create or replace table guard_build(a int);
+
+query I
+select p.a from guard_probe p right join guard_build b
+on to_int64(concat('invalid-', to_string(p.a))) = b.a;
+----
+
+# The same key does fail once the build side is non-empty, which is what makes the assertion
+# above meaningful rather than the expression being harmless.
+statement ok
+insert into guard_build values (1);
+
+statement error 1006
+select p.a from guard_probe p right join guard_build b
+on to_int64(concat('invalid-', to_string(p.a))) = b.a;
+
+statement ok
+drop table guard_probe;
+
+statement ok
+drop table guard_build;
+
+statement ok
+drop table empty_build;
+
+statement ok
+unset enable_experimental_new_join;
