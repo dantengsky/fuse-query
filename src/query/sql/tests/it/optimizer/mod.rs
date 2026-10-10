@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod cascades_task_dedup;
 mod decorrelate_correlated_aliases;
 mod eager_aggregation;
 mod normalize_scalar;
