@@ -17,15 +17,15 @@ sql: |
 
 table_statistics:
   outer_join_preserved:
-    num_rows: 100
+    num_rows: 1000000
   outer_join_other:
-    num_rows: 100
+    num_rows: 1000000
 
 column_statistics:
   outer_join_preserved.join_key:
     min: 0
-    max: 99
-    ndv: 100
+    max: 999999
+    ndv: 1000000
     null_count: 0
   outer_join_preserved.range_value:
     min: 0
@@ -34,13 +34,13 @@ column_statistics:
     null_count: 0
   outer_join_preserved.selective_value:
     min: 0
-    max: 99
-    ndv: 100
+    max: 999999
+    ndv: 1000000
     null_count: 0
   outer_join_other.join_key:
     min: 0
-    max: 99
-    ndv: 100
+    max: 999999
+    ndv: 1000000
     null_count: 0
   outer_join_other.range_value:
     min: 0

@@ -82,6 +82,18 @@ const LITE_REPLAY_CASE_SPECS: &[LiteReplayCaseSpec] = &[
         default_node_num: 3,
     },
     LiteReplayCaseSpec {
+        name: "06_never_analyzed_outer_join_build",
+        warehouse_distribution: true,
+        optimizer_skip_list: &[],
+        default_node_num: 3,
+    },
+    LiteReplayCaseSpec {
+        name: "07_tiny_sample_outer_join_build",
+        warehouse_distribution: true,
+        optimizer_skip_list: &[],
+        default_node_num: 3,
+    },
+    LiteReplayCaseSpec {
         name: "01_multi_join_avg_case_expression",
         warehouse_distribution: true,
         optimizer_skip_list: &[],

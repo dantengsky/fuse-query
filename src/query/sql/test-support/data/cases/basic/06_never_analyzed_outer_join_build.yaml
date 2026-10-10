@@ -1,0 +1,104 @@
+name: "06_never_analyzed_outer_join_build"
+description: "Replay of a never-analyzed fuse table (stats_row_count = 0): columns are named by role (key_/dim_/val_/flag_/ts_); the provider must keep the [min, max]-bounded NDV for status-like columns, so a huge scan with equality filters is not estimated as one row and turned into the outer-join broadcast build side"
+
+sql: |
+  SELECT a.id, a.key_a, a.dim_b, a.dim_a, a.val_a, a.str_a,
+         b.key_b, c.key_a, c.dim_b, c.dim_a, c.val_b
+  FROM large_fact AS a
+  LEFT JOIN (
+      SELECT key_c, key_a, key_b
+      FROM small_lookup
+      WHERE ts_b > TIMESTAMP '2026-09-18 07:00:00'
+        AND substr(key_c, 1, 1) = 'd'
+  ) AS b
+  ON a.str_a = b.key_c AND a.key_a = b.key_a
+  LEFT JOIN (
+      SELECT key_b, key_a, dim_b, dim_a, val_b
+      FROM large_dim
+      WHERE flag_b = 7 AND flag_d = 5
+  ) AS c
+  ON b.key_b = c.key_b AND b.key_a = c.key_a
+  WHERE a.flag_a = 3
+    AND a.flag_b = 6
+    AND a.ts_a >= TIMESTAMP '2026-09-18 08:00:00'
+    AND a.ts_a <= TIMESTAMP '2026-09-18 10:00:00'
+    AND a.flag_c = '2'
+    AND substr(a.str_a, 1, 1) = 'd'
+    AND abs(a.val_a - ifnull(c.val_b, 0)) > 0.00000001
+  LIMIT 100;
+
+node_num: 3
+
+table_statistics:
+  large_fact:
+    num_rows: 1361110981
+    stats_row_count: 0
+  small_lookup:
+    num_rows: 1361298
+    stats_row_count: 0
+  large_dim:
+    num_rows: 1548415710
+    stats_row_count: 0
+
+column_statistics:
+  large_fact.key_a:
+    min: 10000001
+    max: 1278189672
+    null_count: 0
+  large_fact.flag_a:
+    min: 0
+    max: 8
+    null_count: 0
+  large_fact.flag_b:
+    min: 0
+    max: 8
+    null_count: 0
+  large_fact.flag_c:
+    min: "0"
+    max: "9"
+    null_count: 0
+  large_fact.ts_a:
+    min: 1498360398000000
+    max: 1789382273000000
+    null_count: 0
+  large_fact.str_a:
+    min: ""
+    max: "zzzz"
+    null_count: 1252178000
+  small_lookup.key_c:
+    min: ""
+    max: "zzzz"
+    null_count: 0
+  small_lookup.key_a:
+    min: 10000001
+    max: 1278189672
+    null_count: 0
+  small_lookup.key_b:
+    min: ""
+    max: "zzzz"
+    null_count: 0
+  small_lookup.ts_b:
+    min: 1498360398000000
+    max: 1789382273000000
+    null_count: 0
+  large_dim.key_b:
+    min: ""
+    max: "zzzz"
+    null_count: 0
+  large_dim.key_a:
+    min: 0
+    max: 1278190679
+    null_count: 0
+  large_dim.flag_b:
+    min: 0
+    max: 8
+    null_count: 0
+  large_dim.flag_d:
+    min: 0
+    max: 8
+    null_count: 0
+
+tables:
+  large_fact: basic/06_large_fact.sql
+  small_lookup: basic/06_small_lookup.sql
+  large_dim: basic/06_large_dim.sql
