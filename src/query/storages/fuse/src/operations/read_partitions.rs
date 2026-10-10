@@ -560,8 +560,16 @@ impl FuseTable {
             .as_ref()
             .filter(|p| p.order_by.is_empty() && p.filters.is_none())
             .and_then(|p| p.limit);
-        let enable_prune_cache =
-            ctx.get_settings().get_enable_prune_cache()? && runtime_scan_filters.is_empty();
+        // A runtime `LIMIT` scan filter does not by itself make the pruning
+        // result plan-dependent: a point lookup under `LIMIT n` prunes exactly
+        // like the plain query as long as the limit is never reached. The sink
+        // records whether the filter cut the result short and only then skips
+        // the cache, so such queries keep replaying the cached result instead
+        // of re-pruning every segment on every execution. A runtime TopN
+        // boundary is different: `RuntimeTopNSegmentReorder` drops whole
+        // segments before the sink sees them, so that result is never cached.
+        let enable_prune_cache = ctx.get_settings().get_enable_prune_cache()?
+            && runtime_scan_filters.preferred_filter().is_none();
         let dry_run = matches!(ctx.get_query_kind(), QueryKind::Explain);
         let send_part_state = Arc::new(SendPartState::create(
             derterministic_cache_key,

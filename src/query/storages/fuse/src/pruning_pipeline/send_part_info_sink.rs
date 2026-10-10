@@ -60,6 +60,11 @@ pub struct SendPartCache {
 pub struct SendPartState {
     cache: Mutex<SendPartCache>,
     limit: AtomicUsize,
+    /// Set once the pruning result stops being a function of the plan alone:
+    /// the consumer went away, or a runtime scan filter (`LIMIT` reached,
+    /// TopN boundary) dropped blocks. Such a result must not be cached under
+    /// the deterministic key, since a later query with the same plan may need
+    /// the blocks that were skipped.
     incomplete: AtomicBool,
     data_metrics: Arc<StorageMetrics>,
 }
@@ -94,8 +99,16 @@ impl SendPartState {
         send_part_cache.statistics.clone()
     }
 
+    pub fn mark_incomplete(&self) {
+        self.incomplete.store(true, Ordering::Release);
+    }
+
+    pub fn is_incomplete(&self) -> bool {
+        self.incomplete.load(Ordering::Acquire)
+    }
+
     pub fn populating_cache(&self) {
-        if self.incomplete.load(Ordering::Acquire) {
+        if self.is_incomplete() {
             return;
         }
 
@@ -162,7 +175,6 @@ impl SendPartInfoSink {
         dry_run: bool,
         enable_cache: bool,
     ) -> Result<ProcessorPtr> {
-        debug_assert!(runtime_scan_filters.is_empty() || !enable_cache);
         let partitions = Partitions::default();
         let statistics = PartStatistics::default();
         Ok(ProcessorPtr::create(AsyncSinker::create(
@@ -208,13 +220,12 @@ impl AsyncSink for SendPartInfoSink {
         };
 
         if self.runtime_scan_filters.is_finished() {
+            self.send_part_state.mark_incomplete();
             return Ok(true);
         }
 
         if !self.dry_run && self.sender.as_ref().is_none_or(Sender::is_closed) {
-            self.send_part_state
-                .incomplete
-                .store(true, Ordering::Release);
+            self.send_part_state.mark_incomplete();
             return Ok(true);
         }
 
@@ -225,7 +236,11 @@ impl AsyncSink for SendPartInfoSink {
         self.statistics.partitions_scanned += block_metas.len();
         if !self.runtime_scan_filters.is_empty() {
             let filters = &self.runtime_scan_filters;
+            let before = block_metas.len();
             block_metas.retain(|(_, meta)| !filters.should_prune(Some(&meta.col_stats)));
+            if block_metas.len() != before {
+                self.send_part_state.mark_incomplete();
+            }
 
             if let Some((_, order)) = filters.preferred_filter() {
                 let mut ranked = Vec::with_capacity(block_metas.len());
@@ -270,9 +285,7 @@ impl AsyncSink for SendPartInfoSink {
                 if self.dry_run {
                     break;
                 }
-                self.send_part_state
-                    .incomplete
-                    .store(true, Ordering::Release);
+                self.send_part_state.mark_incomplete();
                 return Ok(true);
             }
         }
@@ -295,6 +308,7 @@ impl SendPartInfoSink {
         for (block_meta_index, block_meta) in block_metas.iter() {
             let stats = Some(&block_meta.col_stats);
             if self.runtime_scan_filters.should_prune(stats) {
+                self.send_part_state.mark_incomplete();
                 continue;
             }
 
@@ -347,6 +361,7 @@ impl SendPartInfoSink {
         for (block_meta_index, block_meta) in block_metas.iter() {
             let stats = Some(&block_meta.col_stats);
             if self.runtime_scan_filters.should_prune(stats) {
+                self.send_part_state.mark_incomplete();
                 continue;
             }
 
