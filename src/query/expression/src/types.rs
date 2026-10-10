@@ -257,6 +257,19 @@ impl DataType {
         }
     }
 
+    /// Whether equality can hide a TimestampTz presentation offset. Such values
+    /// cannot be substituted into arbitrary expressions using equality alone.
+    pub fn contains_timestamp_tz(&self) -> bool {
+        match self {
+            DataType::TimestampTz => true,
+            DataType::Nullable(inner) | DataType::Array(inner) | DataType::Map(inner) => {
+                inner.contains_timestamp_tz()
+            }
+            DataType::Tuple(fields) => fields.iter().any(DataType::contains_timestamp_tz),
+            _ => false,
+        }
+    }
+
     pub fn has_nested_nullable(&self) -> bool {
         match self {
             DataType::Null

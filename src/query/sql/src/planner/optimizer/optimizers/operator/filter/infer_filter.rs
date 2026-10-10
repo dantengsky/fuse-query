@@ -210,6 +210,12 @@ impl<'a> InferFilterOptimizer<'a> {
     // Equality inference needs a conversion target that preserves equivalence,
     // not just a type combination that Databend can evaluate with `eq`.
     fn check_equal_expr_type(left_ty: &DataType, right_ty: &DataType) -> bool {
+        // Equal instants need not have the same offset. Predicates such as
+        // to_string(a.ts) LIKE '%+0000' cannot be transferred to b.ts merely
+        // because a.ts = b.ts, including when the value is nested in a container.
+        if left_ty.contains_timestamp_tz() || right_ty.contains_timestamp_tz() {
+            return false;
+        }
         let left = left_ty.remove_nullable();
         let right = right_ty.remove_nullable();
         let Some(common_ty) = Self::safe_common_type(left.clone(), right.clone()) else {
