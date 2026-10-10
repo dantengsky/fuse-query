@@ -634,6 +634,11 @@ pub fn bind_constant_scan(
             let expr = scalar
                 .as_expr()?
                 .project_column_ref(|col| value_schema.index_of(&col.index.to_string()))?;
+            if !expr.is_deterministic(&BUILTIN_FUNCTIONS) {
+                // The evaluated value (e.g. `VALUES (now())`) belongs to this execution only, so
+                // the plan carrying it must not be reused.
+                ctx.result_cache_state().set_plan_not_cacheable();
+            }
             let result = evaluator.run(&expr)?;
 
             match result.as_scalar() {
