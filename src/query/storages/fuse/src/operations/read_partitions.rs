@@ -39,7 +39,6 @@ use databend_common_catalog::query_kind::QueryKind;
 use databend_common_catalog::runtime_filter_info::RuntimeScanFilters;
 use databend_common_catalog::table::Table;
 use databend_common_catalog::table_context::TableContext;
-use databend_common_exception::ErrorCode;
 use databend_common_exception::Result;
 use databend_common_expression::BlockMetaInfo;
 use databend_common_expression::ColumnId;
@@ -289,7 +288,12 @@ impl FuseTable {
         let pruner =
             Arc::new(self.build_fuse_pruner(ctx.clone(), push_downs, table_schema.clone(), dal)?);
 
-        let (segment_tx, segment_rx) = async_channel::bounded(max_io_requests);
+        // The channel holds every lazy segment location at once, so the whole
+        // list can be handed over synchronously when the pipeline is initialized.
+        // The locations are already materialized in `lazy_init_segments`; this
+        // only moves them, and avoids a dedicated runtime (and its threads) per
+        // table scan just to feed a bounded channel.
+        let (segment_tx, segment_rx) = async_channel::bounded(lazy_init_segments.len());
 
         match segment_format {
             FuseSegmentFormat::Row => {
@@ -315,29 +319,22 @@ impl FuseTable {
                     part_info_tx,
                     derterministic_cache_key.clone(),
                     table_schema.clone(),
+                    lazy_init_segments.len(),
                 )?;
             }
         }
         prune_pipeline.set_on_init(move || {
-            // We cannot use the runtime associated with the query to avoid increasing its lifetime.
-            GlobalIORuntime::instance().spawn(async move {
-                // avoid block global io runtime
-                let runtime = Runtime::with_worker_threads(2, Some("prune-pipeline".to_string()))?;
-                let join_handler = runtime.spawn(async move {
-                    for segment in lazy_init_segments {
-                        // the sql may be killed or early stop, ignore the error
-                        if let Err(_e) = segment_tx.send(segment).await {
-                            break;
-                        }
-                    }
-                    Ok::<_, ErrorCode>(())
-                });
-
-                if let Err(cause) = join_handler.await {
-                    log::warn!("Join error in prune pipeline: {:?}", cause);
+            for segment in lazy_init_segments {
+                // Capacity equals the number of segments and this is the only
+                // sender, so the channel is never full here. Closed means the
+                // receivers are gone (query killed or early stopped).
+                if segment_tx.try_send(segment).is_err() {
+                    break;
                 }
-                Ok::<_, ErrorCode>(())
-            });
+            }
+            // Dropping the last sender closes the channel; buffered segments
+            // are still delivered before the sources observe the close.
+            drop(segment_tx);
             Ok(())
         });
 
@@ -431,8 +428,11 @@ impl FuseTable {
         partitions_total: usize,
         plan_id: u32,
     ) -> Result<()> {
-        let max_threads = ctx.get_settings().get_max_threads()? as usize;
-        let max_io_requests = self.adjust_io_request(&ctx)?;
+        // Every stage of this pipeline works on whole segments, so there is no
+        // point in having more processors than segments to prune on this node:
+        // the surplus would only add processors to the executor graph.
+        let (max_threads, max_io_requests) =
+            Self::prune_pipeline_widths(&ctx, self.adjust_io_request(&ctx)?, partitions_total)?;
         prune_pipeline.add_source(
             |output| LazySegmentReceiverSource::create(ctx.clone(), segment_rx.clone(), output),
             max_threads,
@@ -600,6 +600,21 @@ impl FuseTable {
         Ok(())
     }
 
+    /// Parallelism of the segment pruning pipeline: `(max_threads, max_io_requests)`,
+    /// both capped by the number of segments this node has to prune.
+    fn prune_pipeline_widths(
+        ctx: &Arc<dyn TableContext>,
+        max_io_requests: usize,
+        num_segments: usize,
+    ) -> Result<(usize, usize)> {
+        let max_threads = ctx.get_settings().get_max_threads()? as usize;
+        let num_segments = num_segments.max(1);
+        Ok((
+            max_threads.min(num_segments).max(1),
+            max_io_requests.min(num_segments).max(1),
+        ))
+    }
+
     fn add_runtime_top_n_segment_reorder<M: PrunedSegmentMeta + BlockMetaInfo>(
         prune_pipeline: &mut Pipeline,
         runtime_scan_filters: &RuntimeScanFilters,
@@ -627,8 +642,10 @@ impl FuseTable {
         part_info_tx: Sender<Result<PartInfoPtr>>,
         _derterministic_cache_key: Option<String>,
         table_schema: TableSchemaRef,
+        partitions_total: usize,
     ) -> Result<()> {
-        let max_threads = ctx.get_settings().get_max_threads()? as usize;
+        let (max_threads, _) =
+            Self::prune_pipeline_widths(&ctx, self.adjust_io_request(&ctx)?, partitions_total)?;
         let push_down = &pruner.push_down;
         let block_pruner = Arc::new(BlockPruner::create(pruner.pruning_ctx.clone())?);
 
