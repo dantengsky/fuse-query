@@ -46,6 +46,10 @@ use crate::sessions::QueryContext;
 #[allow(clippy::enum_variant_names)]
 enum HashTable {
     MovedOut,
+    /// No block has arrived yet. The table is only allocated on first use so that the
+    /// many processors of a pruned-to-empty scan do not each pay for an empty table
+    /// while the pipeline is being built.
+    Uninitialized(HashTableConfig),
     AggregateHashTable(AggregateHashTable),
 }
 
@@ -146,21 +150,12 @@ impl NewTransformPartialAggregate {
         let spill_schema = params.spill_schema();
         let spillers = Spiller::create(ctx.clone(), spill_schema, partition_stream, bucket_num)?;
 
-        let arena = Arc::new(Bump::new());
-
-        let hash_table = HashTable::AggregateHashTable(AggregateHashTable::new(
-            params.group_data_types.clone(),
-            params.aggregate_functions.clone(),
-            config,
-            arena,
-        ));
-
         Ok(AccumulatingTransformer::create(
             input,
             output,
             NewTransformPartialAggregate {
                 params,
-                hash_table,
+                hash_table: HashTable::Uninitialized(config),
                 probe_state: ProbeState::default(),
                 settings: MemorySettings::from_aggregate_settings(&ctx)?,
                 statistics: AggregationStatistics::new("NewPartialAggregate"),
@@ -195,9 +190,14 @@ impl NewTransformPartialAggregate {
 
         self.statistics.record_block(rows_num, block_bytes);
 
+        if let HashTable::Uninitialized(config) = &self.hash_table {
+            self.hash_table =
+                HashTable::AggregateHashTable(Self::new_hash_table(&self.params, config.clone()));
+        }
+
         {
             match &mut self.hash_table {
-                HashTable::MovedOut => {
+                HashTable::MovedOut | HashTable::Uninitialized(_) => {
                     unreachable!("[TRANSFORM-AGGREGATOR] Hash table already moved out")
                 }
                 HashTable::AggregateHashTable(hashtable) => {
@@ -242,21 +242,23 @@ impl NewTransformPartialAggregate {
         }
     }
 
+    fn new_hash_table(params: &AggregatorParams, config: HashTableConfig) -> AggregateHashTable {
+        AggregateHashTable::new(
+            params.group_data_types.clone(),
+            params.aggregate_functions.clone(),
+            config,
+            Arc::new(Bump::new()),
+        )
+    }
+
     fn spill_out(&mut self) -> Result<()> {
         if let HashTable::AggregateHashTable(v) = std::mem::take(&mut self.hash_table) {
-            let group_types = v.payload.group_types.clone();
-            let aggrs = v.payload.aggrs.clone();
             let config = v.config.clone();
 
             self.spillers.spill(v.payload, self.is_row_shuffle)?;
 
-            let arena = Arc::new(Bump::new());
-            self.hash_table = HashTable::AggregateHashTable(AggregateHashTable::new(
-                group_types,
-                aggrs,
-                config,
-                arena,
-            ));
+            self.hash_table =
+                HashTable::AggregateHashTable(Self::new_hash_table(&self.params, config));
         } else {
             unreachable!("[TRANSFORM-AGGREGATOR] Invalid hash table state during spill check")
         }
@@ -285,6 +287,13 @@ impl AccumulatingTransform for NewTransformPartialAggregate {
                     unreachable!("[TRANSFORM-AGGREGATOR] Hash table already moved out in finish")
                 }
             },
+            HashTable::Uninitialized(_) => {
+                // No input block ever arrived: there is nothing to emit, but a spill
+                // buffer shared with other processors may still hold pending blocks.
+                let blocks = self.spillers.finish()?;
+                self.statistics.log_empty_finish_statistics();
+                blocks
+            }
             HashTable::AggregateHashTable(hashtable) => {
                 let mut blocks = self.spillers.finish()?;
 
