@@ -478,3 +478,64 @@ drop table t2
 
 statement ok
 set prefer_broadcast_join = 1
+
+statement ok
+set enforce_shuffle_join = 1
+
+statement ok
+create or replace table multi_key_scatter_probe(
+    code string not null,
+    k1 uint64 not null,
+    k2 uint64 not null,
+    k3 uint64 not null,
+    payload string not null
+)
+
+statement ok
+create or replace table multi_key_scatter_build(
+    code_lower string not null,
+    code_raw string not null,
+    k1 uint64 not null,
+    k2 uint64 not null,
+    k3 uint64 not null
+)
+
+statement ok
+insert into multi_key_scatter_probe values
+    ('AbC', 1, 10, 100, 'matched-1'),
+    ('DEF', 2, 20, 200, 'unmatched-2'),
+    ('ghi', 3, 30, 300, 'matched-3'),
+    ('Jkl', 4, 40, 400, 'unmatched-4')
+
+statement ok
+insert into multi_key_scatter_build values
+    ('abc', 'AbC', 1, 10, 100),
+    ('def', 'DEF', 2, 20, 999),
+    ('ghi', 'ghi', 3, 30, 300),
+    ('jkl', 'Jkl', 4, 999, 400)
+
+query TT
+select p.code, p.payload
+from multi_key_scatter_probe as p
+where not exists (
+    select 1
+    from multi_key_scatter_build as b
+    where lower(p.code) = b.code_lower
+      and p.code = b.code_raw
+      and p.k1 = b.k1
+      and p.k2 = b.k2
+      and p.k3 = b.k3
+)
+order by p.code
+----
+DEF unmatched-2
+Jkl unmatched-4
+
+statement ok
+drop table multi_key_scatter_probe
+
+statement ok
+drop table multi_key_scatter_build
+
+statement ok
+unset enforce_shuffle_join

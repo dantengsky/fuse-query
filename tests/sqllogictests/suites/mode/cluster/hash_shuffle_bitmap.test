@@ -1,0 +1,41 @@
+statement ok
+create or replace table shuffle_bitmap_l(k bigint not null, b bitmap);
+
+statement ok
+create or replace table shuffle_bitmap_r(k bigint not null, b bitmap);
+
+statement ok
+insert into shuffle_bitmap_l select number, to_bitmap('1,5,42') from numbers(20);
+
+statement ok
+insert into shuffle_bitmap_r select number, to_bitmap('1,5,42') from numbers(10);
+
+statement ok
+set enforce_shuffle_join = 1;
+
+statement ok
+set enable_join_runtime_filter = 0;
+
+query I
+select count(*) from shuffle_bitmap_l l join shuffle_bitmap_r r on l.k = r.k and l.b = r.b;
+----
+10
+
+query I
+select count(*) from shuffle_bitmap_l l join (
+    select k, to_bitmap('1,5,42') as b from shuffle_bitmap_r
+) r on l.k = r.k and l.b = r.b;
+----
+10
+
+statement ok
+unset enforce_shuffle_join;
+
+statement ok
+unset enable_join_runtime_filter;
+
+statement ok
+drop table shuffle_bitmap_l;
+
+statement ok
+drop table shuffle_bitmap_r;
