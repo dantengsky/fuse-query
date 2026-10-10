@@ -147,7 +147,7 @@ impl FlightScatter for OneHashKeyFlightScatter {
         let evaluator = Evaluator::new(&data_block, &self.func_ctx, &BUILTIN_FUNCTIONS);
         let num = data_block.num_rows();
 
-        let indices = evaluator.run(&self.indices_scalar).unwrap();
+        let indices = evaluator.run(&self.indices_scalar)?;
         let indices = get_hash_values(indices, num, self.default_scatter_index)?;
         let data_blocks = DataBlock::scatter(&data_block, &indices, self.scatter_size)?;
 
@@ -163,7 +163,7 @@ impl FlightScatter for OneHashKeyFlightScatter {
     fn scatter_indices(&self, data_block: &DataBlock) -> Result<Option<Vec<u64>>> {
         let evaluator = Evaluator::new(data_block, &self.func_ctx, &BUILTIN_FUNCTIONS);
         let num = data_block.num_rows();
-        let indices = evaluator.run(&self.indices_scalar).unwrap();
+        let indices = evaluator.run(&self.indices_scalar)?;
         let indices = get_hash_values(indices, num, self.default_scatter_index)?;
         Ok(Some(indices.to_vec()))
     }
@@ -381,6 +381,30 @@ mod tests {
             max_partition * partitions * 20 <= indices.len() * 21,
             "partition counts are imbalanced: {counts:?}"
         );
+    }
+
+    #[test]
+    fn invalid_single_shuffle_key_returns_error() -> Result<()> {
+        let block = DataBlock::new_from_columns(vec![StringType::from_data(vec!["invalid-7"])]);
+        let key = check_function(
+            None,
+            "to_int64",
+            &[],
+            &[column_expr(0, DataType::String)],
+            &BUILTIN_FUNCTIONS,
+        )?;
+        let scatter = HashFlightScatter::try_create(
+            FunctionContext::default(),
+            vec![key.as_remote_expr()],
+            3,
+            0,
+        )?;
+        // Both entry points must propagate expression errors, not unwind.
+        let error = scatter.scatter_indices(&block).unwrap_err();
+        assert!(error.message().contains("invalid digit"));
+        let error = scatter.execute(block).unwrap_err();
+        assert!(error.message().contains("invalid digit"));
+        Ok(())
     }
 
     #[test]
