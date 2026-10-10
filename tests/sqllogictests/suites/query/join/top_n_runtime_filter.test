@@ -1,0 +1,92 @@
+# Composite regressions for the rc7.5.4 TopN / join migration.
+# Unique ordering keys give the same results in standalone and cluster mode.
+statement ok
+create or replace table migration_top_n_probe (id UInt64, payload String) row_per_block=17;
+
+statement ok
+create or replace table migration_top_n_build (id UInt64) row_per_block=7;
+
+statement ok
+insert into migration_top_n_probe select number, concat('p', to_string(number)) from numbers(200);
+
+statement ok
+insert into migration_top_n_build select number * 3 from numbers(50);
+
+query IT
+settings (enable_top_n=1, enable_join_runtime_filter=1) select p.id, p.payload from migration_top_n_probe p join migration_top_n_build b on p.id=b.id order by p.id desc limit 4 offset 2;
+----
+141 p141
+138 p138
+135 p135
+132 p132
+
+query IT
+settings (enable_top_n=0, enable_join_runtime_filter=1) select p.id, p.payload from migration_top_n_probe p join migration_top_n_build b on p.id=b.id order by p.id desc limit 4 offset 2;
+----
+141 p141
+138 p138
+135 p135
+132 p132
+
+query IT
+settings (enable_top_n=1, enable_join_runtime_filter=1, force_sort_data_spill=1, force_join_data_spill=1) select p.id, p.payload from migration_top_n_probe p join migration_top_n_build b on p.id=b.id order by p.id desc limit 4 offset 2;
+----
+141 p141
+138 p138
+135 p135
+132 p132
+
+# A proven-empty build remains empty beneath TopN, even with an offset.
+query I
+settings (enable_top_n=1) select p.id from migration_top_n_probe p right join (select id from migration_top_n_build where false) b on p.id=b.id order by p.id limit 4 offset 2;
+----
+
+# Correlated ORDER BY/LIMIT must preserve computations, not treat aliases as
+# identity columns. Offset applies separately to each outer row.
+query II
+settings (enable_top_n=1) select t.a, (select x + 10 as picked from (select number as x from numbers(5)) s where x > t.a order by picked limit 1 offset 1) from (values (0),(1),(2)) t(a) order by t.a;
+----
+0 12
+1 13
+2 14
+
+query II
+settings (enable_top_n=0) select t.a, (select x + 10 as picked from (select number as x from numbers(5)) s where x > t.a order by picked limit 1 offset 1) from (values (0),(1),(2)) t(a) order by t.a;
+----
+0 12
+1 13
+2 14
+
+query II
+settings (enable_top_n=1) select t.a, (select cast(x as bigint) + 10 as picked from (select number as x from numbers(5)) s where x > t.a order by picked limit 1 offset 1) from (values (0),(1),(2)) t(a) order by t.a;
+----
+0 12
+1 13
+2 14
+
+query II
+settings (enable_top_n=0) select t.a, (select cast(x as bigint) + 10 as picked from (select number as x from numbers(5)) s where x > t.a order by picked limit 1 offset 1) from (values (0),(1),(2)) t(a) order by t.a;
+----
+0 12
+1 13
+2 14
+
+query II
+settings (enable_top_n=1) select t.a, (select case when x % 2 = 0 then x + 10 else x + 20 end as picked from (select number as x from numbers(5)) s where x > t.a order by picked limit 1 offset 1) from (values (0),(1),(2)) t(a) order by t.a;
+----
+0 14
+1 14
+2 23
+
+query II
+settings (enable_top_n=0) select t.a, (select case when x % 2 = 0 then x + 10 else x + 20 end as picked from (select number as x from numbers(5)) s where x > t.a order by picked limit 1 offset 1) from (values (0),(1),(2)) t(a) order by t.a;
+----
+0 14
+1 14
+2 23
+
+statement ok
+drop table migration_top_n_probe;
+
+statement ok
+drop table migration_top_n_build;
