@@ -16,11 +16,15 @@ use std::sync::Arc;
 
 use databend_common_catalog::table_context::TableContextSettings;
 use databend_common_exception::Result;
+use databend_common_sql::Metadata;
+use databend_common_sql::optimizer::OptimizerContext;
+use databend_common_sql::optimizer::optimizers::rule::RuleID;
 use databend_common_sql_test_support::TestCase;
 use databend_common_sql_test_support::TestCaseRunner;
 use databend_common_sql_test_support::TestSuite;
 use databend_common_sql_test_support::TestSuiteMints;
 use databend_common_sql_test_support::run_test_case_core;
+use parking_lot::RwLock;
 
 use crate::framework::LiteTableContext;
 
@@ -180,6 +184,32 @@ async fn test_like_escape_preserves_existing_binding_semantics() -> Result<()> {
     ] {
         ctx.bind_sql(sql).await?;
     }
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn test_optimizer_context_rule_settings() -> Result<()> {
+    let ctx = LiteTableContext::create().await?;
+    let metadata = Arc::new(RwLock::new(Metadata::default()));
+    let opt_ctx =
+        OptimizerContext::new(ctx.clone(), metadata.clone()).with_settings(&ctx.get_settings())?;
+
+    assert!(!opt_ctx.get_enable_trace());
+    assert!(!opt_ctx.is_rule_disabled(RuleID::PushDownLimit));
+    assert!(opt_ctx.is_rule_disabled(RuleID::GroupingSetsToUnion));
+
+    let settings = ctx.get_settings();
+    settings.set_optimizer_skip_list("pUsHdOwNlImIt, CollectStatisticsOptimizer".to_string())?;
+    settings.set_setting("grouping_sets_to_union".to_string(), "1".to_string())?;
+    settings.set_setting("enable_optimizer_trace".to_string(), "1".to_string())?;
+
+    let opt_ctx = OptimizerContext::new(ctx, metadata).with_settings(&settings)?;
+    assert!(opt_ctx.get_enable_trace());
+    assert!(opt_ctx.is_rule_disabled(RuleID::PushDownLimit));
+    assert!(!opt_ctx.is_rule_disabled(RuleID::MergeLimit));
+    assert!(!opt_ctx.is_rule_disabled(RuleID::GroupingSetsToUnion));
+    assert!(opt_ctx.is_optimizer_disabled("COLLECTSTATISTICSOPTIMIZER"));
 
     Ok(())
 }

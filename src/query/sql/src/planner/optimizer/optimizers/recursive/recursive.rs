@@ -85,8 +85,7 @@ impl RecursiveRuleOptimizer {
         before_expr: &SExpr,
         state: &TransformResult,
     ) -> Result<()> {
-        if self.ctx.get_enable_trace() && self.trace_collector.is_some() {
-            let collector = self.trace_collector.as_ref().unwrap();
+        if let Some(collector) = &self.trace_collector {
             let metadata_ref = self.ctx.get_metadata();
             let metadata = &metadata_ref.read();
 
@@ -113,18 +112,16 @@ impl RecursiveRuleOptimizer {
 
     fn apply_transform_rules(&self, s_expr: &SExpr, rules: &[RuleID]) -> Result<Option<SExpr>> {
         let mut s_expr = s_expr.clone();
-        for rule_id in rules {
-            let rule = RuleFactory::create_rule(*rule_id, self.ctx.clone())?;
+        let trace_enabled = self.trace_collector.is_some();
 
-            // Skip disabled rules
-            if self.ctx.is_optimizer_disabled(&rule.name()) {
+        for rule_id in rules {
+            if self.ctx.is_rule_disabled(*rule_id) {
                 continue;
             }
 
-            // For tracing only
-            let trace_enabled = self.ctx.get_enable_trace() && self.trace_collector.is_some();
-            let start_time = Instant::now();
-            let before_expr = s_expr.clone();
+            let rule = RuleFactory::create_rule(*rule_id, self.ctx.clone())?;
+
+            let trace_state = trace_enabled.then(|| (Instant::now(), s_expr.clone()));
 
             // Core optimization logic - exactly as original
             let mut state = TransformResult::new();
@@ -137,9 +134,9 @@ impl RecursiveRuleOptimizer {
                         let result = result.clone();
 
                         // For tracing only
-                        if trace_enabled {
+                        if let Some((start_time, before_expr)) = &trace_state {
                             let duration = start_time.elapsed();
-                            self.trace_rule_execution(rule.name(), duration, &before_expr, &state)?;
+                            self.trace_rule_execution(rule.name(), duration, before_expr, &state)?;
                         }
 
                         return Ok(Some(result));
@@ -150,9 +147,9 @@ impl RecursiveRuleOptimizer {
             }
 
             // For tracing only
-            if trace_enabled {
+            if let Some((start_time, before_expr)) = &trace_state {
                 let duration = start_time.elapsed();
-                self.trace_rule_execution(rule.name(), duration, &before_expr, &state)?;
+                self.trace_rule_execution(rule.name(), duration, before_expr, &state)?;
             }
         }
 

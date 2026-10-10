@@ -103,37 +103,31 @@ impl OptimizerPipeline {
         let mut current_expr = self.s_expr.clone();
         let total_optimizers = self.optimizers.len();
         let trace_collector = self.get_trace_collector();
+        let trace_enabled = self.opt_ctx.get_enable_trace();
 
         for (idx, optimizer) in self.optimizers.iter_mut().enumerate() {
             // Set trace collector
-            if self.opt_ctx.get_enable_trace() {
+            if trace_enabled {
                 optimizer.set_trace_collector(trace_collector.clone());
             }
 
-            // Save the expression before optimization
-            let before_expr = current_expr.clone();
-
-            // Measure execution time
-            let start_time = Instant::now();
+            let trace_state = trace_enabled.then(|| (current_expr.clone(), Instant::now()));
 
             // Apply the optimizer
             current_expr = optimizer.optimize(&current_expr).await?;
-
-            // Calculate duration
-            let duration = start_time.elapsed();
 
             if let Some(memo) = optimizer.memo() {
                 self.memo = Some(memo.clone());
             }
 
             // Only trace if tracing is enabled
-            if self.opt_ctx.get_enable_trace() {
+            if let Some((before_expr, start_time)) = trace_state {
                 let metadata_ref = self.opt_ctx.get_metadata();
                 self.trace_collector.trace_optimizer(
                     optimizer.name(),
                     idx,
                     total_optimizers,
-                    duration,
+                    start_time.elapsed(),
                     &before_expr,
                     &current_expr,
                     &metadata_ref.read(),
@@ -142,7 +136,7 @@ impl OptimizerPipeline {
         }
 
         // Generate and log the report only if tracing is enabled
-        if self.opt_ctx.get_enable_trace() {
+        if trace_enabled {
             self.trace_collector.log_report();
             info!(
                 "Final s_expr:\n {}",
