@@ -216,11 +216,14 @@ impl PhysicalPlanBuilder {
         let column_projections = required.clone();
         let mut used = vec![];
         // Only keep columns needed by parent plan.
-        for s in eval_scalar.items.iter() {
+        for s in &eval_scalar.items {
             if !required.contains(&s.index) {
                 continue;
             }
             used.push(s.clone());
+            // This item defines the output index, so only request that index
+            // from the child when the defining expression references it.
+            required.remove(&s.index);
             s.scalar.used_columns().iter().for_each(|c| {
                 required.insert(*c);
             })
