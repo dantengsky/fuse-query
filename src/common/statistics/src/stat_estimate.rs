@@ -283,6 +283,18 @@ impl StatCount {
         }
     }
 
+    pub fn sum(left: Self, right: Self) -> Self {
+        match (left, right) {
+            (StatCount::Exact(left), StatCount::Exact(right)) => {
+                StatCount::exact(left.saturating_add(right))
+            }
+            _ => StatCount::estimate(
+                left.expected() + right.expected(),
+                left.upper() + right.upper(),
+            ),
+        }
+    }
+
     pub fn reduce_by_selectivity(self, selectivity: f64) -> Self {
         debug_assert!(
             selectivity.is_finite() && (0.0..=1.0).contains(&selectivity),
