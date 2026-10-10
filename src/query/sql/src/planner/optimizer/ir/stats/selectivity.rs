@@ -66,6 +66,11 @@ pub struct SelectivityEstimator {
     overrides: ColumnStatSet,
     proven_empty: bool,
     statistics_zero_fallback: bool,
+    /// Selectivity of the last applied predicates with every stale range
+    /// estimate replaced by the unknown-filter fallback. Non-stale conjuncts
+    /// keep their statistics-based selectivity, so adding a predicate can only
+    /// tighten the conservative bound derived from it.
+    bound_selectivity: f64,
 }
 
 impl SelectivityEstimator {
@@ -76,6 +81,7 @@ impl SelectivityEstimator {
             overrides: ColumnStatSet::new(),
             proven_empty: cardinality == StatCardinality::Exact(0),
             statistics_zero_fallback: false,
+            bound_selectivity: MAX_SELECTIVITY,
         }
     }
 
@@ -89,14 +95,24 @@ impl SelectivityEstimator {
     /// Conservative output bound used for cardinality-sensitive physical choices.
     ///
     /// A statistics-derived zero uses a small expected cardinality for join
-    /// ordering, while this bound retains the generic unknown-filter estimate so
-    /// stale statistics cannot make a large input look safe to broadcast.
+    /// ordering, while this bound treats the stale range predicate as a generic
+    /// unknown filter so stale statistics cannot make a large input look safe to
+    /// broadcast. The remaining conjuncts keep their statistics-based
+    /// selectivity: a selective equality predicate bounds the output whether or
+    /// not the range statistics are stale.
     pub fn max_cardinality(&self, estimated_cardinality: f64, input_max_cardinality: f64) -> f64 {
         if self.statistics_zero_fallback {
-            (input_max_cardinality * DEFAULT_SELECTIVITY).max(estimated_cardinality)
+            self.bound_cardinality(estimated_cardinality, input_max_cardinality)
         } else {
             estimated_cardinality
         }
+    }
+
+    /// Applies the conservative selectivity of the last applied predicates to an
+    /// input bound that is itself conservative (for example a stale range scan
+    /// below a filter), so the bound keeps shrinking through selective filters.
+    pub fn bound_cardinality(&self, estimated_cardinality: f64, input_max_cardinality: f64) -> f64 {
+        (input_max_cardinality * self.bound_selectivity).max(estimated_cardinality)
     }
 
     pub fn uses_stale_range_statistics(&self) -> bool {
@@ -124,6 +140,7 @@ impl SelectivityEstimator {
 
     pub fn apply(&mut self, predicates: &[ScalarExpr]) -> Result<f64> {
         if self.cardinality == StatCardinality::Exact(0) {
+            self.bound_selectivity = 0.0;
             self.clear_column_stats_for_empty_result();
             return Ok(0.0);
         }
@@ -152,9 +169,13 @@ impl SelectivityEstimator {
         // here before falling through to estimation rules.
         if let Expr::Constant(constant) = &expr {
             return match constant_filter_truthiness(&constant.scalar) {
-                Some(true) => Ok(self.cardinality.value()),
+                Some(true) => {
+                    self.bound_selectivity = MAX_SELECTIVITY;
+                    Ok(self.cardinality.value())
+                }
                 Some(false) => {
                     self.proven_empty = true;
+                    self.bound_selectivity = 0.0;
                     self.clear_column_stats_for_empty_result();
                     Ok(0.0)
                 }
@@ -180,6 +201,7 @@ impl SelectivityEstimator {
             // facts, so an expression with no true result is deterministically
             // false for every input row.
             self.proven_empty = true;
+            self.bound_selectivity = 0.0;
             self.clear_column_stats_for_empty_result();
             return Ok(0.0);
         }
@@ -241,21 +263,29 @@ impl SelectivityEstimator {
 
     // Update other columns' statistic according to selectivity.
     pub fn update_other_statistic_by_selectivity(&mut self, selectivity: Selectivity) -> f64 {
-        let selectivity = match selectivity {
-            Selectivity::Unknown => DEFAULT_SELECTIVITY,
-            Selectivity::LowerBound => UNKNOWN_COL_STATS_FILTER_SEL_LOWER_BOUND,
-            Selectivity::StatisticsZero(n) => {
+        let (selectivity, bound_selectivity) = match selectivity {
+            Selectivity::Unknown => (DEFAULT_SELECTIVITY, DEFAULT_SELECTIVITY),
+            Selectivity::LowerBound => (
+                UNKNOWN_COL_STATS_FILTER_SEL_LOWER_BOUND,
+                UNKNOWN_COL_STATS_FILTER_SEL_LOWER_BOUND,
+            ),
+            Selectivity::StatisticsZero(StaleRangeSelectivity { expected, bound }) => {
                 self.statistics_zero_fallback = true;
-                n
+                (expected, bound)
             }
             Selectivity::Zero => {
                 self.proven_empty = true;
+                self.bound_selectivity = 0.0;
                 self.clear_column_stats_for_empty_result();
                 return 0.0;
             }
-            Selectivity::All => return MAX_SELECTIVITY,
-            Selectivity::N(n) => n,
+            Selectivity::All => {
+                self.bound_selectivity = MAX_SELECTIVITY;
+                return MAX_SELECTIVITY;
+            }
+            Selectivity::N(n) => (n, n),
         };
+        self.bound_selectivity = bound_selectivity;
 
         if selectivity == MAX_SELECTIVITY {
             return selectivity;
@@ -318,14 +348,24 @@ struct SelectivityVisitor<'a> {
     overrides: ColumnStatSet,
 }
 
+/// Selectivity of a predicate whose range statistics estimate no matches.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StaleRangeSelectivity {
+    /// Small non-zero selectivity used for the expected cardinality only.
+    pub expected: f64,
+    /// Conservative selectivity for the risk bound: the stale range predicate
+    /// counts as an unknown filter while the other conjuncts keep their
+    /// statistics-based selectivity.
+    pub bound: f64,
+}
+
 #[derive(Debug, Clone, Copy, Default, enum_as_inner::EnumAsInner)]
 pub enum Selectivity {
     #[default]
     Unknown,
     LowerBound,
     /// Column statistics estimate no matches, but may lag behind appended data.
-    /// The contained non-zero selectivity is used for expected cardinality only.
-    StatisticsZero(f64),
+    StatisticsZero(StaleRangeSelectivity),
     // A deterministic false predicate produced by constants, boolean logic, or
     // exact local rules. This is stronger than an estimated `N(0.0)`.
     Zero,
@@ -513,7 +553,10 @@ impl SelectivityVisitor<'_> {
         };
         let value = distr.true_count.expected / cardinality;
         if preserve_statistics_zero && value == 0.0 {
-            Ok(Selectivity::StatisticsZero(SMALL_SELECTIVITY))
+            Ok(Selectivity::StatisticsZero(StaleRangeSelectivity {
+                expected: SMALL_SELECTIVITY,
+                bound: DEFAULT_SELECTIVITY,
+            }))
         } else {
             Selectivity::checked_estimate(value)
         }
@@ -637,24 +680,32 @@ impl SelectivityVisitor<'_> {
                 let mut has_zero = false;
                 let mut has_n = false;
                 let mut acc = 1.0_f64;
+                // Conservative counterpart of `acc`: stale range estimates
+                // contribute their unknown-filter bound instead of the small
+                // expected selectivity, every other conjunct contributes the
+                // same value as in `acc`.
+                let mut bound_acc = 1.0_f64;
                 for arg in &func.args {
                     let mut sub_visitor = self.spawn_child();
                     sub_visitor.visit_expr(arg)?;
                     match sub_visitor.selectivity {
                         Selectivity::Unknown => has_unknown = true,
                         Selectivity::LowerBound => has_lower_bound = true,
-                        Selectivity::StatisticsZero(n) => {
+                        Selectivity::StatisticsZero(StaleRangeSelectivity { expected, bound }) => {
                             has_statistics_zero = true;
-                            acc = acc.min(n);
+                            acc = acc.min(expected);
+                            bound_acc = bound_acc.min(bound);
                         }
                         Selectivity::Zero => {
                             has_zero = true;
                             acc = 0.0;
+                            bound_acc = 0.0;
                         }
                         Selectivity::All => {}
                         Selectivity::N(n) => {
                             has_n = true;
                             acc = acc.min(n);
+                            bound_acc = bound_acc.min(n);
                         }
                     }
                     self.overrides.extend(sub_visitor.overrides);
@@ -665,7 +716,14 @@ impl SelectivityVisitor<'_> {
                 } else if !has_unknown && !has_lower_bound && !has_n && !has_statistics_zero {
                     Selectivity::All
                 } else if has_statistics_zero && acc < DEFAULT_SELECTIVITY {
-                    Selectivity::StatisticsZero(acc)
+                    // With the stale conjunct treated as unknown, the conjunction
+                    // would resolve to `min(bound_acc, DEFAULT_SELECTIVITY)`; the
+                    // stale bound itself never exceeds `DEFAULT_SELECTIVITY`, so
+                    // `bound_acc` already is that value.
+                    Selectivity::StatisticsZero(StaleRangeSelectivity {
+                        expected: acc,
+                        bound: bound_acc,
+                    })
                 } else if (!has_unknown && !has_lower_bound) || acc < DEFAULT_SELECTIVITY {
                     Selectivity::N(acc)
                 } else if has_unknown {
@@ -1109,12 +1167,72 @@ mod tests {
 
         assert_eq!(stale_range_rows, 100.0 * SMALL_SELECTIVITY);
         assert_eq!(conjunction_rows, 100.0 * SMALL_SELECTIVITY);
+        // The stale range predicate is treated as an unknown filter for the risk
+        // bound, but the selective equality still bounds the conjunction: the
+        // bound must not grow when a predicate is added.
         assert_eq!(
-            conjunction.max_cardinality(conjunction_rows, 100.0),
+            stale_range_only.max_cardinality(stale_range_rows, 100.0),
             100.0 * DEFAULT_SELECTIVITY
         );
+        assert_eq!(conjunction.max_cardinality(conjunction_rows, 100.0), 1.0);
         assert!(conjunction_rows <= stale_range_rows);
+        assert!(conjunction.uses_stale_range_statistics());
         assert!(!conjunction.is_proven_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_stale_range_bound_keeps_unknown_fallback_without_selective_conjuncts() -> Result<()> {
+        let range_column = Symbol::new(0);
+        let column_stats = ColumnStatSet::from_iter([(range_column, ColumnStat {
+            min: Datum::UInt(0),
+            max: Datum::UInt(5),
+            ndv: StatEstimate::exact(6.0),
+            null_count: StatCount::Exact(0),
+            histogram: None,
+        })]);
+
+        // A stale range predicate next to a comparison on a column without
+        // statistics: neither conjunct carries a statistics-based selectivity, so
+        // the bound stays at the unknown-filter fallback.
+        let stale_range = uint_comparison_predicate(range_column, ComparisonOp::GT, 10);
+        let no_statistics = uint_comparison_predicate(Symbol::new(7), ComparisonOp::GT, 1);
+        let mut estimator =
+            SelectivityEstimator::new(column_stats, StatCardinality::estimate(1_000_000.0));
+
+        let rows = estimator.apply(&[stale_range, no_statistics])?;
+
+        assert_eq!(rows, 1_000_000.0 * SMALL_SELECTIVITY);
+        assert_eq!(
+            estimator.max_cardinality(rows, 1_000_000.0),
+            1_000_000.0 * DEFAULT_SELECTIVITY
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_bound_cardinality_scales_conservative_input_bound() -> Result<()> {
+        let equality_column = Symbol::new(1);
+        let column_stats = ColumnStatSet::from_iter([(equality_column, ColumnStat {
+            min: Datum::UInt(0),
+            max: Datum::UInt(99),
+            ndv: StatEstimate::exact(100.0),
+            null_count: StatCount::Exact(0),
+            histogram: None,
+        })]);
+        let selective_equality =
+            uint_comparison_predicate(equality_column, ComparisonOp::Equal, 42);
+
+        // A filter above a stale range scan: expected rows come from the small
+        // expected input, while the bound scales the input's conservative bound.
+        let mut estimator =
+            SelectivityEstimator::new(column_stats, StatCardinality::estimate(400.0));
+        let rows = estimator.apply(&[selective_equality])?;
+
+        assert_eq!(rows, 4.0);
+        assert!(!estimator.uses_stale_range_statistics());
+        assert_eq!(estimator.max_cardinality(rows, 200_000.0), rows);
+        assert_eq!(estimator.bound_cardinality(rows, 200_000.0), 2_000.0);
         Ok(())
     }
 
