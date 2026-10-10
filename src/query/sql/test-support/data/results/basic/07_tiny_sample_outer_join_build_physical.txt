@@ -1,0 +1,77 @@
+Limit
+├── output columns: [large_dim.key_a (#15), large_dim.dim_a (#16), large_dim.dim_b (#17), large_dim.val_b (#18), a.id (#0), a.key_a (#1), a.dim_a (#2), a.val_a (#3), a.dim_b (#8), a.str_a (#9), small_lookup.key_b (#12)]
+├── limit: 100
+├── offset: 0
+├── estimated rows: 100.00
+└── Exchange
+    ├── output columns: [large_dim.key_a (#15), large_dim.dim_a (#16), large_dim.dim_b (#17), large_dim.val_b (#18), a.id (#0), a.key_a (#1), a.dim_a (#2), a.val_a (#3), a.dim_b (#8), a.str_a (#9), small_lookup.key_b (#12)]
+    ├── exchange type: Merge
+    └── Limit
+        ├── output columns: [large_dim.key_a (#15), large_dim.dim_a (#16), large_dim.dim_b (#17), large_dim.val_b (#18), a.id (#0), a.key_a (#1), a.dim_a (#2), a.val_a (#3), a.dim_b (#8), a.str_a (#9), small_lookup.key_b (#12)]
+        ├── limit: 100
+        ├── offset: 0
+        ├── estimated rows: 100.00
+        └── Filter
+            ├── output columns: [large_dim.key_a (#15), large_dim.dim_a (#16), large_dim.dim_b (#17), large_dim.val_b (#18), a.id (#0), a.key_a (#1), a.dim_a (#2), a.val_a (#3), a.dim_b (#8), a.str_a (#9), small_lookup.key_b (#12)]
+            ├── filters: [is_true(abs(a.val_a (#3) - if(CAST(NOT is_not_null(c.val_b (#18)) AS Boolean NULL), 0.000000000000000000, c.val_b (#18))) > 0.00000001)]
+            ├── estimated rows: 108888.88
+            └── HashJoin
+                ├── output columns: [large_dim.key_a (#15), large_dim.dim_a (#16), large_dim.dim_b (#17), large_dim.val_b (#18), a.id (#0), a.key_a (#1), a.dim_a (#2), a.val_a (#3), a.dim_b (#8), a.str_a (#9), small_lookup.key_b (#12)]
+                ├── join type: RIGHT OUTER
+                ├── build keys: [b.key_b (#12), b.key_a (#11)]
+                ├── probe keys: [c.key_b (#14), c.key_a (#15)]
+                ├── keys is null equal: [false, false]
+                ├── filters: []
+                ├── build join filters(distributed):
+                │   ├── filter id:0, build key:b.key_b (#12), probe targets:[c.key_b (#14)@scan2], filter type:bloom,inlist,min_max
+                │   └── filter id:1, build key:b.key_a (#11), probe targets:[c.key_a (#15)@scan2], filter type:bloom,inlist,min_max
+                ├── estimated rows: 544444.39
+                ├── Exchange(Build)
+                │   ├── output columns: [a.id (#0), a.key_a (#1), a.dim_a (#2), a.val_a (#3), a.dim_b (#8), a.str_a (#9), small_lookup.key_a (#11), small_lookup.key_b (#12)]
+                │   ├── exchange type: Hash(b.key_b (#12), b.key_a (#11))
+                │   └── HashJoin
+                │       ├── output columns: [a.id (#0), a.key_a (#1), a.dim_a (#2), a.val_a (#3), a.dim_b (#8), a.str_a (#9), small_lookup.key_a (#11), small_lookup.key_b (#12)]
+                │       ├── join type: LEFT OUTER
+                │       ├── build keys: [b.key_c (#10), b.key_a (#11)]
+                │       ├── probe keys: [a.str_a (#9), a.key_a (#1)]
+                │       ├── keys is null equal: [false, false]
+                │       ├── filters: []
+                │       ├── estimated rows: 544444.39
+                │       ├── Exchange(Build)
+                │       │   ├── output columns: [small_lookup.key_c (#10), small_lookup.key_a (#11), small_lookup.key_b (#12)]
+                │       │   ├── exchange type: Broadcast
+                │       │   └── TableScan
+                │       │       ├── table: default.default.small_lookup
+                │       │       ├── scan id: 1
+                │       │       ├── output columns: [key_c (#10), key_a (#11), key_b (#12)]
+                │       │       ├── read rows: 0
+                │       │       ├── read size: 0
+                │       │       ├── partitions total: 0
+                │       │       ├── partitions scanned: 0
+                │       │       ├── push downs: [filters: [small_lookup.ts_b (#13) > '2026-09-18 07:00:00.000000' and substr(small_lookup.key_c (#10), 1, 1) = 'd'], limit: NONE]
+                │       │       └── estimated rows: 544.52
+                │       └── TableScan(Probe)
+                │           ├── table: default.default.large_fact
+                │           ├── scan id: 0
+                │           ├── output columns: [id (#0), key_a (#1), dim_a (#2), val_a (#3), dim_b (#8), str_a (#9)]
+                │           ├── read rows: 0
+                │           ├── read size: 0
+                │           ├── partitions total: 0
+                │           ├── partitions scanned: 0
+                │           ├── push downs: [filters: [large_fact.flag_a (#4) = 3 and large_fact.flag_b (#5) = 6 and large_fact.ts_a (#7) >= '2026-09-18 08:00:00.000000' and large_fact.ts_a (#7) <= '2026-09-18 10:00:00.000000' and large_fact.flag_c (#6) = '2' and substr(large_fact.str_a (#9), 1, 1) = 'd'], limit: NONE]
+                │           └── estimated rows: 544444.39
+                └── Exchange(Probe)
+                    ├── output columns: [large_dim.key_b (#14), large_dim.key_a (#15), large_dim.dim_a (#16), large_dim.dim_b (#17), large_dim.val_b (#18)]
+                    ├── exchange type: Hash(c.key_b (#14), c.key_a (#15))
+                    └── TableScan
+                        ├── table: default.default.large_dim
+                        ├── scan id: 2
+                        ├── output columns: [key_b (#14), key_a (#15), dim_a (#16), dim_b (#17), val_b (#18)]
+                        ├── read rows: 0
+                        ├── read size: 0
+                        ├── partitions total: 0
+                        ├── partitions scanned: 0
+                        ├── push downs: [filters: [large_dim.flag_b (#19) = 7 and large_dim.flag_d (#20) = 5], limit: NONE]
+                        ├── apply join filters: [#0, #1]
+                        └── estimated rows: 172046190.00
+

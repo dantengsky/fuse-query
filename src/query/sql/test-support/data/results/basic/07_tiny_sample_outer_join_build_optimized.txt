@@ -1,0 +1,44 @@
+EvalScalar
+├── scalars: [large_fact.id (#0) AS (#0), large_fact.key_a (#1) AS (#1), large_fact.dim_a (#2) AS (#2), large_fact.val_a (#3) AS (#3), large_fact.dim_b (#8) AS (#8), large_fact.str_a (#9) AS (#9), small_lookup.key_b (#12) AS (#12), large_dim.key_a (#15) AS (#15), large_dim.dim_a (#16) AS (#16), large_dim.dim_b (#17) AS (#17), large_dim.val_b (#18) AS (#18), large_fact.flag_a (#4) AS (#24), large_fact.flag_b (#5) AS (#25), large_fact.ts_a (#7) AS (#26), large_fact.flag_c (#6) AS (#27)]
+└── Limit
+    ├── limit: [100]
+    ├── offset: [0]
+    └── Exchange(Merge)
+        └── Limit
+            ├── limit: [100]
+            ├── offset: [0]
+            └── Filter
+                ├── filters: [gt(abs(minus(large_fact.val_a (#3), if(not(is_not_null(large_dim.val_b (#18))), 0, large_dim.val_b (#18)))), 0.00000001)]
+                └── Join(Right)
+                    ├── build keys: [small_lookup.key_b (#12), small_lookup.key_a (#11)]
+                    ├── probe keys: [large_dim.key_b (#14), large_dim.key_a (#15)]
+                    ├── other filters: []
+                    ├── Exchange(Hash)
+                    │   ├── Exchange(Hash): keys: [small_lookup.key_b (#12), small_lookup.key_a (#11)]
+                    │   └── Join(Left)
+                    │       ├── build keys: [small_lookup.key_c (#10), small_lookup.key_a (#11)]
+                    │       ├── probe keys: [large_fact.str_a (#9), large_fact.key_a (#1)]
+                    │       ├── other filters: []
+                    │       ├── Exchange(Broadcast)
+                    │       │   └── EvalScalar
+                    │       │       ├── scalars: [small_lookup.key_c (#10) AS (#10), small_lookup.key_a (#11) AS (#11), small_lookup.key_b (#12) AS (#12), small_lookup.ts_b (#13) AS (#21)]
+                    │       │       └── Scan
+                    │       │           ├── table: default.small_lookup (#1)
+                    │       │           ├── filters: [gt(small_lookup.ts_b (#13), '2026-09-18 07:00:00.000000'), eq(substring(small_lookup.key_c (#10), 1, 1), 'd')]
+                    │       │           ├── order by: []
+                    │       │           └── limit: NONE
+                    │       └── Scan
+                    │           ├── table: default.large_fact (#0)
+                    │           ├── filters: [eq(large_fact.flag_a (#4), 3), eq(large_fact.flag_b (#5), 6), gte(large_fact.ts_a (#7), '2026-09-18 08:00:00.000000'), lte(large_fact.ts_a (#7), '2026-09-18 10:00:00.000000'), eq(large_fact.flag_c (#6), '2'), eq(substring(large_fact.str_a (#9), 1, 1), 'd')]
+                    │           ├── order by: []
+                    │           └── limit: NONE
+                    └── Exchange(Hash)
+                        ├── Exchange(Hash): keys: [large_dim.key_b (#14), large_dim.key_a (#15)]
+                        └── EvalScalar
+                            ├── scalars: [large_dim.key_b (#14) AS (#14), large_dim.key_a (#15) AS (#15), large_dim.dim_a (#16) AS (#16), large_dim.dim_b (#17) AS (#17), large_dim.val_b (#18) AS (#18), large_dim.flag_b (#19) AS (#22), large_dim.flag_d (#20) AS (#23)]
+                            └── Scan
+                                ├── table: default.large_dim (#2)
+                                ├── filters: [eq(large_dim.flag_b (#19), 7), eq(large_dim.flag_d (#20), 5)]
+                                ├── order by: []
+                                └── limit: NONE
+
