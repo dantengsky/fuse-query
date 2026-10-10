@@ -2271,6 +2271,16 @@ mod tests {
     }
 
     #[test]
+    fn test_broadcast_build_guard_rejects_stale_window_risk_bound() {
+        let stale_window = estimated_stat(80_000_000.0, 40_000_000_000.0);
+
+        assert!(!is_safe_broadcast_build(
+            &stale_window,
+            DEFAULT_MAX_BROADCAST_BUILD_ROWS,
+        ));
+    }
+
+    #[test]
     fn test_broadcast_build_guard_keeps_accurately_estimated_large_build() {
         assert!(is_safe_broadcast_build(
             &estimated_stat(50_000_000.0, 50_000_000.0),
