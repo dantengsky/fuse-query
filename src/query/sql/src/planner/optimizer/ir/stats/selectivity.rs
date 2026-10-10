@@ -45,6 +45,13 @@ use crate::plans::ScalarExpr;
 /// This factor comes from the paper
 /// "Access Path Selection in a Relational Database Management System"
 pub const DEFAULT_SELECTIVITY: f64 = 1f64 / 5f64;
+/// A non-zero floor for predicates whose column statistics estimate no matches.
+///
+/// Column statistics can lag behind appended data, so an estimated zero must not
+/// become a proof that the input is empty. Using the generic unknown fallback
+/// here is also too pessimistic for large tables: it turns a narrow out-of-range
+/// predicate into 20% of the table and can reverse the hash-join build side.
+pub const SMALL_SELECTIVITY: f64 = 1f64 / 2500f64;
 pub const UNKNOWN_COL_STATS_FILTER_SEL_LOWER_BOUND: f64 = 0.5_f64;
 pub const MAX_SELECTIVITY: f64 = 1f64;
 
@@ -58,6 +65,7 @@ pub struct SelectivityEstimator {
     column_stats: ColumnStatSet,
     overrides: ColumnStatSet,
     proven_empty: bool,
+    statistics_zero_fallback: bool,
 }
 
 impl SelectivityEstimator {
@@ -67,6 +75,7 @@ impl SelectivityEstimator {
             column_stats: input_stat,
             overrides: ColumnStatSet::new(),
             proven_empty: cardinality == StatCardinality::Exact(0),
+            statistics_zero_fallback: false,
         }
     }
 
@@ -75,6 +84,19 @@ impl SelectivityEstimator {
     /// This is deliberately stronger than an estimated cardinality of zero.
     pub fn is_proven_empty(&self) -> bool {
         self.proven_empty
+    }
+
+    /// Conservative output bound used for cardinality-sensitive physical choices.
+    ///
+    /// A statistics-derived zero uses a small expected cardinality for join
+    /// ordering, while this bound retains the generic unknown-filter estimate so
+    /// stale statistics cannot make a large input look safe to broadcast.
+    pub fn max_cardinality(&self, estimated_cardinality: f64, input_max_cardinality: f64) -> f64 {
+        if self.statistics_zero_fallback {
+            (input_max_cardinality * DEFAULT_SELECTIVITY).max(estimated_cardinality)
+        } else {
+            estimated_cardinality
+        }
     }
 
     fn merged_column_stats(&self) -> ColumnStatSet {
@@ -218,6 +240,10 @@ impl SelectivityEstimator {
         let selectivity = match selectivity {
             Selectivity::Unknown => DEFAULT_SELECTIVITY,
             Selectivity::LowerBound => UNKNOWN_COL_STATS_FILTER_SEL_LOWER_BOUND,
+            Selectivity::StatisticsZero(n) => {
+                self.statistics_zero_fallback = true;
+                n
+            }
             Selectivity::Zero => {
                 self.proven_empty = true;
                 self.clear_column_stats_for_empty_result();
@@ -293,6 +319,9 @@ pub enum Selectivity {
     #[default]
     Unknown,
     LowerBound,
+    /// Column statistics estimate no matches, but may lag behind appended data.
+    /// The contained non-zero selectivity is used for expected cardinality only.
+    StatisticsZero(f64),
     // A deterministic false predicate produced by constants, boolean logic, or
     // exact local rules. This is stronger than an estimated `N(0.0)`.
     Zero,
@@ -306,9 +335,9 @@ type ExprCall = databend_common_expression::FunctionCall<ColumnBinding>;
 
 impl Selectivity {
     fn checked_estimate(value: f64) -> Result<Self> {
-        // Column distributions are estimates and may lag behind appended data.
-        // Reserve exact zero for expression-local facts and exact constraints;
-        // a statistics-derived zero falls back to the unknown-filter heuristic.
+        // A generic statistics-derived zero is not proof of emptiness. Callers
+        // with narrower semantics (currently range comparisons) may replace it
+        // with StatisticsZero before using the unknown fallback.
         if value == 0.0 {
             return Ok(Selectivity::Unknown);
         }
@@ -384,7 +413,13 @@ impl SelectivityVisitor<'_> {
                     return Ok(Selectivity::LowerBound);
                 };
                 let op = if left.is_constant() { op.reverse() } else { op };
-                let selectivity = self.derive_function_selectivity(func)?;
+                let selectivity = self.derive_function_selectivity(
+                    func,
+                    matches!(
+                        op,
+                        ComparisonOp::LT | ComparisonOp::LTE | ComparisonOp::GT | ComparisonOp::GTE
+                    ),
+                )?;
 
                 let can_apply_constant_constraint = {
                     use DataType::*;
@@ -435,10 +470,14 @@ impl SelectivityVisitor<'_> {
             _ => (),
         }
 
-        self.derive_function_selectivity(func)
+        self.derive_function_selectivity(func, false)
     }
 
-    fn derive_function_selectivity(&self, func: &ExprCall) -> Result<Selectivity> {
+    fn derive_function_selectivity(
+        &self,
+        func: &ExprCall,
+        preserve_statistics_zero: bool,
+    ) -> Result<Selectivity> {
         let cardinality = match self.cardinality {
             StatCardinality::Estimate(0.0) => return Ok(Selectivity::N(0.0)),
             cardinality => cardinality.value(),
@@ -461,7 +500,12 @@ impl SelectivityVisitor<'_> {
         let Some(distr) = stat.boolean_distribution() else {
             return Ok(Selectivity::Unknown);
         };
-        Selectivity::checked_estimate(distr.true_count.expected / cardinality)
+        let value = distr.true_count.expected / cardinality;
+        if preserve_statistics_zero && value == 0.0 {
+            Ok(Selectivity::StatisticsZero(SMALL_SELECTIVITY))
+        } else {
+            Selectivity::checked_estimate(value)
+        }
     }
 
     // The method uses probability predication to compute like selectivity.
@@ -578,6 +622,7 @@ impl SelectivityVisitor<'_> {
                 // boolean simplification such as `false AND x`.
                 let mut has_unknown = false;
                 let mut has_lower_bound = false;
+                let mut has_statistics_zero = false;
                 let mut has_zero = false;
                 let mut has_n = false;
                 let mut acc = 1.0_f64;
@@ -587,6 +632,10 @@ impl SelectivityVisitor<'_> {
                     match sub_visitor.selectivity {
                         Selectivity::Unknown => has_unknown = true,
                         Selectivity::LowerBound => has_lower_bound = true,
+                        Selectivity::StatisticsZero(n) => {
+                            has_statistics_zero = true;
+                            acc = acc.min(n);
+                        }
                         Selectivity::Zero => {
                             has_zero = true;
                             acc = 0.0;
@@ -602,8 +651,10 @@ impl SelectivityVisitor<'_> {
 
                 self.selectivity = if has_zero {
                     Selectivity::Zero
-                } else if !has_unknown && !has_lower_bound && !has_n {
+                } else if !has_unknown && !has_lower_bound && !has_n && !has_statistics_zero {
                     Selectivity::All
+                } else if has_statistics_zero && acc < DEFAULT_SELECTIVITY {
+                    Selectivity::StatisticsZero(acc)
                 } else if (!has_unknown && !has_lower_bound) || acc < DEFAULT_SELECTIVITY {
                     Selectivity::N(acc)
                 } else if has_unknown {
@@ -628,7 +679,11 @@ impl SelectivityVisitor<'_> {
                     let mut sub_visitor = self.spawn_child();
                     sub_visitor.visit_expr(arg)?;
                     match sub_visitor.selectivity {
-                        Selectivity::Unknown => has_unknown = true,
+                        Selectivity::Unknown | Selectivity::StatisticsZero(_) => {
+                            // A statistics-derived zero is not a safe lower bound
+                            // for OR: stale data may satisfy this branch.
+                            has_unknown = true;
+                        }
                         Selectivity::LowerBound => has_lower_bound = true,
                         Selectivity::Zero => has_zero = true,
                         Selectivity::All => has_all = true,
@@ -663,6 +718,7 @@ impl SelectivityVisitor<'_> {
                 self.selectivity = match sub_visitor.selectivity {
                     Selectivity::Zero => Selectivity::All,
                     Selectivity::All => Selectivity::Zero,
+                    Selectivity::StatisticsZero(_) => Selectivity::Unknown,
                     Selectivity::N(n) => Selectivity::N(1.0 - n),
                     selectivity => selectivity,
                 };
@@ -936,12 +992,13 @@ mod tests {
         let mut estimator =
             SelectivityEstimator::new(column_stats, StatCardinality::estimate(738.0));
 
-        assert_eq!(estimator.apply(&[predicate])?, 738.0 * DEFAULT_SELECTIVITY);
+        assert_eq!(estimator.apply(&[predicate])?, 738.0 * SMALL_SELECTIVITY);
+        assert!(!estimator.is_proven_empty());
         Ok(())
     }
 
     #[test]
-    fn test_stale_range_statistics_use_unknown_selectivity() -> Result<()> {
+    fn test_stale_range_statistics_use_small_expected_cardinality() -> Result<()> {
         let column_index = Symbol::new(0);
         let mut column_stats = ColumnStatSet::new();
         column_stats.insert(column_index, ColumnStat {
@@ -964,7 +1021,12 @@ mod tests {
         let mut estimator =
             SelectivityEstimator::new(column_stats.clone(), StatCardinality::estimate(100.0));
 
-        assert_eq!(estimator.apply(&[predicate])?, 100.0 * DEFAULT_SELECTIVITY);
+        let expected_cardinality = estimator.apply(&[predicate])?;
+        assert_eq!(expected_cardinality, 100.0 * SMALL_SELECTIVITY);
+        assert_eq!(
+            estimator.max_cardinality(expected_cardinality, 100.0),
+            100.0 * DEFAULT_SELECTIVITY
+        );
         assert!(!estimator.is_proven_empty());
         let derived = estimator.into_column_stats();
         let expected = &column_stats[&column_index];
@@ -974,6 +1036,31 @@ mod tests {
         assert_eq!(actual.ndv, expected.ndv);
         assert_eq!(actual.null_count, expected.null_count);
         assert!(actual.histogram.is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn test_large_stale_range_keeps_expected_and_risk_cardinality_separate() -> Result<()> {
+        let column_index = Symbol::new(0);
+        let input_rows = 200_000_000_000.0;
+        let column_stats = ColumnStatSet::from_iter([(column_index, ColumnStat {
+            min: Datum::UInt(0),
+            max: Datum::UInt(5),
+            ndv: StatEstimate::exact(6.0),
+            null_count: StatCount::Exact(0),
+            histogram: None,
+        })]);
+        let predicate = uint_comparison_predicate(column_index, ComparisonOp::GT, 10);
+        let mut estimator =
+            SelectivityEstimator::new(column_stats, StatCardinality::estimate(input_rows));
+
+        let expected_cardinality = estimator.apply(&[predicate])?;
+        let max_cardinality = estimator.max_cardinality(expected_cardinality, input_rows);
+
+        assert_eq!(expected_cardinality, input_rows * SMALL_SELECTIVITY);
+        assert_eq!(max_cardinality, input_rows * DEFAULT_SELECTIVITY);
+        assert!((max_cardinality / expected_cardinality - 500.0).abs() < 1e-9);
+        assert!(!estimator.is_proven_empty());
         Ok(())
     }
 
@@ -1009,9 +1096,13 @@ mod tests {
         let stale_range_rows = stale_range_only.apply(std::slice::from_ref(&stale_range))?;
         let conjunction_rows = conjunction.apply(&[stale_range, selective_equality])?;
 
-        assert_eq!(stale_range_rows, 100.0 * DEFAULT_SELECTIVITY);
-        assert_eq!(conjunction_rows, 1.0);
-        assert!(conjunction_rows < stale_range_rows);
+        assert_eq!(stale_range_rows, 100.0 * SMALL_SELECTIVITY);
+        assert_eq!(conjunction_rows, 100.0 * SMALL_SELECTIVITY);
+        assert_eq!(
+            conjunction.max_cardinality(conjunction_rows, 100.0),
+            100.0 * DEFAULT_SELECTIVITY
+        );
+        assert!(conjunction_rows <= stale_range_rows);
         assert!(!conjunction.is_proven_empty());
         Ok(())
     }

@@ -96,6 +96,7 @@ impl Operator for Filter {
         let mut sb =
             SelectivityEstimator::new(stat_info.statistics.column_stats.clone(), input_cardinality);
         let cardinality = sb.apply(&self.predicates)?;
+        let max_cardinality = sb.max_cardinality(cardinality, stat_info.max_cardinality);
         let precise_cardinality = sb.is_proven_empty().then_some(0);
         // Derive column statistics
         let column_stats = if cardinality == 0.0 {
@@ -105,7 +106,7 @@ impl Operator for Filter {
         };
         Ok(Arc::new(StatInfo {
             cardinality,
-            max_cardinality: cardinality,
+            max_cardinality,
             statistics: Statistics {
                 precise_cardinality,
                 column_stats,
@@ -142,6 +143,7 @@ mod tests {
         let stat = RelExpr::with_s_expr(&expr).derive_cardinality()?;
 
         assert_eq!(stat.cardinality, 0.0);
+        assert_eq!(stat.max_cardinality, 0.0);
         assert_eq!(stat.statistics.precise_cardinality, Some(0));
         Ok(())
     }
