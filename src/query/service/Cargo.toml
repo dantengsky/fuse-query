@@ -145,6 +145,7 @@ jiff = { workspace = true }
 jsonb = { workspace = true }
 jwt-simple = { workspace = true }
 log = { workspace = true }
+lz4 = { workspace = true }
 match-template = { workspace = true }
 md-5 = { workspace = true }
 num_cpus = { workspace = true }
