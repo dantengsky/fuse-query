@@ -37,13 +37,16 @@ use databend_common_pipeline::core::OutputPort;
 use databend_common_pipeline::core::Pipe;
 use databend_common_pipeline::core::PipeItem;
 use databend_common_pipeline::core::ProcessorPtr;
+use databend_common_sql::ColumnBindingBuilder;
 use databend_common_sql::ColumnEntry;
 use databend_common_sql::ColumnSet;
 use databend_common_sql::IndexType;
 use databend_common_sql::ScalarExpr;
 use databend_common_sql::Symbol;
 use databend_common_sql::TypeCheck;
+use databend_common_sql::Visibility;
 use databend_common_sql::optimizer::ir::SExpr;
+use databend_common_sql::plans::BoundColumnRef;
 use databend_common_sql::plans::Join;
 use databend_common_sql::plans::JoinType;
 use databend_storages_common_index::scalar_to_distance_threshold;
@@ -64,6 +67,7 @@ use crate::physical_plans::physical_plan::PhysicalPlanMeta;
 use crate::physical_plans::resolve_scalar;
 use crate::physical_plans::runtime_filter::build_runtime_filter;
 use crate::physical_plans::runtime_filter::resolve_runtime_filter_build_table_index;
+use crate::physical_plans::runtime_filter::resolve_runtime_filter_probe_column;
 use crate::pipelines::HashJoinStateRef;
 use crate::pipelines::PipelineBuilder;
 use crate::pipelines::processors::HashJoinBuildState;
@@ -779,13 +783,54 @@ impl PhysicalPlanBuilder {
     ///
     /// # Arguments
     /// * `left_condition` - The left side condition
+    /// * `probe_side` - The logical probe side, used to trace a derived probe column
+    ///   (for example a `UnionAll` output) back to the base-table column that feeds it
     ///
     /// # Returns
     /// * `Result<Option<(databend_common_expression::Expr<String>, usize, usize)>>` - Runtime filter expression, scan ID, and table index
     fn prepare_runtime_filter_expr(
         &self,
         left_condition: &ScalarExpr,
+        probe_side: &SExpr,
     ) -> Result<RuntimeFilterExpr> {
+        // A probe key that is a bare derived column (`UnionAll` output, alias) carries no scan of
+        // its own. Resolve it to the first base-table column behind it; the runtime filter
+        // builder then expands the filter to the remaining branches through column lineage.
+        if let ScalarExpr::BoundColumnRef(column_ref) = left_condition {
+            let column_idx = column_ref.column.index;
+            let is_derived = matches!(
+                self.metadata.read().column(column_idx),
+                ColumnEntry::DerivedColumn(_)
+            );
+            if is_derived {
+                let Some(base_column_idx) =
+                    resolve_runtime_filter_probe_column(&self.metadata, probe_side, column_idx)
+                else {
+                    return Ok(None);
+                };
+                let base_condition = {
+                    let metadata = self.metadata.read();
+                    let ColumnEntry::BaseTableColumn(base_column) =
+                        metadata.column(base_column_idx)
+                    else {
+                        return Ok(None);
+                    };
+                    ScalarExpr::BoundColumnRef(BoundColumnRef {
+                        span: column_ref.span,
+                        column: ColumnBindingBuilder::new(
+                            base_column.column_name.clone(),
+                            base_column_idx,
+                            Box::new(DataType::from(&base_column.data_type)),
+                            Visibility::Visible,
+                        )
+                        .table_index(Some(base_column.table_index))
+                        .build(),
+                    })
+                };
+                return self.prepare_runtime_filter_expr(&base_condition, probe_side);
+            }
+        }
+
         // Runtime filter only supports columns in base tables
         if left_condition.used_columns().iter().all(|idx| {
             matches!(
@@ -917,6 +962,7 @@ impl PhysicalPlanBuilder {
     fn process_equi_conditions(
         &self,
         join: &Join,
+        probe_side: &SExpr,
         build_side: &SExpr,
         probe_schema: &DataSchemaRef,
         build_schema: &DataSchemaRef,
@@ -948,7 +994,8 @@ impl PhysicalPlanBuilder {
                 .project_column_ref(|index| probe_schema.index_of(&index.to_string()))?;
 
             // Prepare runtime filter expression
-            let left_expr_for_runtime_filter = self.prepare_runtime_filter_expr(left_condition)?;
+            let left_expr_for_runtime_filter =
+                self.prepare_runtime_filter_expr(left_condition, probe_side)?;
 
             let build_table_index = if right_condition.used_columns().len() == 1 {
                 let column_idx = *right_condition.used_columns().iter().next().unwrap();
@@ -1321,6 +1368,7 @@ impl PhysicalPlanBuilder {
     fn process_non_equi_conditions(
         &self,
         join: &Join,
+        probe_side: &SExpr,
         probe_schema: &DataSchemaRef,
         build_schema: &DataSchemaRef,
         merged_schema: &DataSchemaRef,
@@ -1409,7 +1457,8 @@ impl PhysicalPlanBuilder {
                 ConstantFolder::fold(&build_expr, &self.func_ctx, &BUILTIN_FUNCTIONS);
             spatial_right_join_conditions.push(build_expr.as_remote_expr());
 
-            let probe_expr_for_runtime_filter = self.prepare_runtime_filter_expr(probe_arg)?;
+            let probe_expr_for_runtime_filter =
+                self.prepare_runtime_filter_expr(probe_arg, probe_side)?;
             let probe_expr_for_runtime_filter =
                 probe_expr_for_runtime_filter.map(|(expr, scan_id, table_index, column_idx)| {
                     let (expr, _) = ConstantFolder::fold(&expr, &self.func_ctx, &BUILTIN_FUNCTIONS);
@@ -1564,6 +1613,7 @@ impl PhysicalPlanBuilder {
             build_table_indexes,
         ) = self.process_equi_conditions(
             join,
+            s_expr.probe_side_child(),
             s_expr.build_side_child(),
             &probe_schema,
             &build_schema,
@@ -1605,7 +1655,13 @@ impl PhysicalPlanBuilder {
             spatial_left_join_conditions_rt,
             spatial_build_table_indexes,
             spatial_modes,
-        ) = self.process_non_equi_conditions(join, &probe_schema, &build_schema, &merged_schema)?;
+        ) = self.process_non_equi_conditions(
+            join,
+            s_expr.probe_side_child(),
+            &probe_schema,
+            &build_schema,
+            &merged_schema,
+        )?;
 
         let mut runtime_filter_right_conditions = right_join_conditions.clone();
         runtime_filter_right_conditions.extend(spatial_right_join_conditions);
