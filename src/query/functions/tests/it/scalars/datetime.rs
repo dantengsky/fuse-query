@@ -587,6 +587,10 @@ fn test_to_number(file: &mut impl Write) {
         "a",
         TimestampType::from_data(vec![-100, 0, 100]),
     )]);
+    run_ast(file, "to_unix_timestamp(a)", &[(
+        "a",
+        TimestampType::from_data(vec![-1_000_001, -1, 0, 1, 1_000_001]),
+    )]);
 }
 
 fn test_rounder_functions(file: &mut impl Write) {
