@@ -49,6 +49,45 @@ pub enum SelectExpr {
     BooleanScalar((Scalar, DataType)),
 }
 
+impl SelectExpr {
+    /// Returns whether the predicate contains a string-column equality against a constant.
+    ///
+    /// The selector executor has a specialized row-index path for this shape and can
+    /// short-circuit the remaining branches of compound predicates.
+    pub fn contains_string_column_eq_constant(&self) -> bool {
+        match self {
+            SelectExpr::And((exprs, _)) | SelectExpr::Or((exprs, _)) => exprs
+                .iter()
+                .any(SelectExpr::contains_string_column_eq_constant),
+            SelectExpr::Compare((SelectOp::Equal, args, _)) if args.len() == 2 => {
+                is_string_column(&args[0]) && is_string_constant(&args[1])
+                    || is_string_column(&args[1]) && is_string_constant(&args[0])
+            }
+            _ => false,
+        }
+    }
+}
+
+fn is_string_column(expr: &Expr) -> bool {
+    matches!(
+        expr,
+        Expr::ColumnRef(ColumnRef {
+            data_type: DataType::String | DataType::Nullable(box DataType::String),
+            ..
+        })
+    )
+}
+
+fn is_string_constant(expr: &Expr) -> bool {
+    matches!(
+        expr,
+        Expr::Constant(Constant {
+            scalar: Scalar::String(_),
+            ..
+        })
+    )
+}
+
 pub struct SelectExprBuilder {
     not_function: (FunctionID, Arc<Function>),
     nullable_not_function: (FunctionID, Arc<Function>),
@@ -343,5 +382,72 @@ impl SelectExprBuildResult {
     pub fn can_push_down_not(mut self, can_push_down_not: bool) -> Self {
         self.can_push_down_not = can_push_down_not;
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn string_column(id: usize, nullable: bool) -> Expr {
+        ColumnRef {
+            span: None,
+            id,
+            data_type: if nullable {
+                DataType::Nullable(Box::new(DataType::String))
+            } else {
+                DataType::String
+            },
+            display_name: format!("column_{id}"),
+        }
+        .into()
+    }
+
+    fn string_constant(value: &str) -> Expr {
+        Expr::constant(Scalar::String(value.to_string()), Some(DataType::String))
+    }
+
+    fn comparison(op: SelectOp, left: Expr, right: Expr) -> SelectExpr {
+        SelectExpr::Compare((op, vec![left, right], vec![]))
+    }
+
+    #[test]
+    fn test_contains_string_column_eq_constant() {
+        let equality = comparison(
+            SelectOp::Equal,
+            string_column(0, false),
+            string_constant("value"),
+        );
+        assert!(equality.contains_string_column_eq_constant());
+
+        let reversed_nullable = comparison(
+            SelectOp::Equal,
+            string_constant("value"),
+            string_column(1, true),
+        );
+        assert!(reversed_nullable.contains_string_column_eq_constant());
+
+        let nested = SelectExpr::And((
+            vec![
+                SelectExpr::BooleanScalar((Scalar::Boolean(true), DataType::Boolean)),
+                equality,
+            ],
+            FilterPermutation::new(2, true),
+        ));
+        assert!(nested.contains_string_column_eq_constant());
+
+        let not_equal = comparison(
+            SelectOp::NotEqual,
+            string_column(0, false),
+            string_constant("value"),
+        );
+        assert!(!not_equal.contains_string_column_eq_constant());
+
+        let column_equality = comparison(
+            SelectOp::Equal,
+            string_column(0, false),
+            string_column(1, false),
+        );
+        assert!(!column_equality.contains_string_column_eq_constant());
     }
 }
