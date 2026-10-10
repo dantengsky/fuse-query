@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use databend_common_column::types::timestamp_tz;
+
 use crate::Column;
 use crate::ProjectedBlock;
 use crate::types::AnyType;
@@ -115,7 +117,12 @@ unsafe fn serialize_column_binary(column: &Column, row: usize, row_space: &mut *
                 unimplemented!()
             }
             Column::Timestamp(v) => store_advance(&v[row], row_space),
-            Column::TimestampTz(v) => store_advance(&v[row], row_space),
+            // Equality compares the instant, not the presentation offset. Keep
+            // the fixed-width key layout but canonicalize only the key copy;
+            // the original column remains available for result projection.
+            Column::TimestampTz(v) => {
+                store_advance(&timestamp_tz::new(v[row].timestamp(), 0), row_space);
+            }
             Column::Date(v) => store_advance(&v[row], row_space),
             Column::Interval(v) => store_advance(&v[row], row_space),
             Column::Array(array) | Column::Map(array) => {

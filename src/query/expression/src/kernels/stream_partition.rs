@@ -439,6 +439,9 @@ fn copy_column_impl<I: Index>(
             (ColumnBuilder::Interval(builder), Column::Interval(column)) => {
                 copy_primitive_type(builder, column, indices);
             }
+            (ColumnBuilder::TimestampTz(builder), Column::TimestampTz(column)) => {
+                copy_primitive_type(builder, column, indices);
+            }
             (ColumnBuilder::Timestamp(builder), Column::Timestamp(column)) => {
                 copy_primitive_type(builder, column, indices);
             }
@@ -614,6 +617,31 @@ fn copy_array<I: Index>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn partition_preserves_timestamp_tz_offsets() {
+        use databend_common_column::types::timestamp_tz;
+
+        let first = timestamp_tz::new(1_000_000, 0);
+        let second = timestamp_tz::new(1_000_000, 3600);
+        for preserve_views in [false, true] {
+            let block =
+                DataBlock::new_from_columns(vec![Column::TimestampTz(vec![first, second].into())]);
+            let mut stream = BlockPartitionStream::create_inner(1, usize::MAX, 2, preserve_views);
+            let partitions = stream.partition(vec![1, 0], block, true);
+            for (partition, block) in partitions {
+                let column = block.get_by_offset(0).to_column();
+                let Column::TimestampTz(values) = column else {
+                    unreachable!()
+                };
+                assert_eq!(values[0].timestamp(), 1_000_000);
+                assert_eq!(
+                    values[0].seconds_offset(),
+                    if partition == 0 { 3600 } else { 0 }
+                );
+            }
+        }
+    }
 
     #[test]
     fn copy_string_views_preserves_buffers_across_input_blocks() {
