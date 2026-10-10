@@ -14,6 +14,7 @@
 
 pub mod actions;
 pub mod exchange;
+pub(crate) mod ipc_compression;
 pub mod network;
 pub mod packets;
 pub mod scatter;

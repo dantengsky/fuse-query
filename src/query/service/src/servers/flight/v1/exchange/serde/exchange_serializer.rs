@@ -20,7 +20,6 @@ use arrow_array::RecordBatch;
 use arrow_array::RecordBatchOptions;
 use arrow_flight::FlightData;
 use arrow_flight::SchemaAsIpc;
-use arrow_ipc::CompressionType;
 use arrow_ipc::writer::DictionaryTracker;
 use arrow_ipc::writer::IpcDataGenerator;
 use arrow_ipc::writer::IpcWriteOptions;
@@ -50,6 +49,8 @@ use databend_common_settings::FlightCompression;
 use crate::servers::flight::v1::exchange::ExchangeShuffleMeta;
 use crate::servers::flight::v1::exchange::MergeExchangeParams;
 use crate::servers::flight::v1::exchange::ShuffleExchangeParams;
+use crate::servers::flight::v1::ipc_compression::compress_record_batch_lz4;
+use crate::servers::flight::v1::ipc_compression::make_ipc_options;
 use crate::servers::flight::v1::packets::DataPacket;
 use crate::servers::flight::v1::packets::FragmentData;
 
@@ -80,6 +81,7 @@ impl BlockMetaInfo for ExchangeSerializeMeta {}
 
 pub struct TransformExchangeSerializer {
     options: IpcWriteOptions,
+    native_lz4: bool,
 }
 
 impl TransformExchangeSerializer {
@@ -89,19 +91,14 @@ impl TransformExchangeSerializer {
         _params: &MergeExchangeParams,
         compression: Option<FlightCompression>,
     ) -> Result<ProcessorPtr> {
-        let compression = match compression {
-            None => None,
-            Some(compression) => match compression {
-                FlightCompression::Lz4 => Some(CompressionType::LZ4_FRAME),
-                FlightCompression::Zstd => Some(CompressionType::ZSTD),
-            },
-        };
+        let (options, native_lz4) = make_ipc_options(compression)?;
 
         Ok(ProcessorPtr::create(Transformer::create(
             input,
             output,
             TransformExchangeSerializer {
-                options: IpcWriteOptions::default().try_with_compression(compression)?,
+                options,
+                native_lz4,
             },
         )))
     }
@@ -112,13 +109,14 @@ impl Transform for TransformExchangeSerializer {
 
     fn transform(&mut self, data_block: DataBlock) -> Result<DataBlock> {
         Profile::record_usize_profile(ProfileStatisticsName::ExchangeRows, data_block.num_rows());
-        serialize_block(0, data_block, &self.options)
+        serialize_block(0, data_block, &self.options, self.native_lz4)
     }
 }
 
 pub struct TransformScatterExchangeSerializer {
     local_pos: usize,
     options: IpcWriteOptions,
+    native_lz4: bool,
 }
 
 impl TransformScatterExchangeSerializer {
@@ -129,19 +127,14 @@ impl TransformScatterExchangeSerializer {
         params: &ShuffleExchangeParams,
     ) -> Result<ProcessorPtr> {
         let local_id = &params.executor_id;
-        let compression = match compression {
-            None => None,
-            Some(compression) => match compression {
-                FlightCompression::Lz4 => Some(CompressionType::LZ4_FRAME),
-                FlightCompression::Zstd => Some(CompressionType::ZSTD),
-            },
-        };
+        let (options, native_lz4) = make_ipc_options(compression)?;
 
         Ok(ProcessorPtr::create(BlockMetaTransformer::create(
             input,
             output,
             TransformScatterExchangeSerializer {
-                options: IpcWriteOptions::default().try_with_compression(compression)?,
+                options,
+                native_lz4,
                 local_pos: params
                     .destination_ids
                     .iter()
@@ -161,7 +154,7 @@ impl BlockMetaTransform<ExchangeShuffleMeta> for TransformScatterExchangeSeriali
         for (index, block) in meta.blocks.into_iter().enumerate() {
             new_blocks.push(match self.local_pos == index {
                 true => block,
-                false => serialize_block(0, block, &self.options)?,
+                false => serialize_block(0, block, &self.options, self.native_lz4)?,
             });
         }
 
@@ -175,6 +168,7 @@ pub fn serialize_block(
     block_num: isize,
     data_block: DataBlock,
     options: &IpcWriteOptions,
+    native_lz4: bool,
 ) -> Result<DataBlock> {
     if data_block.is_empty() && data_block.get_meta().is_none() {
         return Ok(DataBlock::empty_with_meta(ExchangeSerializeMeta::create(
@@ -200,12 +194,13 @@ pub fn serialize_block(
                 .unwrap(),
             ],
             options,
+            native_lz4,
         )?,
         false => {
             let schema = data_block.infer_schema();
             let arrow_schema = ArrowSchema::from(&schema);
             let batch = data_block.to_record_batch_with_dataschema(&schema)?;
-            batches_to_flight_data_with_options(&arrow_schema, vec![batch], options)?
+            batches_to_flight_data_with_options(&arrow_schema, vec![batch], options, native_lz4)?
         }
     };
 
@@ -233,6 +228,7 @@ pub fn batches_to_flight_data_with_options(
     schema: &ArrowSchema,
     batches: Vec<RecordBatch>,
     options: &IpcWriteOptions,
+    native_lz4: bool,
 ) -> std::result::Result<(FlightData, Vec<FlightData>, Vec<FlightData>), ArrowError> {
     let schema_flight_data: FlightData = SchemaAsIpc::new(schema, options).into();
     let mut dictionaries = Vec::with_capacity(batches.len());
@@ -242,11 +238,66 @@ pub fn batches_to_flight_data_with_options(
     let mut dictionary_tracker = DictionaryTracker::new(false);
 
     for batch in batches.iter() {
-        let (encoded_dictionaries, encoded_batch) =
+        let (encoded_dictionaries, mut encoded_batch) =
             data_gen.encoded_batch(batch, &mut dictionary_tracker, options)?;
+        if native_lz4 {
+            encoded_batch = compress_record_batch_lz4(encoded_batch)?;
+        }
 
         dictionaries.extend(encoded_dictionaries.into_iter().map(Into::into));
         flight_data.push(encoded_batch.into());
     }
     Ok((schema_flight_data, dictionaries, flight_data))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use arrow_flight::utils::flight_data_to_arrow_batch;
+    use arrow_ipc::BodyCompressionMethod;
+    use arrow_ipc::CompressionType;
+    use arrow_ipc::root_as_message;
+    use databend_common_expression::FromData;
+    use databend_common_expression::types::StringType;
+    use databend_common_expression::types::UInt64Type;
+
+    use super::*;
+
+    #[test]
+    fn test_exchange_lz4_string_view_roundtrip() {
+        let strings = StringType::from_data(vec![
+            "a repeated string value long enough to use an external StringView buffer";
+            256
+        ]);
+        let numbers = UInt64Type::from_data((0..256_u64).collect::<Vec<_>>());
+        let block = DataBlock::new_from_columns(vec![strings, numbers]);
+        let schema = block.infer_schema();
+        let arrow_schema = ArrowSchema::from(&schema);
+        let original = block.to_record_batch_with_dataschema(&schema).unwrap();
+        let (options, native_lz4) = make_ipc_options(Some(FlightCompression::Lz4)).unwrap();
+
+        let (_, dictionaries, batches) = batches_to_flight_data_with_options(
+            &arrow_schema,
+            vec![original.clone()],
+            &options,
+            native_lz4,
+        )
+        .unwrap();
+        assert!(dictionaries.is_empty());
+        assert_eq!(batches.len(), 1);
+
+        let message = root_as_message(&batches[0].data_header).unwrap();
+        let record_batch = message.header_as_record_batch().unwrap();
+        let compression = record_batch.compression().unwrap();
+        assert_eq!(compression.codec(), CompressionType::LZ4_FRAME);
+        assert_eq!(compression.method(), BodyCompressionMethod::BUFFER);
+        assert!(record_batch.variadicBufferCounts().is_some());
+
+        let decoded =
+            flight_data_to_arrow_batch(&batches[0], Arc::new(arrow_schema), &HashMap::new())
+                .unwrap();
+        assert_eq!(decoded, original);
+    }
 }
