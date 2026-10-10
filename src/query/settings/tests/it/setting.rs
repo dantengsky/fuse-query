@@ -22,6 +22,24 @@ use databend_common_version::BUILD_INFO;
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn test_set_settings() {
     let settings = Settings::create(Tenant::new_literal("test"));
+
+    assert!(
+        !settings
+            .get_enable_legacy_single_key_hash_join_shuffle()
+            .unwrap()
+    );
+    settings
+        .set_setting(
+            "enable_legacy_single_key_hash_join_shuffle".to_string(),
+            "1".to_string(),
+        )
+        .unwrap();
+    assert!(
+        settings
+            .get_enable_legacy_single_key_hash_join_shuffle()
+            .unwrap()
+    );
+
     // Number range.
     {
         settings.set_max_threads(2).unwrap();
