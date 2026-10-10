@@ -181,6 +181,18 @@ impl OutboundChannel for RemoteChannel {
     }
 
     async fn add_block(&self, block: DataBlock) -> Result<()> {
+        const COMPACT_MINIMUM_SAVINGS: usize = 16 * 1024;
+
+        let retained_size = block.memory_size();
+        let logical_size = block.estimate_block_size();
+        // Hash partitioning can share source string buffers with multiple destinations. Compact
+        // remote blocks here so local partitions stay zero-copy without inflating network data.
+        let block = if retained_size.saturating_sub(logical_size) >= COMPACT_MINIMUM_SAVINGS {
+            block.compact_string_buffers()
+        } else {
+            block
+        };
+
         Profile::record_usize_profile(ProfileStatisticsName::ExchangeRows, block.num_rows());
         Profile::record_usize_profile(ProfileStatisticsName::ExchangeBytes, block.memory_size());
 
