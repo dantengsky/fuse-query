@@ -39,6 +39,7 @@ use databend_common_expression::FromData;
 use databend_common_expression::HashTableConfig;
 use databend_common_expression::PayloadFlushState;
 use databend_common_expression::ProbeState;
+use databend_common_expression::block_debug::assert_block_value_eq;
 use databend_common_expression::block_debug::assert_block_value_sort_eq;
 use databend_common_expression::get_states_layout;
 use databend_common_expression::types::ArgType;
@@ -217,4 +218,83 @@ fn test_layout() {
         Layout::new::<i128>(),
         Layout::from_size_align(16, 16).unwrap()
     );
+}
+
+// Flushing a payload with a reused `PayloadFlushState` must produce the same
+// result as flushing it with a fresh state, including for empty payloads.
+#[test]
+fn test_payload_flush_all_with_reused_state() {
+    let factory = AggregateFunctionFactory::instance();
+    let aggrs = vec![
+        factory
+            .get("sum", vec![], vec![Int64Type::data_type()], vec![])
+            .unwrap(),
+        factory
+            .get("count", vec![], vec![Int64Type::data_type()], vec![])
+            .unwrap(),
+    ];
+
+    // (distinct groups, radix bits): the first case has payloads larger than
+    // one flush batch, the second one has mostly empty payloads.
+    for (m, radix_bits) in [(5000_usize, 1_u64), (2, 4)] {
+        let n = m * 2;
+        let group_columns: Vec<BlockEntry> =
+            vec![Int64Type::from_data((0..n).map(|x| (x % m) as i64).collect_vec()).into()];
+        let group_types = group_columns
+            .iter()
+            .map(|c| c.data_type())
+            .collect::<Vec<_>>();
+        let args = vec![group_columns[0].clone()];
+        let params = aggrs.iter().map(|_| (&args).into()).collect_vec();
+
+        let config = HashTableConfig::default().with_initial_radix_bits(radix_bits);
+        let mut hashtable = AggregateHashTable::new(
+            group_types.clone(),
+            aggrs.clone(),
+            config,
+            Arc::new(Bump::new()),
+        );
+
+        let mut state = ProbeState::default();
+        hashtable
+            .add_groups(
+                &mut state,
+                (&group_columns).into(),
+                &params,
+                (&[]).into(),
+                n,
+            )
+            .unwrap();
+
+        assert_eq!(hashtable.payload.partition_count(), 1 << radix_bits);
+
+        let mut shared_state = PayloadFlushState::default();
+        let mut total_rows = 0;
+        let mut empty_payloads = 0;
+        for payload in hashtable.payload.payloads.iter() {
+            let expected = payload.aggregate_flush_all().unwrap();
+            let actual = payload
+                .aggregate_flush_all_with_state(&mut shared_state)
+                .unwrap();
+
+            assert_eq!(expected.num_rows(), payload.len());
+            assert_eq!(actual.num_rows(), payload.len());
+            assert_eq!(expected.num_columns(), group_types.len() + aggrs.len());
+            assert_eq!(actual.num_columns(), expected.num_columns());
+            assert_block_value_eq(&expected, &actual);
+
+            let group_by = payload.group_by_flush_all().unwrap();
+            assert_eq!(group_by.num_rows(), payload.len());
+
+            if payload.len() == 0 {
+                empty_payloads += 1;
+            }
+            total_rows += actual.num_rows();
+        }
+
+        assert_eq!(total_rows, m);
+        if m < (1 << radix_bits) {
+            assert!(empty_payloads > 0);
+        }
+    }
 }

@@ -24,6 +24,7 @@ use databend_common_expression::BlockMetaInfoDowncast;
 use databend_common_expression::DataBlock;
 use databend_common_expression::FromData;
 use databend_common_expression::PartitionedPayload;
+use databend_common_expression::PayloadFlushState;
 use databend_common_expression::arrow::serialize_column;
 use databend_common_expression::types::ArgType;
 use databend_common_expression::types::ArrayType;
@@ -72,6 +73,10 @@ pub struct TransformExchangeAggregateSerializer {
 
     params: Arc<AggregatorParams>,
     spiller: Arc<Spiller>,
+    // Reused across payloads. In bucket shuffle mode every block carries one
+    // payload per bucket, and allocating a fresh flush state for each of them
+    // dominates the cost when most payloads are small or empty.
+    flush_state: PayloadFlushState,
 }
 
 impl TransformExchangeAggregateSerializer {
@@ -110,6 +115,7 @@ impl TransformExchangeAggregateSerializer {
                 spiller: spiller.into(),
                 options,
                 native_lz4,
+                flush_state: PayloadFlushState::default(),
             },
         ))
     }
@@ -188,7 +194,13 @@ impl BlockMetaTransform<ExchangeShuffleMeta> for TransformExchangeAggregateSeria
                                     unreachable!("Partitioned meta only contains AggregatePayload");
                                 };
 
-                                let block = payload.payload.aggregate_flush_all()?;
+                                if payload.payload.len() == 0 {
+                                    continue;
+                                }
+
+                                let block = payload
+                                    .payload
+                                    .aggregate_flush_all_with_state(&mut self.flush_state)?;
                                 if block.num_rows() == 0 {
                                     continue;
                                 }
