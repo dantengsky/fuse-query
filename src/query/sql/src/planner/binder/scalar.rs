@@ -73,4 +73,9 @@ impl<'a> ScalarBinder<'a> {
     pub fn get_func_ctx(&self) -> Result<FunctionContext> {
         self.ctx.get_function_context()
     }
+
+    /// Records that an execution-time value is being folded into the logical plan.
+    pub fn mark_plan_not_cacheable(&self) {
+        self.ctx.result_cache_state().set_plan_not_cacheable();
+    }
 }

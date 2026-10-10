@@ -123,6 +123,11 @@ fn try_fold_to_scalar(
     subquery_executor: &Option<Arc<dyn QueryExecutor>>,
 ) -> Result<Scalar> {
     let expr = scalar.as_expr()?;
+    if !expr.is_deterministic(&BUILTIN_FUNCTIONS) {
+        // The folded argument (e.g. `numbers(rand())`) belongs to this execution only, so the
+        // plan carrying it must not be reused.
+        scalar_binder.mark_plan_not_cacheable();
+    }
     let (expr, _) = ConstantFolder::fold(&expr, &scalar_binder.get_func_ctx()?, &BUILTIN_FUNCTIONS);
 
     match expr.into_constant() {
