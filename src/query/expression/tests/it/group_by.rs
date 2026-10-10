@@ -59,6 +59,40 @@ fn test_group_by_hash() -> anyhow::Result<()> {
 }
 
 #[test]
+fn test_group_by_hash_serializer_keys() -> anyhow::Result<()> {
+    let block = DataBlock::new_from_columns(vec![
+        StringType::from_data(vec!["ab", "c"]),
+        UInt64Type::from_data(vec![7, 9]),
+        StringType::from_data_with_validity(vec!["x", "ignored"], vec![true, false]),
+    ]);
+    let args = [0, 1, 2];
+    let columns = ProjectedBlock::project(&args, &block);
+    let method = HashMethodSerializer::default();
+    let state = method.build_keys_state(columns, block.num_rows())?;
+    let keys = method
+        .build_keys_iter(&state)?
+        .map(<[u8]>::to_vec)
+        .collect::<Vec<_>>();
+
+    let mut first = Vec::new();
+    first.extend_from_slice(&2_u64.to_ne_bytes());
+    first.extend_from_slice(b"ab");
+    first.extend_from_slice(&7_u64.to_ne_bytes());
+    first.push(1);
+    first.extend_from_slice(&1_u64.to_ne_bytes());
+    first.extend_from_slice(b"x");
+
+    let mut second = Vec::new();
+    second.extend_from_slice(&1_u64.to_ne_bytes());
+    second.extend_from_slice(b"c");
+    second.extend_from_slice(&9_u64.to_ne_bytes());
+    second.push(0);
+
+    assert_eq!(keys, vec![first, second]);
+    Ok(())
+}
+
+#[test]
 fn test_group_by_hash_decimal() -> anyhow::Result<()> {
     let size_128 = DecimalSize::new_unchecked(20, 2);
     let size_256 = DecimalSize::new_unchecked(40, 2);
