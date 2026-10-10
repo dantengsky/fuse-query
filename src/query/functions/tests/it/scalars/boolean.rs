@@ -29,6 +29,13 @@ fn one_null_column() -> Vec<(&'static str, Column)> {
     )]
 }
 
+fn nullable_range_column() -> Vec<(&'static str, Column)> {
+    vec![(
+        "a",
+        UInt8Type::from_data_with_validity(vec![1_u8, 2, 0], vec![true, true, false]),
+    )]
+}
+
 fn filter_short_circuit_columns() -> Vec<(&'static str, Column)> {
     vec![
         ("a", UInt8Type::from_data(vec![0_u8, 1, 2])),
@@ -122,6 +129,36 @@ fn test_filter_bool(file: &mut impl Write) {
     run_ast(
         file,
         "or_filters((a < 10), CAST(b AS BOOLEAN))",
+        filter_short_circuit_columns().as_slice(),
+    );
+
+    // Domain based folding: `a` is `{1..=2} ∪ {NULL}`, so every branch is known
+    // to be false or NULL and the whole disjunction folds to `false`.
+    run_ast(
+        file,
+        "or_filters((a > 10), (a = 5))",
+        nullable_range_column().as_slice(),
+    );
+    run_ast(
+        file,
+        "or_filters((a > 10), (a = 5), (a < 1))",
+        nullable_range_column().as_slice(),
+    );
+    run_ast(
+        file,
+        "or_filters((a > 10), and_filters((a = 5), (a < 1)))",
+        nullable_range_column().as_slice(),
+    );
+    // `a > 0` may still be NULL, so the disjunction must not fold.
+    run_ast(
+        file,
+        "or_filters((a > 0), (a = 5))",
+        nullable_range_column().as_slice(),
+    );
+    // Every branch is known to be true: `a` is `{0..=2}` without NULL.
+    run_ast(
+        file,
+        "and_filters((a < 3), (a >= 0))",
         filter_short_circuit_columns().as_slice(),
     );
 }

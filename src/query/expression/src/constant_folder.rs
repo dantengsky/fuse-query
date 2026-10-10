@@ -220,9 +220,15 @@ impl<'a, Index: ColumnIndex> ConstantFolder<'a, Index> {
                 }
 
                 let mut args_expr = Vec::new();
+                // Seed the accumulated domain with the identity element of the operator
+                // (`false` for `or_filters`, `true` for `and_filters`), so that the fold
+                // below is exactly the operator applied over the argument domains.
+                // Seeding both flags with `true` would pin `has_true` for `or_filters`
+                // and prevent it from ever folding to `false`, even when every argument
+                // is known to be false or NULL.
                 let mut result_domain = Some(BooleanDomain {
-                    has_true: true,
-                    has_false: true,
+                    has_true: !is_or,
+                    has_false: is_or,
                 });
 
                 for arg in args {
