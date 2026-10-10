@@ -163,6 +163,7 @@ impl UnionAll {
             max_cardinality: cardinality
                 .max(left_stat_info.max_cardinality)
                 .max(right_stat_info.max_cardinality),
+            stale_range_statistics: false,
             statistics: Statistics {
                 precise_cardinality,
                 column_stats,
@@ -334,6 +335,7 @@ mod tests {
         Arc::new(StatInfo {
             cardinality,
             max_cardinality: cardinality,
+            stale_range_statistics: false,
             statistics: Statistics {
                 precise_cardinality: None,
                 column_stats: HashMap::from([(Symbol::new(index), ColumnStat {
@@ -363,6 +365,7 @@ mod tests {
         let right = Arc::new(StatInfo {
             cardinality: 4.0,
             max_cardinality: 4.0,
+            stale_range_statistics: false,
             statistics: Statistics::default(),
         });
 
@@ -378,6 +381,7 @@ mod tests {
         let right = Arc::new(StatInfo {
             cardinality: 0.0,
             max_cardinality: 0.0,
+            stale_range_statistics: false,
             statistics: Statistics {
                 precise_cardinality: Some(0),
                 column_stats: HashMap::new(),
@@ -413,6 +417,7 @@ mod tests {
         let large = Arc::new(StatInfo {
             cardinality: source.cardinality,
             max_cardinality: source.max_cardinality,
+            stale_range_statistics: false,
             statistics: Statistics {
                 precise_cardinality: None,
                 column_stats: HashMap::from([(Symbol::new(1), cast_stat)]),

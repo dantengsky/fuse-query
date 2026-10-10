@@ -181,6 +181,7 @@ mod tests {
         StatInfo {
             cardinality: 0.0,
             max_cardinality: 0.0,
+            stale_range_statistics: false,
             statistics: Statistics {
                 precise_cardinality: precise.then_some(0),
                 column_stats: Default::default(),
@@ -192,6 +193,7 @@ mod tests {
         StatInfo {
             cardinality,
             max_cardinality: cardinality,
+            stale_range_statistics: false,
             statistics: Statistics::default(),
         }
     }

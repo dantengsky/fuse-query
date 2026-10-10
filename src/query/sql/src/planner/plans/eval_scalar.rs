@@ -251,6 +251,7 @@ impl Operator for EvalScalar {
         Ok(Arc::new(StatInfo {
             cardinality: input.cardinality,
             max_cardinality: input.max_cardinality,
+            stale_range_statistics: input.stale_range_statistics,
             statistics: Statistics {
                 precise_cardinality: input.statistics.precise_cardinality,
                 column_stats,

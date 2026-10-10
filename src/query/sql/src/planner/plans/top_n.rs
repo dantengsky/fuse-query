@@ -151,6 +151,7 @@ impl Operator for TopN {
         Ok(Arc::new(StatInfo {
             cardinality,
             max_cardinality,
+            stale_range_statistics: false,
             statistics: Statistics {
                 precise_cardinality,
                 column_stats: Default::default(),
@@ -181,6 +182,7 @@ mod tests {
             Some(Arc::new(StatInfo {
                 cardinality,
                 max_cardinality,
+                stale_range_statistics: false,
                 statistics: Statistics {
                     precise_cardinality,
                     ..Default::default()

@@ -103,6 +103,7 @@ impl Operator for MutationSource {
         Ok(Arc::new(StatInfo {
             cardinality: 0.0,
             max_cardinality: 0.0,
+            stale_range_statistics: false,
             statistics: OpStatistics {
                 precise_cardinality: None,
                 column_stats: Default::default(),

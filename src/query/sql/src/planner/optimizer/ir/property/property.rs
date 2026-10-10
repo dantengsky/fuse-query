@@ -59,6 +59,12 @@ pub struct StatInfo {
     /// can make its output estimate unsafe for broadcast decisions. Operators
     /// that bound or selectively reduce their output reset this value.
     pub max_cardinality: f64,
+    /// Whether `max_cardinality` is the conservative fallback for a range
+    /// predicate that stale column statistics estimated as having no matches.
+    ///
+    /// This provenance lets the broadcast guard distinguish a selective source
+    /// scan from join fan-out or other derived-cardinality risks.
+    pub stale_range_statistics: bool,
     pub statistics: Statistics,
 }
 

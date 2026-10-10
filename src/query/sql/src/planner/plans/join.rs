@@ -482,6 +482,7 @@ impl Join {
                         .max(left_cardinality)
                         .max(right_cardinality)
                 }),
+            stale_range_statistics: false,
             statistics: Statistics {
                 precise_cardinality: proven_empty.then_some(0),
                 column_stats,
@@ -1025,15 +1026,33 @@ fn is_redundant_shuffle_expr(
 
 fn is_safe_broadcast_build(stat_info: &StatInfo, max_build_rows: u64) -> bool {
     let cardinality = stat_info.cardinality;
-    let subtree_cardinality = stat_info.max_cardinality;
-    let max_cardinality = subtree_cardinality.max(cardinality);
+    let source_cardinality = stat_info.max_cardinality;
+    if !cardinality.is_finite()
+        || !source_cardinality.is_finite()
+        || cardinality < 0.0
+        || source_cardinality < 0.0
+    {
+        return false;
+    }
+
+    let risk_cardinality = source_cardinality.max(cardinality);
+    let absolute_limit_cardinality = if stat_info.stale_range_statistics {
+        // For a stale range estimate, expected rows describe the materialized
+        // build while source uncertainty remains protected by the severe-
+        // underestimation ratio below.
+        cardinality
+    } else {
+        // Other risk sources (for example join fan-out or corrected NDV) retain
+        // the original strict absolute guard.
+        risk_cardinality
+    };
     cardinality.is_finite()
-        && subtree_cardinality.is_finite()
+        && risk_cardinality.is_finite()
         && cardinality >= 0.0
-        && subtree_cardinality >= 0.0
-        && (max_build_rows == 0 || max_cardinality <= max_build_rows as f64)
+        && risk_cardinality >= 0.0
+        && (max_build_rows == 0 || absolute_limit_cardinality <= max_build_rows as f64)
         && if cardinality == 0.0 {
-            max_cardinality == 0.0
+            risk_cardinality == 0.0
         } else {
             !stat_info.cardinality_is_severely_underestimated()
         }
@@ -1899,6 +1918,7 @@ mod tests {
         let left_stat_info = Arc::new(StatInfo {
             cardinality: 4.0,
             max_cardinality: 4.0,
+            stale_range_statistics: false,
             statistics: Statistics {
                 precise_cardinality: None,
                 column_stats: HashMap::from([(Symbol::new(0), ColumnStat {
@@ -1913,6 +1933,7 @@ mod tests {
         let right_stat_info = Arc::new(StatInfo {
             cardinality: 4.0,
             max_cardinality: 4.0,
+            stale_range_statistics: false,
             statistics: Statistics {
                 precise_cardinality: None,
                 column_stats: HashMap::from([(Symbol::new(1), ColumnStat {
@@ -2056,6 +2077,7 @@ mod tests {
         Arc::new(StatInfo {
             cardinality: 0.0,
             max_cardinality: 0.0,
+            stale_range_statistics: false,
             statistics: Statistics {
                 precise_cardinality: precise.then_some(0),
                 column_stats: Default::default(),
@@ -2067,6 +2089,16 @@ mod tests {
         Arc::new(StatInfo {
             cardinality,
             max_cardinality,
+            stale_range_statistics: false,
+            statistics: Statistics::default(),
+        })
+    }
+
+    fn stale_range_stat(cardinality: f64, max_cardinality: f64) -> Arc<StatInfo> {
+        Arc::new(StatInfo {
+            cardinality,
+            max_cardinality,
+            stale_range_statistics: true,
             statistics: Statistics::default(),
         })
     }
@@ -2271,11 +2303,31 @@ mod tests {
     }
 
     #[test]
-    fn test_broadcast_build_guard_rejects_stale_window_risk_bound() {
-        let stale_window = estimated_stat(80_000_000.0, 40_000_000_000.0);
+    fn test_broadcast_build_guard_allows_bounded_stale_window() {
+        let stale_window = stale_range_stat(80_000_000.0, 40_000_000_000.0);
+
+        assert!(is_safe_broadcast_build(
+            &stale_window,
+            DEFAULT_MAX_BROADCAST_BUILD_ROWS,
+        ));
+    }
+
+    #[test]
+    fn test_broadcast_build_guard_still_limits_expected_rows() {
+        let large_build = stale_range_stat(120_000_000.0, 40_000_000_000.0);
 
         assert!(!is_safe_broadcast_build(
-            &stale_window,
+            &large_build,
+            DEFAULT_MAX_BROADCAST_BUILD_ROWS,
+        ));
+    }
+
+    #[test]
+    fn test_broadcast_build_guard_rejects_severe_stale_underestimate() {
+        let underestimated_build = stale_range_stat(10_000.0, 20_000_000.0);
+
+        assert!(!is_safe_broadcast_build(
+            &underestimated_build,
             DEFAULT_MAX_BROADCAST_BUILD_ROWS,
         ));
     }
@@ -2313,6 +2365,7 @@ mod tests {
         let left_stat = Arc::new(StatInfo {
             cardinality: 1_000_000.0,
             max_cardinality: 1_000_000.0,
+            stale_range_statistics: false,
             statistics: Statistics {
                 precise_cardinality: None,
                 column_stats: HashMap::from([(Symbol::new(0), ColumnStat {
@@ -2351,6 +2404,7 @@ mod tests {
         let left_stat = Arc::new(StatInfo {
             cardinality: 1_000_000.0,
             max_cardinality: 1_000_000.0,
+            stale_range_statistics: false,
             statistics: Statistics {
                 precise_cardinality: None,
                 column_stats: HashMap::from([(Symbol::new(0), ColumnStat {
@@ -2385,6 +2439,7 @@ mod tests {
         let user_info_stat = Arc::new(StatInfo {
             cardinality: 200_000_000.0,
             max_cardinality: 200_000_000.0,
+            stale_range_statistics: false,
             statistics: Statistics {
                 precise_cardinality: None,
                 column_stats: HashMap::from([(Symbol::new(0), ColumnStat {
@@ -2424,6 +2479,7 @@ mod tests {
         let left_stat = Arc::new(StatInfo {
             cardinality: 10.0,
             max_cardinality: 10.0,
+            stale_range_statistics: false,
             statistics: Statistics {
                 precise_cardinality: None,
                 column_stats: HashMap::from([(Symbol::new(0), ColumnStat {
@@ -2438,6 +2494,7 @@ mod tests {
         let right_stat = Arc::new(StatInfo {
             cardinality: 200_000_000.0,
             max_cardinality: 200_000_000.0,
+            stale_range_statistics: false,
             statistics: Statistics {
                 precise_cardinality: None,
                 column_stats: HashMap::from([(Symbol::new(1), ColumnStat {
