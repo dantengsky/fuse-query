@@ -409,6 +409,121 @@ output domain  : {TRUE}
 output         : true
 
 
+ast            : or_filters((a > 10), (a = 5))
+raw expr       : or_filters(gt(a::UInt8 NULL, 10), eq(a::UInt8 NULL, 5))
+checked expr   : or_filters<Boolean NULL, Boolean NULL>(gt<UInt8 NULL, UInt8 NULL>(a, CAST<UInt8>(10_u8 AS UInt8 NULL)), eq<UInt8 NULL, UInt8 NULL>(a, CAST<UInt8>(5_u8 AS UInt8 NULL)))
+optimized expr : false
+evaluation:
++--------+------------------+---------+
+|        | a                | Output  |
++--------+------------------+---------+
+| Type   | UInt8 NULL       | Boolean |
+| Domain | {1..=2} ∪ {NULL} | {FALSE} |
+| Row 0  | 1                | false   |
+| Row 1  | 2                | false   |
+| Row 2  | NULL             | false   |
++--------+------------------+---------+
+evaluation (internal):
++--------+-----------------------------------------------------------------------------+
+| Column | Data                                                                        |
++--------+-----------------------------------------------------------------------------+
+| a      | Column(NullableColumn { column: UInt8([1, 2, 0]), validity: [0b_____011] }) |
+| Output | Boolean([0b_____000])                                                       |
++--------+-----------------------------------------------------------------------------+
+
+
+ast            : or_filters((a > 10), (a = 5), (a < 1))
+raw expr       : or_filters(gt(a::UInt8 NULL, 10), eq(a::UInt8 NULL, 5), lt(a::UInt8 NULL, 1))
+checked expr   : or_filters<Boolean NULL, Boolean NULL, Boolean NULL>(gt<UInt8 NULL, UInt8 NULL>(a, CAST<UInt8>(10_u8 AS UInt8 NULL)), eq<UInt8 NULL, UInt8 NULL>(a, CAST<UInt8>(5_u8 AS UInt8 NULL)), lt<UInt8 NULL, UInt8 NULL>(a, CAST<UInt8>(1_u8 AS UInt8 NULL)))
+optimized expr : false
+evaluation:
++--------+------------------+---------+
+|        | a                | Output  |
++--------+------------------+---------+
+| Type   | UInt8 NULL       | Boolean |
+| Domain | {1..=2} ∪ {NULL} | {FALSE} |
+| Row 0  | 1                | false   |
+| Row 1  | 2                | false   |
+| Row 2  | NULL             | false   |
++--------+------------------+---------+
+evaluation (internal):
++--------+-----------------------------------------------------------------------------+
+| Column | Data                                                                        |
++--------+-----------------------------------------------------------------------------+
+| a      | Column(NullableColumn { column: UInt8([1, 2, 0]), validity: [0b_____011] }) |
+| Output | Boolean([0b_____000])                                                       |
++--------+-----------------------------------------------------------------------------+
+
+
+ast            : or_filters((a > 10), and_filters((a = 5), (a < 1)))
+raw expr       : or_filters(gt(a::UInt8 NULL, 10), and_filters(eq(a::UInt8 NULL, 5), lt(a::UInt8 NULL, 1)))
+checked expr   : or_filters<Boolean NULL, Boolean>(gt<UInt8 NULL, UInt8 NULL>(a, CAST<UInt8>(10_u8 AS UInt8 NULL)), and_filters<Boolean NULL, Boolean NULL>(eq<UInt8 NULL, UInt8 NULL>(a, CAST<UInt8>(5_u8 AS UInt8 NULL)), lt<UInt8 NULL, UInt8 NULL>(a, CAST<UInt8>(1_u8 AS UInt8 NULL))))
+optimized expr : false
+evaluation:
++--------+------------------+---------+
+|        | a                | Output  |
++--------+------------------+---------+
+| Type   | UInt8 NULL       | Boolean |
+| Domain | {1..=2} ∪ {NULL} | {FALSE} |
+| Row 0  | 1                | false   |
+| Row 1  | 2                | false   |
+| Row 2  | NULL             | false   |
++--------+------------------+---------+
+evaluation (internal):
++--------+-----------------------------------------------------------------------------+
+| Column | Data                                                                        |
++--------+-----------------------------------------------------------------------------+
+| a      | Column(NullableColumn { column: UInt8([1, 2, 0]), validity: [0b_____011] }) |
+| Output | Boolean([0b_____000])                                                       |
++--------+-----------------------------------------------------------------------------+
+
+
+ast            : or_filters((a > 0), (a = 5))
+raw expr       : or_filters(gt(a::UInt8 NULL, 0), eq(a::UInt8 NULL, 5))
+checked expr   : or_filters<Boolean NULL, Boolean NULL>(gt<UInt8 NULL, UInt8 NULL>(a, CAST<UInt8>(0_u8 AS UInt8 NULL)), eq<UInt8 NULL, UInt8 NULL>(a, CAST<UInt8>(5_u8 AS UInt8 NULL)))
+optimized expr : or_filters<Boolean NULL, Boolean NULL>(gt<UInt8 NULL, UInt8 NULL>(a, 0_u8), eq<UInt8 NULL, UInt8 NULL>(a, 5_u8))
+evaluation:
++--------+------------------+---------------+
+|        | a                | Output        |
++--------+------------------+---------------+
+| Type   | UInt8 NULL       | Boolean       |
+| Domain | {1..=2} ∪ {NULL} | {FALSE, TRUE} |
+| Row 0  | 1                | true          |
+| Row 1  | 2                | true          |
+| Row 2  | NULL             | false         |
++--------+------------------+---------------+
+evaluation (internal):
++--------+-----------------------------------------------------------------------------+
+| Column | Data                                                                        |
++--------+-----------------------------------------------------------------------------+
+| a      | Column(NullableColumn { column: UInt8([1, 2, 0]), validity: [0b_____011] }) |
+| Output | Boolean([0b_____011])                                                       |
++--------+-----------------------------------------------------------------------------+
+
+
+ast            : and_filters((a < 3), (a >= 0))
+raw expr       : and_filters(lt(a::UInt8, 3), gte(a::UInt8, 0))
+checked expr   : and_filters<Boolean, Boolean>(lt<UInt8, UInt8>(a, 3_u8), gte<UInt8, UInt8>(a, 0_u8))
+optimized expr : true
+evaluation:
++--------+---------+---------+
+|        | a       | Output  |
++--------+---------+---------+
+| Type   | UInt8   | Boolean |
+| Domain | {0..=2} | {TRUE}  |
+| Row 0  | 0       | true    |
+| Row 1  | 1       | true    |
+| Row 2  | 2       | true    |
++--------+---------+---------+
+evaluation (internal):
++--------+--------------------------+
+| Column | Data                     |
++--------+--------------------------+
+| a      | Column(UInt8([0, 1, 2])) |
+| Output | Boolean([0b_____111])    |
++--------+--------------------------+
+
+
 ast            : NOT a
 raw expr       : not(a::NULL)
 checked expr   : not<Boolean NULL>(CAST<NULL>(a AS Boolean NULL))
