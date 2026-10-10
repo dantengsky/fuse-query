@@ -127,9 +127,12 @@ impl Operator for TopN {
                     .min(self.limit as u64)
             }
         });
+        // TopN bounds its output like Limit does.
+        let max_cardinality = cardinality;
 
         Ok(Arc::new(StatInfo {
             cardinality,
+            max_cardinality,
             statistics: Statistics {
                 precise_cardinality,
                 column_stats: Default::default(),
