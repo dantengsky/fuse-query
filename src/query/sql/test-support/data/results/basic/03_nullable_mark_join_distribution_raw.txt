@@ -1,0 +1,30 @@
+EvalScalar
+├── scalars: [nullable_mark_probe.a (#0) AS (#0), SUBQUERY AS (#1) AS (#3), not(SUBQUERY AS (#2)) AS (#4)]
+├── subquerys
+│   ├── Subquery (Any)
+│   │   ├── compare_op: Equal
+│   │   ├── output_column: nullable_mark_build.a (#1)
+│   │   ├── projection_index: in_match (#3)
+│   │   └── EvalScalar
+│   │       ├── scalars: [nullable_mark_build.a (#1) AS (#1)]
+│   │       └── Scan
+│   │           ├── table: default.nullable_mark_build (#1)
+│   │           ├── filters: []
+│   │           ├── order by: []
+│   │           └── limit: NONE
+│   └── Subquery (Any)
+│       ├── compare_op: Equal
+│       ├── output_column: nullable_mark_build.a (#2)
+│       └── EvalScalar
+│           ├── scalars: [nullable_mark_build.a (#2) AS (#2)]
+│           └── Scan
+│               ├── table: default.nullable_mark_build (#2)
+│               ├── filters: []
+│               ├── order by: []
+│               └── limit: NONE
+└── Scan
+    ├── table: default.nullable_mark_probe (#0)
+    ├── filters: []
+    ├── order by: []
+    └── limit: NONE
+
