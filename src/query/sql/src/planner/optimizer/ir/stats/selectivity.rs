@@ -462,12 +462,19 @@ impl SelectivityVisitor<'_> {
                     if mod_num == 0.0 {
                         return Err(ErrorCode::SemanticError("modulus by zero".to_string()));
                     }
+                    // `Zero` is treated as a proof of emptiness downstream
+                    // (`precise_cardinality = Some(0)`), so it must only be
+                    // claimed when no value can satisfy the predicate. The
+                    // remainder takes the sign of the dividend and is bounded
+                    // by `|x % m| < |m|`, so compare magnitudes; a negative
+                    // modulus such as `x % -10 = 5` is satisfiable.
+                    let mod_abs = mod_num.abs();
                     return if let Some(remainder) = val.scalar.clone().to_datum()
-                        && remainder.as_double()? >= mod_num
+                        && remainder.as_double()?.abs() >= mod_abs
                     {
                         Ok(Selectivity::Zero)
                     } else {
-                        Selectivity::checked_estimate(1.0 / mod_num)
+                        Selectivity::checked_estimate(1.0 / mod_abs)
                     };
                 }
             }
@@ -1172,6 +1179,72 @@ mod tests {
         let column_stat = &column_stats[&column_index];
         assert_ne!(column_stat.ndv, StatEstimate::exact(0.0));
         assert_ne!(column_stat.null_count, StatCount::Exact(0));
+        Ok(())
+    }
+
+    #[test]
+    fn test_modulo_equality_only_proves_empty_for_impossible_remainders() -> Result<()> {
+        let column_index = Symbol::new(0);
+        let modulo_predicate = |modulus: i64, remainder: i64| {
+            let column = ScalarExpr::BoundColumnRef(BoundColumnRef {
+                span: None,
+                column: ColumnBindingBuilder::new(
+                    "n".to_string(),
+                    column_index,
+                    Box::new(DataType::Number(NumberDataType::Int64)),
+                    Visibility::Visible,
+                )
+                .build(),
+            });
+            let constant = |value: i64| {
+                ScalarExpr::ConstantExpr(ConstantExpr {
+                    span: None,
+                    value: Scalar::Number(NumberScalar::Int64(value)),
+                })
+            };
+            ScalarExpr::FunctionCall(FunctionCall {
+                span: None,
+                func_name: ComparisonOp::Equal.to_func_name().to_string(),
+                params: vec![],
+                arguments: vec![
+                    ScalarExpr::FunctionCall(FunctionCall {
+                        span: None,
+                        func_name: "modulo".to_string(),
+                        params: vec![],
+                        arguments: vec![column, constant(modulus)],
+                    }),
+                    constant(remainder),
+                ],
+            })
+        };
+
+        // (modulus, remainder, expected rows, proven empty)
+        for (modulus, remainder, expected_rows, proven_empty) in [
+            // `x % 10 = 11` can never hold.
+            (10, 11, 0.0, true),
+            // `x % 10 = 5` holds for one value in ten.
+            (10, 5, 100.0, false),
+            // `x % -10 = 5` is satisfiable (15 % -10 = 5): must not be proven empty.
+            (-10, 5, 100.0, false),
+            // `x % 10 = -5` is satisfiable (-15 % 10 = -5).
+            (10, -5, 100.0, false),
+            // `x % -10 = -11` can never hold.
+            (-10, -11, 0.0, true),
+        ] {
+            let mut estimator =
+                SelectivityEstimator::new(ColumnStatSet::new(), StatCardinality::exact(1000));
+            assert_eq!(
+                estimator.apply(&[modulo_predicate(modulus, remainder)])?,
+                expected_rows,
+                "x % {modulus} = {remainder}"
+            );
+            assert_eq!(
+                estimator.is_proven_empty(),
+                proven_empty,
+                "x % {modulus} = {remainder}"
+            );
+        }
+
         Ok(())
     }
 
