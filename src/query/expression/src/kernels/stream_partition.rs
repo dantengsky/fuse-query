@@ -51,6 +51,7 @@ struct PartitionBlockBuilder {
 pub struct BlockPartitionStream {
     initialize: bool,
     scatter_size: usize,
+    preserve_string_views: bool,
     rows_threshold: usize,
     bytes_threshold: usize,
     partitions: Vec<PartitionBlockBuilder>,
@@ -58,9 +59,28 @@ pub struct BlockPartitionStream {
 
 impl BlockPartitionStream {
     pub fn create(
+        rows_threshold: usize,
+        bytes_threshold: usize,
+        scatter_size: usize,
+    ) -> BlockPartitionStream {
+        Self::create_inner(rows_threshold, bytes_threshold, scatter_size, false)
+    }
+
+    /// Preserve Arc-backed string buffers while partitioning. Callers that send partitions over
+    /// the network must compact retained buffers before serialization.
+    pub fn create_with_string_views(
+        rows_threshold: usize,
+        bytes_threshold: usize,
+        scatter_size: usize,
+    ) -> BlockPartitionStream {
+        Self::create_inner(rows_threshold, bytes_threshold, scatter_size, true)
+    }
+
+    fn create_inner(
         mut rows_threshold: usize,
         mut bytes_threshold: usize,
         scatter_size: usize,
+        preserve_string_views: bool,
     ) -> BlockPartitionStream {
         if rows_threshold == 0 {
             rows_threshold = usize::MAX;
@@ -72,6 +92,7 @@ impl BlockPartitionStream {
 
         BlockPartitionStream {
             scatter_size,
+            preserve_string_views,
             rows_threshold,
             bytes_threshold,
             initialize: false,
@@ -130,7 +151,7 @@ impl BlockPartitionStream {
 
                 let partition = &mut self.partitions[partition_id];
                 let column_builder = &mut partition.columns_builder[column_idx];
-                copy_column(indices, &column, column_builder);
+                copy_column_impl(indices, &column, column_builder, self.preserve_string_views);
             }
 
             drop(column);
@@ -142,11 +163,19 @@ impl BlockPartitionStream {
 
         let mut ready_blocks = Vec::with_capacity(self.partitions.len());
         for (id, partition) in self.partitions.iter_mut().enumerate() {
-            let memory_size = partition
-                .columns_builder
-                .iter()
-                .map(|x| x.memory_size())
-                .sum::<usize>();
+            let memory_size = if self.preserve_string_views {
+                partition
+                    .columns_builder
+                    .iter()
+                    .map(partition_builder_memory_size)
+                    .sum::<usize>()
+            } else {
+                partition
+                    .columns_builder
+                    .iter()
+                    .map(|builder| builder.memory_size())
+                    .sum::<usize>()
+            };
 
             let rows = partition.num_rows;
 
@@ -249,7 +278,27 @@ impl BlockPartitionStream {
     }
 }
 
+fn partition_builder_memory_size(builder: &ColumnBuilder) -> usize {
+    match builder {
+        ColumnBuilder::String(builder) => builder.len() * 16 + builder.data.total_bytes_len(),
+        ColumnBuilder::Nullable(builder) => {
+            partition_builder_memory_size(&builder.builder) + builder.validity.as_slice().len()
+        }
+        ColumnBuilder::Tuple(fields) => fields.iter().map(partition_builder_memory_size).sum(),
+        _ => builder.memory_size(),
+    }
+}
+
 pub fn copy_column<I: Index>(indices: &[I], from: &Column, to: &mut ColumnBuilder) {
+    copy_column_impl(indices, from, to, false)
+}
+
+fn copy_column_impl<I: Index>(
+    indices: &[I],
+    from: &Column,
+    to: &mut ColumnBuilder,
+    preserve_string_views: bool,
+) {
     match to {
         ColumnBuilder::EmptyArray { len } => match from {
             Column::EmptyArray { .. } => *len += indices.len(),
@@ -296,7 +345,7 @@ pub fn copy_column<I: Index>(indices: &[I], from: &Column, to: &mut ColumnBuilde
                 match ColumnBuilder::with_capacity(&from.data_type(), capacity) {
                     ColumnBuilder::Nullable(mut builder) => {
                         builder.push_repeat_null(*len);
-                        copy_nullable(&mut builder, column, indices);
+                        copy_nullable(&mut builder, column, indices, preserve_string_views);
                         *to = ColumnBuilder::Nullable(builder);
                     }
                     _ => unreachable!(
@@ -317,7 +366,7 @@ pub fn copy_column<I: Index>(indices: &[I], from: &Column, to: &mut ColumnBuilde
                 builder.push_repeat_null(indices.len());
             }
             Column::Nullable(column) => {
-                copy_nullable(builder, column, indices);
+                copy_nullable(builder, column, indices, preserve_string_views);
             }
             _ => unreachable!(
                 "Nullable builder can only copy from Null or Nullable, but got from type: {}",
@@ -409,7 +458,11 @@ pub fn copy_column<I: Index>(indices: &[I], from: &Column, to: &mut ColumnBuilde
                 copy_binary(builder, &column.0, indices);
             }
             (ColumnBuilder::String(builder), Column::String(column)) => {
-                copy_string(builder, column, indices);
+                if preserve_string_views {
+                    copy_string_views(builder, column, indices);
+                } else {
+                    copy_string(builder, column, indices);
+                }
             }
             (ColumnBuilder::Vector(builder), Column::Vector(column)) => {
                 copy_vector(indices, builder, column);
@@ -419,7 +472,7 @@ pub fn copy_column<I: Index>(indices: &[I], from: &Column, to: &mut ColumnBuilde
             }
             (ColumnBuilder::Tuple(builders), Column::Tuple(columns)) => {
                 for (builder, column) in builders.iter_mut().zip(columns.iter()) {
-                    copy_column(indices, column, builder)
+                    copy_column_impl(indices, column, builder, preserve_string_views)
                 }
             }
             (to, from) => unreachable!(
@@ -482,13 +535,33 @@ fn copy_string<I: Index>(to: &mut StringColumnBuilder, from: &StringColumn, indi
     }
 }
 
+fn copy_string_views<I: Index>(to: &mut StringColumnBuilder, from: &StringColumn, indices: &[I]) {
+    // String columns store long values in shared buffers and rows as 16-byte views. Preserve
+    // those buffers while partitioning instead of copying every selected string into a new one.
+    // `append_views_unchecked` adjusts buffer indices when appending multiple input blocks.
+    unsafe {
+        to.data.append_views_unchecked(
+            indices
+                .iter()
+                .map(|index| from.views().get_unchecked(index.to_usize())),
+            from.data_buffers(),
+        );
+    }
+}
+
 fn copy_nullable<I: Index>(
     to: &mut NullableColumnBuilder<AnyType>,
     from: &NullableColumn<AnyType>,
     indices: &[I],
+    preserve_string_views: bool,
 ) {
     copy_boolean(&mut to.validity, &from.validity, indices);
-    copy_column(indices, &from.column, &mut to.builder)
+    copy_column_impl(
+        indices,
+        &from.column,
+        &mut to.builder,
+        preserve_string_views,
+    )
 }
 
 fn copy_opaque<I: Index>(indices: &[I], builder: &mut OpaqueColumnBuilder, column: &OpaqueColumn) {
@@ -535,5 +608,87 @@ fn copy_array<I: Index>(
     // TODO:
     for index in indices {
         unsafe { to.push(from.index_unchecked(index.to_usize())) }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn copy_string_views_preserves_buffers_across_input_blocks() {
+        let first = [
+            "short",
+            "a value long enough to use a backing buffer",
+            "another buffered string value",
+        ]
+        .into_iter()
+        .collect::<StringColumnBuilder>()
+        .build();
+        let second = ["second block also uses a backing buffer", "tiny"]
+            .into_iter()
+            .collect::<StringColumnBuilder>()
+            .build();
+        let first_buffer = first.data_buffers()[0].as_ptr();
+        let second_buffer = second.data_buffers()[0].as_ptr();
+
+        let mut builder = StringColumnBuilder::with_capacity(5);
+        copy_string_views(&mut builder, &first, &[2_u32, 0, 1]);
+        copy_string_views(&mut builder, &second, &[1_u32, 0]);
+        let result = builder.build();
+
+        assert_eq!(result.iter().collect::<Vec<_>>(), vec![
+            "another buffered string value",
+            "short",
+            "a value long enough to use a backing buffer",
+            "tiny",
+            "second block also uses a backing buffer",
+        ]);
+        assert_eq!(result.data_buffers()[0].as_ptr(), first_buffer);
+        assert_eq!(result.data_buffers()[1].as_ptr(), second_buffer);
+    }
+
+    #[test]
+    fn partition_preserves_string_views_until_compacted() {
+        let source = [
+            "partition zero first buffered string",
+            "partition one first buffered string",
+            "partition zero second buffered string",
+            "partition one second buffered string",
+        ]
+        .into_iter()
+        .collect::<StringColumnBuilder>()
+        .build();
+        let source_buffer = source.data_buffers()[0].as_ptr();
+        let block = DataBlock::new_from_columns(vec![Column::String(source)]);
+        let mut stream = BlockPartitionStream::create_with_string_views(1, usize::MAX, 2);
+
+        let blocks = stream.partition(vec![0, 1, 0, 1], block, true);
+        assert_eq!(blocks.len(), 2);
+
+        let local = blocks[0].1.get_by_offset(0).to_column();
+        let remote = blocks[1].1.get_by_offset(0).to_column();
+        let Column::String(remote_shared) = &remote else {
+            unreachable!()
+        };
+        assert_eq!(remote_shared.data_buffers()[0].as_ptr(), source_buffer);
+        let remote = remote.compact_string_buffers();
+        let Column::String(local) = local else {
+            unreachable!()
+        };
+        let Column::String(remote) = remote else {
+            unreachable!()
+        };
+
+        assert_eq!(local.iter().collect::<Vec<_>>(), vec![
+            "partition zero first buffered string",
+            "partition zero second buffered string",
+        ]);
+        assert_eq!(remote.iter().collect::<Vec<_>>(), vec![
+            "partition one first buffered string",
+            "partition one second buffered string",
+        ]);
+        assert_eq!(local.data_buffers()[0].as_ptr(), source_buffer);
+        assert_ne!(remote.data_buffers()[0].as_ptr(), source_buffer);
     }
 }

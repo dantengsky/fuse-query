@@ -290,6 +290,32 @@ where I: TakeIndex + ?Sized
 }
 
 impl Column {
+    /// Rebuild string views with compact backing buffers, including nested string columns.
+    pub fn compact_string_buffers(self) -> Self {
+        match self {
+            Column::String(c) => Column::String(c.gc()),
+            Column::Nullable(n) => {
+                let (column, validity) = n.destructure();
+                NullableColumn::new_column(column.compact_string_buffers(), validity)
+            }
+            Column::Tuple(fields) => Column::Tuple(
+                fields
+                    .into_iter()
+                    .map(Column::compact_string_buffers)
+                    .collect(),
+            ),
+            Column::Array(array) => Column::Array(Box::new(ArrayColumn::new(
+                array.underlying_column().compact_string_buffers(),
+                array.underlying_offsets(),
+            ))),
+            Column::Map(map) => Column::Map(Box::new(ArrayColumn::new(
+                map.underlying_column().compact_string_buffers(),
+                map.underlying_offsets(),
+            ))),
+            other => other,
+        }
+    }
+
     pub fn maybe_gc(self) -> Self {
         match self {
             Column::String(c) => Column::String(c.maybe_gc()),
