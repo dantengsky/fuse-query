@@ -48,7 +48,9 @@ use databend_common_storages_fuse::io::BlockReader;
 use databend_common_storages_fuse::io::DataItem;
 use databend_common_storages_fuse::io::WriteSettings;
 use databend_common_storages_fuse::io::serialize_block;
+use databend_common_storages_fuse::operations::BlockScanStats;
 use databend_common_storages_fuse::operations::ReadState;
+use databend_common_storages_fuse::operations::ReadStateOutput;
 use databend_query::sessions::TableContext;
 use databend_query::sessions::TableContextRuntimeFilter;
 use databend_query::test_kits::TestFixture;
@@ -102,8 +104,20 @@ async fn run_prewhere_test_with_threshold(
     assert_eq!(read_state.use_single_prewhere_reader, expect_single_reader);
 
     // Use the new unified API that handles all states internally
-    let (data_block, row_selection, bitmap_selection) =
-        read_state.deserialize_and_filter(column_chunks.clone(), &part)?;
+    let ReadStateOutput {
+        block: data_block,
+        row_selection,
+        bitmap_selection,
+        scan_stats,
+    } = read_state.deserialize_and_filter(column_chunks.clone(), &part)?;
+
+    // Scan statistics describe the whole block that was read and decoded,
+    // not the single row left after prewhere and runtime filters. All five
+    // Int32 columns are projected, so the block is 5 rows * 5 * 4 bytes.
+    assert_eq!(scan_stats, BlockScanStats {
+        rows: num_rows,
+        bytes: num_rows * 5 * std::mem::size_of::<i32>(),
+    });
 
     // Verify the final data_block (all columns in order: x, y, z, d, e)
     // The new API internally handles all filter stages (prewhere + runtime filters)

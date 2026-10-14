@@ -36,5 +36,7 @@ pub use fuse_rows_fetcher::row_fetch_processor;
 pub use fuse_source::build_fuse_source_pipeline;
 pub use native_data_source_deserializer::NativeDeserializeDataTransform;
 pub use parquet_data_source_deserializer::DeserializeDataTransform;
+pub use read_state::BlockScanStats;
 pub use read_state::ReadState;
+pub use read_state::ReadStateOutput;
 pub use util::need_reserve_block_info;

@@ -43,6 +43,7 @@ use roaring::RoaringTreemap;
 use super::parquet_data_source::ParquetDataSource;
 use super::read_data_source::ReadDataSource;
 use super::read_state::ReadState;
+use super::read_state::ReadStateOutput;
 use super::util::add_data_block_meta;
 use crate::fuse_part::FuseBlockPartInfo;
 use crate::io::AggIndexReader;
@@ -230,18 +231,30 @@ impl Processor for DeserializeDataTransform {
                         )?);
                     }
 
-                    let (mut data_block, row_selection, bitmap_selection) = self
+                    let ReadStateOutput {
+                        block: mut data_block,
+                        row_selection,
+                        bitmap_selection,
+                        mut scan_stats,
+                    } = self
                         .read_state
                         .as_ref()
                         .unwrap()
                         .deserialize_and_filter(columns_chunks, part)?;
 
+                    // Virtual columns are read in addition to the columns `ReadState`
+                    // accounted for, so add them to the scan statistics.
                     if let Some(virtual_reader) = self.virtual_reader.as_ref() {
+                        let bytes_before = data_block.memory_size();
                         data_block = virtual_reader.deserialize_virtual_columns(
                             data_block,
                             virtual_data,
                             row_selection.as_ref().map(|s| s.selection.clone()),
                         )?;
+                        scan_stats.add_decoded_bytes(
+                            data_block.memory_size().saturating_sub(bytes_before),
+                            data_block.num_rows(),
+                        );
                     }
 
                     // Perf.
@@ -251,14 +264,19 @@ impl Processor for DeserializeDataTransform {
                         );
                     }
 
+                    // Report the rows and bytes the scan actually processed, not what
+                    // survived prewhere / runtime filters: scan progress drives
+                    // `system.processes`, `system_history.query_history` and the
+                    // `ScanBytes` profile, which measure scan workload rather than
+                    // filter output.
                     let progress_values = ProgressValues {
-                        rows: data_block.num_rows(),
-                        bytes: data_block.memory_size(),
+                        rows: scan_stats.rows,
+                        bytes: scan_stats.bytes,
                     };
                     self.scan_progress.incr(&progress_values);
                     Profile::record_usize_profile(
                         ProfileStatisticsName::ScanBytes,
-                        data_block.memory_size(),
+                        scan_stats.bytes,
                     );
 
                     let mut data_block =
