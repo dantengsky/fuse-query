@@ -25,6 +25,8 @@ use databend_common_ast::ast::OptimizeTableAction;
 use databend_common_ast::ast::OptimizeTableStmt;
 use databend_common_ast::ast::Statement;
 use databend_common_base::base::short_sql;
+use databend_common_base::runtime::ThreadTracker;
+use databend_common_base::runtime::TrackingPayloadExt;
 use databend_common_catalog::query_kind::QueryKind;
 use databend_common_exception::ErrorCode;
 use databend_common_exception::Result;
@@ -85,6 +87,23 @@ pub trait Interpreter: Sync + Send {
     #[async_backtrace::framed]
     #[fastrace::trace]
     async fn execute(&self, ctx: Arc<QueryContext>) -> Result<SendableDataBlockStream> {
+        let query_io_stats = ctx.get_local_io_stats();
+        let already_tracked =
+            ThreadTracker::io_stats().is_some_and(|current| Arc::ptr_eq(current, &query_io_stats));
+        if already_tracked {
+            return self.execute_tracked(ctx).await;
+        }
+
+        let mut tracking_payload = ThreadTracker::new_tracking_payload();
+        tracking_payload.io_stats = Some(query_io_stats);
+        tracking_payload.tracking(self.execute_tracked(ctx)).await
+    }
+
+    /// Runs inside a tracking scope whose `io_stats` is the query's own
+    /// counter, so the pipeline nodes built here (which capture the current
+    /// payload) attribute their storage IO to the query no matter which
+    /// handler called us. Handlers that already installed it see no change.
+    async fn execute_tracked(&self, ctx: Arc<QueryContext>) -> Result<SendableDataBlockStream> {
         log_query_start(&ctx);
         match self.execute_inner(ctx.clone()).await {
             Ok(stream) => Ok(stream),
