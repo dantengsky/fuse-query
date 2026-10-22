@@ -4096,11 +4096,7 @@ name = "databend-common-meta-app-storage"
 version = "0.1.0"
 dependencies = [
  "databend-common-exception",
- "log",
- "opendal",
- "parking_lot 0.12.3",
  "serde",
- "tokio",
 ]
 
 [[package]]
@@ -4516,6 +4512,7 @@ dependencies = [
  "log",
  "lru",
  "opendal",
+ "parking_lot 0.12.3",
  "parquet 56.2.0",
  "prometheus-client 0.22.3",
  "regex",

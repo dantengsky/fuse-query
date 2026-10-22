@@ -44,6 +44,7 @@ use databend_common_meta_app::storage::StorageParams;
 use databend_common_meta_app::storage::StorageS3Config;
 use databend_common_meta_app::storage::StorageWebhdfsConfig;
 use databend_common_storage::STDIN_FD;
+use databend_common_storage::auto_detect_storage_params;
 use log::LevelFilter;
 use log::info;
 use opendal::Scheme;
@@ -618,7 +619,7 @@ pub async fn parse_uri_location(
         }
     };
 
-    let sp = sp.auto_detect().await.map_err(|err| {
+    let sp = auto_detect_storage_params(sp).await.map_err(|err| {
         Error::new(
             ErrorKind::InvalidInput,
             anyhow!("storage params is invalid for it's auto detect failed for {err:?}"),

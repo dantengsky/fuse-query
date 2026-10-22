@@ -31,6 +31,7 @@ use databend_common_meta_app::storage::StorageParams;
 use databend_common_meta_app::tenant::Tenant;
 use databend_common_meta_app::tenant::TenantQuota;
 use databend_common_storage::StorageConfig;
+use databend_common_storage::auto_detect_storage_params;
 use databend_common_tracing::Config as LogConfig;
 use databend_meta_client::DEFAULT_GRPC_MESSAGE_SIZE;
 use databend_meta_client::RpcClientConf;
@@ -94,7 +95,7 @@ impl InnerConfig {
         cfg.query.node_secret = GlobalUniq::unique();
 
         // Handle auto detect for storage params.
-        cfg.storage.params = cfg.storage.params.auto_detect().await?;
+        cfg.storage.params = auto_detect_storage_params(cfg.storage.params).await?;
 
         // Set default allow_credential_chain to true for config storage params.
         if let StorageParams::S3(s3) = &mut cfg.storage.params

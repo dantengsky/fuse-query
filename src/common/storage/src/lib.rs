@@ -64,6 +64,9 @@ mod runtime_layer;
 
 pub mod dummy_delete_layer;
 
+mod s3_region;
+pub use s3_region::auto_detect_storage_params;
+
 mod column_node;
 pub use column_node::ColumnNode;
 pub use column_node::ColumnNodes;
