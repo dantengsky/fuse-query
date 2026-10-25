@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::backtrace::Backtrace;
+use std::cell::Cell;
 use std::future::Future;
 use std::panic::Location;
 use std::pin::Pin;
@@ -126,6 +127,12 @@ impl<S: TrySpawn> TrySpawn for Arc<S> {
     }
 }
 
+thread_local! {
+    // Identify the runtime owning this OS thread without Tokio's unstable Handle::id API.
+    // The builder callback and Dropper keep the pointed-to allocation alive.
+    static RUNTIME_THREAD_TOKEN: Cell<*const ()> = const { Cell::new(std::ptr::null()) };
+}
+
 /// Tokio Runtime wrapper.
 /// If a runtime is in an asynchronous context, shutdown it first.
 pub struct Runtime {
@@ -141,7 +148,13 @@ pub struct Runtime {
 
 impl Runtime {
     fn create(name: Option<String>, tracker: Arc<MemStat>, builder: &mut Builder) -> Result<Self> {
+        let runtime_token = Arc::new(());
+        let thread_token = runtime_token.clone();
         let runtime = builder
+            .on_thread_start(move || {
+                ThreadTracker::init();
+                RUNTIME_THREAD_TOKEN.with(|token| token.set(Arc::as_ptr(&thread_token)));
+            })
             .build()
             .map_err(|tokio_error| ErrorCode::TokioError(tokio_error.to_string()))?;
 
@@ -158,7 +171,7 @@ impl Runtime {
                 true => false,
                 false => {
                     let instant = Instant::now();
-                    // We wait up to 3 seconds to complete the runtime shutdown.
+                    // Bound Tokio shutdown in debug builds; joining this thread is unbounded.
                     runtime.shutdown_timeout(Duration::from_secs(3));
 
                     instant.elapsed() >= Duration::from_secs(3)
@@ -171,6 +184,7 @@ impl Runtime {
             tracker,
             _dropper: Dropper {
                 name,
+                runtime_token,
                 close: Some(send_stop),
                 join_handler: Some(join_handler),
             },
@@ -200,13 +214,7 @@ impl Runtime {
             runtime_builder.thread_stack_size(20 * 1024 * 1024);
         }
 
-        Self::create(
-            None,
-            mem_stat,
-            runtime_builder
-                .enable_all()
-                .on_thread_start(ThreadTracker::init),
-        )
+        Self::create(None, mem_stat, runtime_builder.enable_all())
     }
 
     #[allow(unused_mut)]
@@ -239,10 +247,7 @@ impl Runtime {
         Self::create(
             thread_name,
             mem_stat,
-            runtime_builder
-                .enable_all()
-                .on_thread_start(ThreadTracker::init)
-                .worker_threads(workers),
+            runtime_builder.enable_all().worker_threads(workers),
         )
     }
 
@@ -370,6 +375,7 @@ impl TrySpawn for Runtime {
 /// Dropping the dropper will cause runtime to shutdown.
 pub struct Dropper {
     name: Option<String>,
+    runtime_token: Arc<()>,
     close: Option<oneshot::Sender<()>>,
     join_handler: Option<ThreadJoinHandle<bool>>,
 }
@@ -380,6 +386,17 @@ impl Drop for Dropper {
             // Send a signal to say i am dropping.
             if let Some(close_sender) = self.close.take() {
                 if close_sender.send(()).is_ok() {
+                    if RUNTIME_THREAD_TOKEN
+                        .try_with(|token| token.get() == Arc::as_ptr(&self.runtime_token))
+                        .unwrap_or(false)
+                    {
+                        // Shutdown waits for this runtime's async and blocking workers.
+                        // Let the owning thread finish shutdown after this worker exits,
+                        // instead of joining it and creating a circular wait.
+                        drop(self.join_handler.take());
+                        return;
+                    }
+
                     match self.join_handler.take().unwrap().join() {
                         Err(e) => warn!("Runtime dropper panic, {:?}", e),
                         Ok(true) => {
