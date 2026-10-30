@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::cell::Cell;
 use std::sync::Arc;
 
 use databend_common_base::runtime::drop_guard;
@@ -51,12 +52,21 @@ pub struct WindowFuncAggImpl {
     agg: Arc<dyn AggregateFunction>,
     place: StateAddr,
     args: Vec<usize>,
+    // Whether `place` holds an initialized state that must be dropped before
+    // it is re-initialized or released.
+    initialized: Cell<bool>,
 }
 
 impl WindowFuncAggImpl {
     #[inline]
     pub fn reset(&self) {
+        if self.initialized.replace(false) && self.agg.need_manual_drop_state() {
+            unsafe {
+                self.agg.drop_state(self.place);
+            }
+        }
         self.agg.init_state(self.place);
+        self.initialized.set(true);
     }
 
     #[inline]
@@ -78,7 +88,7 @@ impl WindowFuncAggImpl {
 impl Drop for WindowFuncAggImpl {
     fn drop(&mut self) {
         drop_guard(move || {
-            if self.agg.need_manual_drop_state() {
+            if self.initialized.get() && self.agg.need_manual_drop_state() {
                 unsafe {
                     self.agg.drop_state(self.place);
                 }
@@ -243,6 +253,7 @@ impl WindowFunctionImpl {
                     agg,
                     place,
                     args,
+                    initialized: Cell::new(false),
                 };
                 agg.reset();
                 Self::Aggregate(agg)
