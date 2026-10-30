@@ -215,11 +215,6 @@ impl<const NULLABLE_RESULT: bool> AggregateFunction
     }
 
     fn merge(&self, place: StateAddr, reader: &mut &[u8]) -> Result<()> {
-        if self.get_flag(place) == 0 {
-            // initial the state to remove the dirty stats
-            self.init_state(place);
-        }
-
         if NULLABLE_RESULT {
             let flag = reader[reader.len() - 1];
             if flag == 1 {
@@ -233,11 +228,6 @@ impl<const NULLABLE_RESULT: bool> AggregateFunction
     }
 
     fn merge_states(&self, place: StateAddr, rhs: StateAddr) -> Result<()> {
-        if self.get_flag(place) == 0 {
-            // initial the state to remove the dirty stats
-            self.init_state(place);
-        }
-
         if self.get_flag(rhs) == 1 {
             self.set_flag(place, 1);
             self.nested.merge_states(place, rhs)?;
