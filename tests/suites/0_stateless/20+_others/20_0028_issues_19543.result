@@ -1,0 +1,6 @@
+string_agg distinct nullable: allocated growth is less than 64 MiB
+array_agg distinct nullable: allocated growth is less than 64 MiB
+sum distinct nullable: allocated growth is less than 64 MiB
+max array: allocated growth is less than 64 MiB
+min binary: allocated growth is less than 64 MiB
+intersect_count bitmap: allocated growth is less than 64 MiB
