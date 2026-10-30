@@ -497,6 +497,14 @@ where
     fn merge_result(&self, place: StateAddr, builder: &mut ColumnBuilder) -> Result<()> {
         self.inner.merge_result(place, builder)
     }
+
+    fn need_manual_drop_state(&self) -> bool {
+        self.inner.need_manual_drop_state()
+    }
+
+    unsafe fn drop_state(&self, place: StateAddr) {
+        self.inner.drop_state(place)
+    }
 }
 
 impl<T> fmt::Display for AggregateBitmapIntersectCountFunction<T>
