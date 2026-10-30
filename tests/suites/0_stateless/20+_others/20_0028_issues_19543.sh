@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Regression test for aggregate state leaks (upstream #19543/#19544 and #20145/#20146).
+# Regression test for aggregate state leaks (upstream #19543/#19544, #20145/#20146 and #19841).
 # - DISTINCT aggregates over nullable arguments re-initialized their state during merge
 #   and leaked the previous distinct set once per group.
 # - min/max/any over heap-backed types (Array, Binary, Bitmap, ...) never dropped their state.
+# - Window aggregates re-initialized their state on every frame/partition reset without
+#   dropping the previous one.
 # Each query is run repeatedly; jemalloc allocated bytes must not keep growing.
 
 CURDIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -52,3 +54,7 @@ check "max array" "SELECT /*+ set_var(max_threads=16) */ number % 400000 AS k, M
 check "min binary" "SELECT /*+ set_var(max_threads=16) */ number % 400000 AS k, MIN(to_binary(concat('bin_', (number % 1000)::string))) FROM numbers_mt(1600000) GROUP BY 1 IGNORE_RESULT"
 
 check "intersect_count bitmap" "SELECT /*+ set_var(max_threads=16) */ number % 400000 AS k, intersect_count(1, 2)(build_bitmap([number % 1000]), number % 3) FROM numbers_mt(1600000) GROUP BY 1 IGNORE_RESULT"
+
+check "window approx_count_distinct per partition" "SELECT * FROM (SELECT approx_count_distinct(number % 1000) OVER (PARTITION BY number % 10000) AS m FROM numbers(500000)) IGNORE_RESULT"
+
+check "window array_agg sliding frame" "SELECT * FROM (SELECT array_agg(concat('v_', (number % 1000)::string, '_xxxxxxxxxxxxxxxx')) OVER (PARTITION BY number % 100000 ORDER BY number ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING) AS m FROM numbers(1600000)) IGNORE_RESULT"
