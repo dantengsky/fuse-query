@@ -1,0 +1,105 @@
+# Integer-to-string round-trip join keys are hashed as integers inside the join while the
+# exchange still partitions on the coerced key. Both must agree for every value under shuffle
+# and broadcast distribution, including nullable keys, mixed widths and negative values.
+
+statement ok
+create or replace table jck_a (id Int64 null, w Int32) row_per_block = 1000;
+
+statement ok
+create or replace table jck_b (id Int32 null, w Int32) row_per_block = 1000;
+
+statement ok
+create or replace table jck_c (id UInt16 not null, w Int32) row_per_block = 1000;
+
+statement ok
+insert into jck_a
+select if(number % 17 = 0, null, (number % 4000) - 2000), number from numbers(20000);
+
+statement ok
+insert into jck_b
+select if(number % 13 = 0, null, (number % 3000) - 1500), number from numbers(6000);
+
+statement ok
+insert into jck_c
+select number % 2500, number from numbers(5000);
+
+statement ok
+set enforce_shuffle_join = 1;
+
+query T
+select x.c = y.c and x.s = y.s
+from (
+    select count() c, sum(a.w + b.w) s from jck_a a join jck_b b on a.id = cast(b.id as string)
+) x, (
+    select count() c, sum(a.w + b.w) s from jck_a a join jck_b b on a.id = b.id
+) y;
+----
+1
+
+query T
+select x.c = y.c and x.s = y.s
+from (
+    select count() c, sum(a.w + b.w) s from jck_a a join jck_b b on cast(a.id as string) = cast(b.id as string)
+) x, (
+    select count() c, sum(a.w + b.w) s from jck_a a join jck_b b on a.id = b.id
+) y;
+----
+1
+
+query T
+select x.c = y.c and x.s = y.s
+from (
+    select count() c, sum(a.w + c.w) s from jck_a a join jck_c c on cast(a.id as string) = c.id
+) x, (
+    select count() c, sum(a.w + c.w) s from jck_a a join jck_c c on a.id = c.id
+) y;
+----
+1
+
+query T
+select x.c = y.c and x.s = y.s
+from (
+    select count() c, sum(a.w) s from jck_a a left join jck_b b on cast(a.id as string) = b.id where b.id is null
+) x, (
+    select count() c, sum(a.w) s from jck_a a where not exists (select 1 from jck_b b where a.id = b.id)
+) y;
+----
+1
+
+statement ok
+unset enforce_shuffle_join;
+
+statement ok
+set enforce_broadcast_join = 1;
+
+query T
+select x.c = y.c and x.s = y.s
+from (
+    select count() c, sum(a.w + b.w) s from jck_a a join jck_b b on a.id = cast(b.id as string)
+) x, (
+    select count() c, sum(a.w + b.w) s from jck_a a join jck_b b on a.id = b.id
+) y;
+----
+1
+
+query T
+select x.c = y.c and x.s = y.s
+from (
+    select count() c, sum(a.w + c.w) s from jck_a a join jck_c c on cast(a.id as string) = c.id
+) x, (
+    select count() c, sum(a.w + c.w) s from jck_a a join jck_c c on a.id = c.id
+) y;
+----
+1
+
+statement ok
+unset enforce_broadcast_join;
+
+statement ok
+drop table jck_a;
+
+statement ok
+drop table jck_b;
+
+statement ok
+drop table jck_c;

@@ -1,0 +1,131 @@
+# A join runtime filter drops probe-side rows at the scan. Below an ASOF or SINGLE join that
+# is only safe on the non-lookup side: the lookup side picks one row per probe row (ASOF: the
+# closest one, SINGLE: the only one), so removing lookup rows whose join key is not in the
+# build set changes which row is picked instead of merely removing rows that could never match.
+
+statement ok
+drop table if exists rf_lookup_dim;
+
+statement ok
+drop table if exists rf_lookup_evt;
+
+statement ok
+drop table if exists rf_lookup_ref;
+
+statement ok
+create table rf_lookup_dim (v Int32);
+
+statement ok
+create table rf_lookup_evt (k Int32, t Int32, v Int32) row_per_block = 500;
+
+statement ok
+create table rf_lookup_ref (k Int32, t Int32) row_per_block = 500;
+
+statement ok
+insert into rf_lookup_dim values (1);
+
+# For every key the latest event (t = 10) has v = 2, the older one (t = 5) has v = 1.
+statement ok
+insert into rf_lookup_evt select number, 10, 2 from numbers(3000);
+
+statement ok
+insert into rf_lookup_evt select number, 5, 1 from numbers(3000);
+
+statement ok
+insert into rf_lookup_ref select number, 12 from numbers(3000);
+
+statement ok
+set enable_join_runtime_filter = 1;
+
+statement ok
+set runtime_filter_wait_timeout_ms = 5000;
+
+statement ok
+set inlist_runtime_filter_threshold = 1000;
+
+statement ok
+set min_max_runtime_filter_threshold = 1000;
+
+statement ok
+set bloom_runtime_filter_threshold = 1000;
+
+statement ok
+set join_runtime_filter_selectivity_threshold = 101;
+
+# Without the dim join every ref row picks the t = 10 event (v = 2).
+query III
+select count(), min(e.v), max(e.v)
+from rf_lookup_ref r asof join rf_lookup_evt e on r.k = e.k and r.t >= e.t;
+----
+3000 2 2
+
+# ASOF picks v = 2 for every key, which is not in dim, so the result is empty. If the runtime
+# filter (v in {1}) were applied to the rf_lookup_evt scan, ASOF would pick the t = 5 event
+# instead and return 3000 rows.
+query I
+select count()
+from rf_lookup_ref r
+asof join rf_lookup_evt e on r.k = e.k and r.t >= e.t
+join rf_lookup_dim d on e.v = d.v;
+----
+0
+
+query I
+select count()
+from rf_lookup_ref r
+asof left join rf_lookup_evt e on r.k = e.k and r.t >= e.t
+join rf_lookup_dim d on e.v = d.v;
+----
+0
+
+# RIGHT ASOF still matches every rf_lookup_evt row against rf_lookup_ref (it only preserves the
+# right side), so both events of a key are matched and the v = 1 rows join dim.
+query I
+select count()
+from rf_lookup_evt e
+asof right join rf_lookup_ref r on r.k = e.k and r.t >= e.t
+join rf_lookup_dim d on e.v = d.v;
+----
+3000
+
+# Every key has two events, so the scalar subquery must fail. If the runtime filter were applied
+# to the rf_lookup_evt scan only one event per key would remain and the query would succeed.
+query error 1001.*Scalar subquery can't return more than one row
+select count()
+from (select r.k, (select e.v from rf_lookup_evt e where e.k = r.k) as v from rf_lookup_ref r) s
+join rf_lookup_dim d on s.v = d.v;
+
+# A runtime filter on the SINGLE join's preserved side stays allowed.
+query I
+select count()
+from (select r.k, (select e.v from rf_lookup_evt e where e.k = r.k and e.t = 5) as v from rf_lookup_ref r) s
+join rf_lookup_dim d on s.v = d.v;
+----
+3000
+
+statement ok
+unset join_runtime_filter_selectivity_threshold;
+
+statement ok
+unset bloom_runtime_filter_threshold;
+
+statement ok
+unset min_max_runtime_filter_threshold;
+
+statement ok
+unset inlist_runtime_filter_threshold;
+
+statement ok
+unset runtime_filter_wait_timeout_ms;
+
+statement ok
+unset enable_join_runtime_filter;
+
+statement ok
+drop table rf_lookup_dim;
+
+statement ok
+drop table rf_lookup_evt;
+
+statement ok
+drop table rf_lookup_ref;

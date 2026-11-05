@@ -1,0 +1,258 @@
+# Differential check of the outer-join exclusion -> anti-join rewrite against NOT EXISTS, on data
+# with NULL keys on both sides, duplicate keys, composite keys and non-equi ON predicates, under
+# both shuffle and broadcast distribution.
+
+statement ok
+create or replace table oja_l (k int null, k2 int null, payload int null) row_per_block = 1000;
+
+statement ok
+create or replace table oja_r (k int null, k2 int null, payload int null) row_per_block = 1000;
+
+statement ok
+create or replace table oja_r2 (k int null, payload int null) row_per_block = 1000;
+
+statement ok
+insert into oja_l
+select
+    if(number % 7 = 0, null, number % 1000),
+    if(number % 11 = 0, null, number % 3),
+    if(number % 13 = 0, null, number)
+from numbers(20000);
+
+statement ok
+insert into oja_r
+select
+    if(number % 5 = 0, null, number % 600),
+    if(number % 9 = 0, null, number % 2),
+    if(number % 4 = 0, null, number * 2)
+from numbers(5000);
+
+statement ok
+insert into oja_r2
+select
+    if(number % 3 = 0, null, 500 + number % 700),
+    number
+from numbers(2000);
+
+# --------------------------------------------------------------------------------------------
+# Shuffle join
+# --------------------------------------------------------------------------------------------
+
+statement ok
+set enforce_shuffle_join = 1;
+
+# single key
+query T
+select a.c = b.c and a.s = b.s and a.p = b.p
+from (
+    select count() c, coalesce(sum(l.k), 0) s, coalesce(sum(l.payload), 0) p
+    from oja_l l left join oja_r r on l.k = r.k
+    where r.k is null
+) a, (
+    select count() c, coalesce(sum(l.k), 0) s, coalesce(sum(l.payload), 0) p
+    from oja_l l
+    where not exists (select 1 from oja_r r where r.k = l.k)
+) b;
+----
+1
+
+# null-extended non-key columns must come out as NULL
+query II
+select count(r.payload), count(r.k2)
+from oja_l l left join oja_r r on l.k = r.k
+where r.k is null;
+----
+0 0
+
+# composite key, IS NULL on the second key
+query T
+select a.c = b.c and a.s = b.s
+from (
+    select count() c, coalesce(sum(l.payload), 0) s
+    from oja_l l left join oja_r r on l.k = r.k and l.k2 = r.k2
+    where r.k2 is null
+) a, (
+    select count() c, coalesce(sum(l.payload), 0) s
+    from oja_l l
+    where not exists (select 1 from oja_r r where r.k = l.k and r.k2 = l.k2)
+) b;
+----
+1
+
+# non-equi ON predicate
+query T
+select a.c = b.c and a.s = b.s
+from (
+    select count() c, coalesce(sum(l.payload), 0) s
+    from oja_l l left join oja_r r on l.k = r.k and r.payload > l.payload
+    where r.k is null
+) a, (
+    select count() c, coalesce(sum(l.payload), 0) s
+    from oja_l l
+    where not exists (select 1 from oja_r r where r.k = l.k and r.payload > l.payload)
+) b;
+----
+1
+
+# extra WHERE predicates stay above the anti join
+query T
+select a.c = b.c and a.s = b.s
+from (
+    select count() c, coalesce(sum(l.payload), 0) s
+    from oja_l l left join oja_r r on l.k = r.k
+    where r.k is null and l.payload % 2 = 0 and l.k2 is not null
+) a, (
+    select count() c, coalesce(sum(l.payload), 0) s
+    from oja_l l
+    where not exists (select 1 from oja_r r where r.k = l.k)
+      and l.payload % 2 = 0 and l.k2 is not null
+) b;
+----
+1
+
+# right outer join mirror
+query T
+select a.c = b.c and a.s = b.s
+from (
+    select count() c, coalesce(sum(r.payload), 0) s
+    from oja_l l right join oja_r r on l.k = r.k
+    where l.k is null
+) a, (
+    select count() c, coalesce(sum(r.payload), 0) s
+    from oja_r r
+    where not exists (select 1 from oja_l l where l.k = r.k)
+) b;
+----
+1
+
+# IS NULL on a non-nullable derived column coming through UNION ALL
+query T
+select a.c = b.c and a.s = b.s
+from (
+    select count() c, coalesce(sum(l.payload), 0) s
+    from oja_l l left join (
+        select k, 1 as m from oja_r
+        union all
+        select k, 2 as m from oja_r2
+    ) r on l.k = r.k
+    where r.m is null
+) a, (
+    select count() c, coalesce(sum(l.payload), 0) s
+    from oja_l l
+    where not exists (select 1 from oja_r r where r.k = l.k)
+      and not exists (select 1 from oja_r2 r where r.k = l.k)
+) b;
+----
+1
+
+# the null-extended columns of the rewritten join feed another join: NULL never matches
+query I
+select count()
+from (
+    select l.k, r.payload as rp
+    from oja_l l left join oja_r r on l.k = r.k
+    where r.k is null
+) x join oja_r2 t on x.rp = t.payload;
+----
+0
+
+# ... but the preserved side still joins normally
+query T
+select a.c = b.c
+from (
+    select count() c
+    from (
+        select l.k, l.payload as lp
+        from oja_l l left join oja_r r on l.k = r.k
+        where r.k is null
+    ) x join oja_r2 t on x.lp = t.payload
+) a, (
+    select count() c
+    from oja_l l join oja_r2 t on l.payload = t.payload
+    where not exists (select 1 from oja_r r where r.k = l.k)
+) b;
+----
+1
+
+# --------------------------------------------------------------------------------------------
+# Broadcast join
+# --------------------------------------------------------------------------------------------
+
+statement ok
+unset enforce_shuffle_join;
+
+statement ok
+set enforce_broadcast_join = 1;
+
+query T
+select a.c = b.c and a.s = b.s and a.p = b.p
+from (
+    select count() c, coalesce(sum(l.k), 0) s, coalesce(sum(l.payload), 0) p
+    from oja_l l left join oja_r r on l.k = r.k
+    where r.k is null
+) a, (
+    select count() c, coalesce(sum(l.k), 0) s, coalesce(sum(l.payload), 0) p
+    from oja_l l
+    where not exists (select 1 from oja_r r where r.k = l.k)
+) b;
+----
+1
+
+query T
+select a.c = b.c and a.s = b.s
+from (
+    select count() c, coalesce(sum(l.payload), 0) s
+    from oja_l l left join oja_r r on l.k = r.k and r.payload > l.payload
+    where r.k is null
+) a, (
+    select count() c, coalesce(sum(l.payload), 0) s
+    from oja_l l
+    where not exists (select 1 from oja_r r where r.k = l.k and r.payload > l.payload)
+) b;
+----
+1
+
+query T
+select a.c = b.c and a.s = b.s
+from (
+    select count() c, coalesce(sum(r.payload), 0) s
+    from oja_l l right join oja_r r on l.k = r.k
+    where l.k is null
+) a, (
+    select count() c, coalesce(sum(r.payload), 0) s
+    from oja_r r
+    where not exists (select 1 from oja_l l where l.k = r.k)
+) b;
+----
+1
+
+query T
+select a.c = b.c and a.s = b.s
+from (
+    select count() c, coalesce(sum(l.payload), 0) s
+    from oja_l l left join (
+        select k, 1 as m from oja_r
+        union all
+        select k, 2 as m from oja_r2
+    ) r on l.k = r.k
+    where r.m is null
+) a, (
+    select count() c, coalesce(sum(l.payload), 0) s
+    from oja_l l
+    where not exists (select 1 from oja_r r where r.k = l.k)
+      and not exists (select 1 from oja_r2 r where r.k = l.k)
+) b;
+----
+1
+
+statement ok
+unset enforce_broadcast_join;
+
+statement ok
+drop table oja_l;
+
+statement ok
+drop table oja_r;
+
+statement ok
+drop table oja_r2;

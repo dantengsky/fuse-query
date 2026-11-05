@@ -1,0 +1,131 @@
+# Join runtime filters pushed through UnionAll probe sides must not change results: every branch
+# scan receives the filter, branches below row-count-sensitive operators (LIMIT, window) must
+# not, and branches whose column type differs from the union output are skipped.
+
+statement ok
+create or replace table rfu_build (k Int32 null, tag Int32) row_per_block = 1000;
+
+statement ok
+create or replace table rfu_p1 (k Int32 null, w Int64) row_per_block = 500;
+
+statement ok
+create or replace table rfu_p2 (k Int32 not null, w Int64) row_per_block = 500;
+
+statement ok
+create or replace table rfu_p3 (k Int64 null, w Int64) row_per_block = 500;
+
+statement ok
+insert into rfu_build values (3, 1), (77, 2), (1500, 3), (null, 4);
+
+statement ok
+insert into rfu_p1 select if(number % 31 = 0, null, number % 1000), number from numbers(10000);
+
+statement ok
+insert into rfu_p2 select number % 2000, number from numbers(10000);
+
+statement ok
+insert into rfu_p3 select if(number % 29 = 0, null, number % 100), number from numbers(10000);
+
+statement ok
+set enable_join_runtime_filter = 1;
+
+statement ok
+set runtime_filter_wait_timeout_ms = 5000;
+
+statement ok
+set inlist_runtime_filter_threshold = 1000;
+
+statement ok
+set min_max_runtime_filter_threshold = 1000;
+
+statement ok
+set bloom_runtime_filter_threshold = 1000;
+
+statement ok
+set join_runtime_filter_selectivity_threshold = 101;
+
+# nullable + non-nullable branches of the same base type
+query III
+select count(), sum(u.w), sum(b.tag)
+from (select k, w from rfu_p1 union all select k, w from rfu_p2) u
+join rfu_build b on u.k = b.k;
+----
+34 156623 58
+
+# aliases on top of the union
+query III
+select count(), sum(u.w2), sum(b.tag)
+from (select k as k2, w as w2 from (select k, w from rfu_p1 union all select k, w from rfu_p2)) u
+join rfu_build b on u.k2 = b.k;
+----
+34 156623 58
+
+# a branch with a different key type (Int64) is coerced; result must be identical
+query III
+select count(), sum(u.w), sum(b.tag)
+from (select k, w from rfu_p1 union all select k, w from rfu_p3) u
+join rfu_build b on u.k = b.k;
+----
+211 1049603 316
+
+# a branch under LIMIT keeps all of its rows before the limit applies
+query II
+select count(), sum(u.w)
+from (select k, w from rfu_p1 union all (select k, w from rfu_p2 order by w limit 10)) u
+join rfu_build b on u.k = b.k;
+----
+20 88726
+
+# a branch with a window function
+query II
+select count(), sum(u.rn)
+from (
+    select k, w, 0 as rn from rfu_p1
+    union all
+    select k, w, row_number() over (order by w desc) as rn from rfu_p2
+) u
+join rfu_build b on u.k = b.k;
+----
+34 82100
+
+# three-way union
+query II
+select count(), sum(u.w)
+from (
+    select k, w from rfu_p1
+    union all select k, w from rfu_p2
+    union all select cast(k as Int32), w from rfu_p3
+) u
+join rfu_build b on u.k = b.k;
+----
+226 1117503
+
+statement ok
+unset join_runtime_filter_selectivity_threshold;
+
+statement ok
+unset bloom_runtime_filter_threshold;
+
+statement ok
+unset min_max_runtime_filter_threshold;
+
+statement ok
+unset inlist_runtime_filter_threshold;
+
+statement ok
+unset runtime_filter_wait_timeout_ms;
+
+statement ok
+unset enable_join_runtime_filter;
+
+statement ok
+drop table rfu_build;
+
+statement ok
+drop table rfu_p1;
+
+statement ok
+drop table rfu_p2;
+
+statement ok
+drop table rfu_p3;

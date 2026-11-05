@@ -1,0 +1,80 @@
+# With a shuffle join the build side is partitioned across nodes. A build side that is empty on
+# some nodes but not on others must not make those nodes drop probe rows that belong to another
+# partition, and must not change the result of any join type. The build table below has a single
+# key value, so all but one node receive an empty build partition.
+
+statement ok
+create or replace table ebp_probe (k Int64 null, w Int64) row_per_block = 1000;
+
+statement ok
+create or replace table ebp_build (k Int64 null, w Int64);
+
+statement ok
+insert into ebp_probe select if(number % 97 = 0, null, number % 500), number from numbers(20000);
+
+statement ok
+insert into ebp_build values (7, 1), (7, 2), (null, 3);
+
+statement ok
+set enable_experimental_new_join = 1;
+
+statement ok
+set enforce_shuffle_join = 1;
+
+query II
+select count(), sum(p.w) from ebp_probe p inner join ebp_build b on p.k = b.k;
+----
+78 774546
+
+query II
+select count(), sum(p.w) from ebp_probe p left semi join ebp_build b on p.k = b.k;
+----
+39 387273
+
+query II
+select count(), sum(p.w) from ebp_probe p left anti join ebp_build b on p.k = b.k;
+----
+19961 199602727
+
+query III
+select count(), count(p.w), sum(b.w) from ebp_probe p right join ebp_build b on p.k = b.k;
+----
+79 78 120
+
+query II
+select count(), sum(b.w) from ebp_probe p right semi join ebp_build b on p.k = b.k;
+----
+2 3
+
+query II
+select count(), sum(b.w) from ebp_probe p right anti join ebp_build b on p.k = b.k;
+----
+1 3
+
+query III
+select count(), count(b.w), sum(p.w) from ebp_probe p left join ebp_build b on p.k = b.k;
+----
+20039 78 200377273
+
+# A build side that is empty everywhere.
+query I
+select count() from ebp_probe p inner join ebp_build b on p.k = b.k and b.w > 100;
+----
+0
+
+query II
+select count(), sum(p.w) from ebp_probe p left anti join (select * from ebp_build where w > 100) b on p.k = b.k;
+----
+20000 199990000
+
+statement ok
+unset enforce_shuffle_join;
+
+statement ok
+unset enable_experimental_new_join;
+
+statement ok
+drop table ebp_probe;
+
+statement ok
+drop table ebp_build;

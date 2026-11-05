@@ -245,9 +245,36 @@ fn collect_probe_column_lineage(
         _ => {}
     }
 
-    for child in s_expr.children() {
+    for child in row_filter_transparent_children(s_expr) {
         collect_probe_column_lineage(metadata, child, edges);
     }
+}
+
+/// Children of `s_expr` into which a runtime filter may be pushed.
+///
+/// For most operators this is every child. ASOF and SINGLE joins look up one row of their
+/// lookup side per row of the other side: ASOF picks the closest row, SINGLE asserts there is at
+/// most one. Dropping rows on the lookup side changes which row is picked (ASOF) or hides the
+/// "more than one row" error (SINGLE), so only the non-lookup side may be filtered.
+fn row_filter_transparent_children(s_expr: &SExpr) -> impl Iterator<Item = &SExpr> {
+    let allowed = match s_expr.plan() {
+        RelOperator::Join(join) => match join.join_type {
+            // ASOF always matches each left row against the right input (RIGHT ASOF only
+            // changes which side is preserved), and LEFT SINGLE looks up the right input.
+            JoinType::Asof | JoinType::LeftAsof | JoinType::RightAsof | JoinType::LeftSingle => {
+                Some(0)
+            }
+            // RIGHT SINGLE looks up the left input.
+            JoinType::RightSingle => Some(1),
+            _ => None,
+        },
+        _ => None,
+    };
+    s_expr
+        .children()
+        .enumerate()
+        .filter(move |(index, _)| allowed.is_none_or(|allowed| allowed == *index))
+        .map(|(_, child)| child)
 }
 
 fn lineage_types_compatible(metadata: &MetadataRef, output: Symbol, input: Symbol) -> bool {
@@ -261,12 +288,13 @@ fn lineage_types_compatible(metadata: &MetadataRef, output: Symbol, input: Symbo
 /// removes output rows that could never match the join.
 ///
 /// Row-preserving maps (`EvalScalar`, `Filter`, `Exchange`), joins, non-recursive unions, sorts
-/// without a limit and plain aggregates qualify. Joins of any type are fine: an outer join can
-/// only turn the removed rows' partners into NULL-padded rows, whose key is NULL and never
-/// matches either. `Window`, `Limit`, top-n sorts, ranked or grouping-set aggregates, CTE
-/// materialization and recursive CTEs do not qualify: their output depends on which other rows
-/// are present, so a filter applied below them would change results (for example `row_number()`
-/// values or which rows a `LIMIT` keeps).
+/// without a limit and plain aggregates qualify. Joins are fine on their non-lookup inputs: an
+/// outer join can only turn the removed rows' partners into NULL-padded rows, whose key is NULL
+/// and never matches either. The lookup side of ASOF and SINGLE joins is excluded by
+/// [`row_filter_transparent_children`]. `Window`, `Limit`, top-n sorts, ranked or grouping-set
+/// aggregates, CTE materialization and recursive CTEs do not qualify: their output depends on
+/// which other rows are present, so a filter applied below them would change results (for
+/// example `row_number()` values or which rows a `LIMIT` keeps).
 fn is_row_filter_transparent(plan: &RelOperator) -> bool {
     match plan {
         RelOperator::Scan(_)
@@ -313,8 +341,7 @@ fn reaches_producer_transparently(s_expr: &SExpr, column: Symbol) -> bool {
         RelOperator::Filter(_) | RelOperator::Exchange(_) | RelOperator::Sort(_) => {
             reaches_producer_transparently(s_expr.unary_child(), column)
         }
-        RelOperator::Join(_) => s_expr
-            .children()
+        RelOperator::Join(_) => row_filter_transparent_children(s_expr)
             .any(|child| reaches_producer_transparently(child, column)),
         _ => false,
     }
@@ -606,7 +633,8 @@ fn find_probe_targets(
 }
 
 /// Scan ids reachable from the probe side root through [`is_row_filter_transparent`] operators
-/// only. Subtrees below a non-transparent operator are not entered.
+/// only. Subtrees below a non-transparent operator, and the lookup side of ASOF / SINGLE joins
+/// (see [`row_filter_transparent_children`]), are not entered.
 fn collect_filterable_scan_ids(s_expr: &SExpr, scan_ids: &mut HashSet<usize>) {
     if !is_row_filter_transparent(s_expr.plan()) {
         return;
@@ -614,7 +642,7 @@ fn collect_filterable_scan_ids(s_expr: &SExpr, scan_ids: &mut HashSet<usize>) {
     if let RelOperator::Scan(scan) = s_expr.plan() {
         scan_ids.insert(scan.scan_id);
     }
-    for child in s_expr.children() {
+    for child in row_filter_transparent_children(s_expr) {
         collect_filterable_scan_ids(child, scan_ids);
     }
 }
@@ -1182,6 +1210,54 @@ mod tests {
         let mut scan_ids = HashSet::new();
         collect_filterable_scan_ids(&probe_side, &mut scan_ids);
         assert_eq!(scan_ids, HashSet::from([1, 2]));
+    }
+
+    /// ASOF and SINGLE joins pick one row of their lookup side per row of the other side, so a
+    /// filter on the lookup side's scan would change which row is picked (or hide the SINGLE
+    /// "more than one row" error). Only the non-lookup side may be filtered.
+    #[test]
+    fn test_filterable_scans_exclude_asof_and_single_lookup_side() {
+        let metadata = MetadataRef::default();
+        let int64 = TableDataType::Number(NumberDataType::Int64);
+        let left_col = base_column(&metadata, "k", int64.clone(), 1, 1);
+        let right_col = base_column(&metadata, "k", int64, 2, 2);
+
+        let cases = [
+            (JoinType::Asof, HashSet::from([1])),
+            (JoinType::LeftAsof, HashSet::from([1])),
+            (JoinType::RightAsof, HashSet::from([1])),
+            (JoinType::LeftSingle, HashSet::from([1])),
+            (JoinType::RightSingle, HashSet::from([2])),
+            // Regular joins keep both sides.
+            (JoinType::Inner, HashSet::from([1, 2])),
+            (JoinType::Left, HashSet::from([1, 2])),
+            (JoinType::Full, HashSet::from([1, 2])),
+        ];
+        for (join_type, expected) in cases {
+            let probe_side = SExpr::create_binary(
+                Arc::new(RelOperator::Join(Join {
+                    join_type,
+                    ..Default::default()
+                })),
+                Arc::new(scan_expr(1, 1, left_col)),
+                Arc::new(scan_expr(2, 2, right_col)),
+            );
+            let mut scan_ids = HashSet::new();
+            collect_filterable_scan_ids(&probe_side, &mut scan_ids);
+            assert_eq!(scan_ids, expected, "join type {join_type:?}");
+
+            // Lineage resolution follows the same rule.
+            assert_eq!(
+                reaches_producer_transparently(&probe_side, left_col),
+                expected.contains(&1),
+                "left column through {join_type:?}"
+            );
+            assert_eq!(
+                reaches_producer_transparently(&probe_side, right_col),
+                expected.contains(&2),
+                "right column through {join_type:?}"
+            );
+        }
     }
 
     #[test]
