@@ -300,4 +300,89 @@ mod tests {
                 .unwrap();
         assert_eq!(decoded, original);
     }
+
+    /// The C `lz4` encoder emits linked (dependent) frame blocks by default, and
+    /// `compress_lz4_buffer` picks a 64 KB / 256 KB / 4 MB block size by input length.
+    /// Cover buffers that span several frame blocks in every size class, plus an
+    /// incompressible buffer that takes the `-1` (stored uncompressed) fallback, and
+    /// check that the stock Arrow reader decodes all of them.
+    #[test]
+    fn test_exchange_lz4_multi_block_buffers_roundtrip() {
+        use databend_common_expression::types::BinaryType;
+
+        let num_rows = 200_000_usize;
+        // ~9.6 MB of highly compressible string data: several linked 4 MB blocks.
+        let compressible = StringType::from_data(
+            (0..num_rows)
+                .map(|row| format!("group-{:04}-padding-padding-padding-padding", row % 1000))
+                .collect::<Vec<_>>(),
+        );
+        // ~1.6 MB of integers with structure: several 256 KB blocks, compressible.
+        let numbers = UInt64Type::from_data((0..num_rows as u64).map(|row| row / 7).collect());
+        // ~3.2 MB of pseudo-random bytes (16 bytes per value, so they live in a data
+        // buffer rather than inline in the view): incompressible, exercises the stored fallback.
+        let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let random = BinaryType::from_data(
+            (0..num_rows)
+                .map(|_| {
+                    let mut bytes = next().to_le_bytes().to_vec();
+                    bytes.extend_from_slice(&next().to_le_bytes());
+                    bytes
+                })
+                .collect::<Vec<_>>(),
+        );
+        let block = DataBlock::new_from_columns(vec![compressible, numbers, random]);
+        let schema = block.infer_schema();
+        let arrow_schema = ArrowSchema::from(&schema);
+        let original = block.to_record_batch_with_dataschema(&schema).unwrap();
+        let (options, native_lz4) = make_ipc_options(Some(FlightCompression::Lz4)).unwrap();
+
+        let (_, dictionaries, batches) = batches_to_flight_data_with_options(
+            &arrow_schema,
+            vec![original.clone()],
+            &options,
+            native_lz4,
+        )
+        .unwrap();
+        assert!(dictionaries.is_empty());
+        assert_eq!(batches.len(), 1);
+
+        let message = root_as_message(&batches[0].data_header).unwrap();
+        let record_batch = message.header_as_record_batch().unwrap();
+        assert_eq!(
+            record_batch.compression().unwrap().codec(),
+            CompressionType::LZ4_FRAME
+        );
+        // At least one buffer must have taken the stored (uncompressed) fallback and at
+        // least one must actually be compressed, otherwise the test covers only one path.
+        let body = &batches[0].data_body;
+        let mut stored = 0;
+        let mut compressed = 0;
+        for buffer in record_batch.buffers().unwrap() {
+            if buffer.length() == 0 {
+                continue;
+            }
+            let offset = buffer.offset() as usize;
+            let prefix = i64::from_le_bytes(body[offset..offset + 8].try_into().unwrap());
+            if prefix == -1 {
+                stored += 1;
+            } else {
+                assert!(buffer.length() as usize - 8 < prefix as usize);
+                compressed += 1;
+            }
+        }
+        assert!(stored >= 1, "expected an incompressible buffer");
+        assert!(compressed >= 2, "expected several compressed buffers");
+
+        let decoded =
+            flight_data_to_arrow_batch(&batches[0], Arc::new(arrow_schema), &HashMap::new())
+                .unwrap();
+        assert_eq!(decoded, original);
+    }
 }
