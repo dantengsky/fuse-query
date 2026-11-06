@@ -1,0 +1,118 @@
+# A parent filter on a scalar subquery's VALUE must not prune its lookup
+# candidates: two matches are an error even when only one value survives the
+# parent join. Separate inserts put the two values in separately prunable blocks.
+statement ok
+set disable_join_reorder = 1;
+
+statement ok
+set runtime_filter_wait_timeout_ms = 10000;
+
+statement ok
+create or replace table rf_single_l(k bigint);
+
+statement ok
+create or replace table rf_single_r(k bigint, v bigint);
+
+statement ok
+create or replace table rf_single_keep(v bigint, flag int);
+
+statement ok
+insert into rf_single_l select number from numbers(10000);
+
+statement ok
+insert into rf_single_r select number, 1 from numbers(10000);
+
+statement ok
+insert into rf_single_r select number, 2 from numbers(10000);
+
+statement ok
+insert into rf_single_keep values (1,1),(2,0);
+
+statement ok
+insert into rf_single_keep select number+3,0 from numbers(20);
+
+statement ok
+set enable_join_runtime_filter = 0;
+
+query error Scalar subquery can't return more than one row
+select count(),sum(q.v) from (select l.k,(select r.v from rf_single_r r where r.k=l.k) v from rf_single_l l) q join rf_single_keep b on q.v=b.v where b.flag=1;
+
+statement ok
+set enable_join_runtime_filter = 1;
+
+statement ok
+set enforce_broadcast_join = 1;
+
+query error Scalar subquery can't return more than one row
+select count(),sum(q.v) from (select l.k,(select r.v from rf_single_r r where r.k=l.k) v from rf_single_l l) q join rf_single_keep b on q.v=b.v where b.flag=1;
+
+# Null rejection rewrites LEFT SINGLE to INNER, but single_to_inner still
+# requires checking the original scalar cardinality before the parent filter.
+query error Scalar subquery can't return more than one row
+select count(),sum(q.v) from (select l.k,(select r.v from rf_single_r r where r.k=l.k) v from rf_single_l l) q join rf_single_keep b on q.v=b.v where b.flag=1 and q.v>0;
+
+statement ok
+set enforce_broadcast_join = 0;
+
+statement ok
+set enforce_shuffle_join = 1;
+
+query error Scalar subquery can't return more than one row
+select count(),sum(q.v) from (select l.k,(select r.v from rf_single_r r where r.k=l.k) v from rf_single_l l) q join rf_single_keep b on q.v=b.v where b.flag=1;
+
+query error Scalar subquery can't return more than one row
+select count(),sum(q.v) from (select l.k,(select r.v from rf_single_r r where r.k=l.k) v from rf_single_l l) q join rf_single_keep b on q.v=b.v where b.flag=1 and q.v>0;
+
+# A unique scalar lookup remains valid, including unmatched outer rows.
+statement ok
+truncate table rf_single_r;
+
+statement ok
+insert into rf_single_r select number, if(number%2=0,1,2) from numbers(5000);
+
+query II
+select count(),sum(q.v) from (select l.k,(select r.v from rf_single_r r where r.k=l.k) v from rf_single_l l) q join rf_single_keep b on q.v=b.v where b.flag=1;
+----
+2500 2500
+
+# ASOF is currently lowered through Window, which is already a filter barrier.
+# Filtering v=1 before selecting the latest time would incorrectly keep k=1.
+statement ok
+create or replace table rf_asof_l(k int, ts int);
+
+statement ok
+create or replace table rf_asof_r(k int, ts int, v bigint);
+
+statement ok
+insert into rf_asof_l values (1,10),(2,10),(3,10);
+
+statement ok
+insert into rf_asof_r values (1,1,1),(1,9,2),(2,1,2),(2,9,1);
+
+query II
+select q.k,q.v from (select l.k,r.v from rf_asof_l l asof join rf_asof_r r on l.k=r.k and l.ts>=r.ts) q join rf_single_keep b on q.v=b.v where b.flag=1 order by q.k;
+----
+2 1
+
+query II
+select q.k,q.v from (select l.k,r.v from rf_asof_l l asof left join rf_asof_r r on l.k=r.k and l.ts>=r.ts) q join rf_single_keep b on q.v=b.v where b.flag=1 order by q.k;
+----
+2 1
+
+statement ok
+unset (disable_join_reorder, runtime_filter_wait_timeout_ms, enable_join_runtime_filter, enforce_broadcast_join, enforce_shuffle_join);
+
+statement ok
+drop table rf_single_l;
+
+statement ok
+drop table rf_single_r;
+
+statement ok
+drop table rf_single_keep;
+
+statement ok
+drop table rf_asof_l;
+
+statement ok
+drop table rf_asof_r;

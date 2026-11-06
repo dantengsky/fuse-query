@@ -1,0 +1,111 @@
+# Hash/cast keys must agree across broadcast and shuffle, including NULL,
+# signed/unsigned widening, strings and a second key. Expected rows are the
+# Python-enumerated pairs i in [0,12000), j in [0,1000), i%503=j%503,
+# excluding i%17=0; composite joins additionally require i%5=j%5.
+statement ok
+create or replace table cast_l(id bigint,k nullable(int),g int,s string);
+
+statement ok
+create or replace table cast_r(k bigint unsigned,g int,s string);
+
+statement ok
+insert into cast_l select number,if(number%17=0,NULL,to_int32(number%503)),number%5,to_string(number%503) from numbers(12000);
+
+statement ok
+insert into cast_r select number%503,number%5,to_string(number%503) from numbers(1000);
+
+statement ok
+set disable_join_reorder=1;
+
+statement ok
+set enforce_broadcast_join=1;
+
+statement ok
+set enforce_shuffle_join=0;
+
+statement ok
+set enable_join_runtime_filter=0;
+
+query II
+select count(),sum(l.id) from cast_l l join cast_r r on l.k=r.k;
+----
+22458 134738339
+
+query II
+select count(),sum(l.id) from cast_l l join cast_r r on cast(l.k as bigint)=cast(r.k as bigint) and l.g=r.g;
+----
+4705 26017625
+
+query II
+select count(),sum(l.id) from cast_l l join cast_r r on l.s=r.s and l.g=r.g;
+----
+5000 27647500
+
+statement ok
+set enable_join_runtime_filter=1;
+
+query II
+select count(),sum(l.id) from cast_l l join cast_r r on l.k=r.k;
+----
+22458 134738339
+
+query II
+select count(),sum(l.id) from cast_l l join cast_r r on cast(l.k as bigint)=cast(r.k as bigint) and l.g=r.g;
+----
+4705 26017625
+
+query II
+select count(),sum(l.id) from cast_l l join cast_r r on l.s=r.s and l.g=r.g;
+----
+5000 27647500
+
+statement ok
+set enforce_broadcast_join=0;
+
+statement ok
+set enforce_shuffle_join=1;
+
+statement ok
+set enable_join_runtime_filter=0;
+
+query II
+select count(),sum(l.id) from cast_l l join cast_r r on l.k=r.k;
+----
+22458 134738339
+
+query II
+select count(),sum(l.id) from cast_l l join cast_r r on cast(l.k as bigint)=cast(r.k as bigint) and l.g=r.g;
+----
+4705 26017625
+
+query II
+select count(),sum(l.id) from cast_l l join cast_r r on l.s=r.s and l.g=r.g;
+----
+5000 27647500
+
+statement ok
+set enable_join_runtime_filter=1;
+
+query II
+select count(),sum(l.id) from cast_l l join cast_r r on l.k=r.k;
+----
+22458 134738339
+
+query II
+select count(),sum(l.id) from cast_l l join cast_r r on cast(l.k as bigint)=cast(r.k as bigint) and l.g=r.g;
+----
+4705 26017625
+
+query II
+select count(),sum(l.id) from cast_l l join cast_r r on l.s=r.s and l.g=r.g;
+----
+5000 27647500
+
+statement ok
+unset (disable_join_reorder,enforce_broadcast_join,enforce_shuffle_join,enable_join_runtime_filter);
+
+statement ok
+drop table cast_l;
+
+statement ok
+drop table cast_r;
