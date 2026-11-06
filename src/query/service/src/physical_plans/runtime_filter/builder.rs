@@ -258,7 +258,8 @@ fn collect_probe_column_lineage(
 /// "more than one row" error (SINGLE), so only the non-lookup side may be filtered.
 fn row_filter_transparent_children(s_expr: &SExpr) -> impl Iterator<Item = &SExpr> {
     let allowed = match s_expr.plan() {
-        RelOperator::Join(join) => match join.join_type {
+        // NULL rejection can rewrite SINGLE to INNER while retaining its cardinality check.
+        RelOperator::Join(join) => match join.single_to_inner.unwrap_or(join.join_type) {
             // ASOF always matches each left row against the right input (RIGHT ASOF only
             // changes which side is preserved), and LEFT SINGLE looks up the right input.
             JoinType::Asof | JoinType::LeftAsof | JoinType::RightAsof | JoinType::LeftSingle => {
@@ -1256,6 +1257,77 @@ mod tests {
                 reaches_producer_transparently(&probe_side, right_col),
                 expected.contains(&2),
                 "right column through {join_type:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_rewritten_single_lookup_is_not_row_filter_transparent() {
+        let metadata = MetadataRef::default();
+        let int64 = TableDataType::Number(NumberDataType::Int64);
+        let left = base_column(&metadata, "uid", int64.clone(), 1, 1);
+        let right = base_column(&metadata, "uid", int64, 2, 2);
+        for (original, rewritten, expected) in [
+            (JoinType::LeftSingle, JoinType::Inner, HashSet::from([1])),
+            (JoinType::RightSingle, JoinType::Inner, HashSet::from([2])),
+        ] {
+            let tree = SExpr::create_binary(
+                Arc::new(RelOperator::Join(Join {
+                    join_type: rewritten,
+                    single_to_inner: Some(original),
+                    ..Default::default()
+                })),
+                Arc::new(scan_expr(1, 1, left)),
+                Arc::new(scan_expr(2, 2, right)),
+            );
+            let mut scans = HashSet::new();
+            collect_filterable_scan_ids(&tree, &mut scans);
+            assert_eq!(scans, expected, "{original:?} rewritten to {rewritten:?}");
+            for (column, scan) in [(left, 1), (right, 2)] {
+                assert_eq!(
+                    reaches_producer_transparently(&tree, column),
+                    expected.contains(&scan),
+                    "{original:?} rewritten to {rewritten:?}, scan={scan}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_lookup_side_union_lineage_is_not_followed() {
+        let (metadata, union, output, _) = union_probe_side();
+        let other = base_column(
+            &metadata,
+            "other",
+            TableDataType::Number(NumberDataType::Int64),
+            3,
+            3,
+        );
+        for (join_type, union_on_left) in [
+            (JoinType::LeftSingle, false),
+            (JoinType::RightSingle, true),
+            (JoinType::Asof, false),
+            (JoinType::LeftAsof, false),
+            (JoinType::RightAsof, false),
+        ] {
+            let plain = scan_expr(3, 3, other);
+            let (left, right) = if union_on_left {
+                (union.clone(), plain)
+            } else {
+                (plain, union.clone())
+            };
+            let tree = SExpr::create_binary(
+                Arc::new(RelOperator::Join(Join {
+                    join_type,
+                    ..Default::default()
+                })),
+                Arc::new(left),
+                Arc::new(right),
+            );
+            assert_eq!(
+                resolve_runtime_filter_probe_column(&metadata, &tree, output),
+                None,
+                "{join_type:?}"
             );
         }
     }

@@ -1,0 +1,158 @@
+# A one-key build reaches only some shuffle partitions; a globally empty
+# build reaches none. Every unmatched probe row must survive LEFT/ANTI joins.
+# Composite and single keys exercise both shuffle representations.
+statement ok
+create or replace table empty_probe(id bigint,k bigint,g int);
+
+statement ok
+create or replace table empty_build(k bigint,g int);
+
+statement ok
+insert into empty_probe select number,number%17,number%3 from numbers(10000);
+
+statement ok
+insert into empty_build values (0,0);
+
+statement ok
+set disable_join_reorder=1;
+
+statement ok
+set enforce_shuffle_join=1;
+
+statement ok
+set enforce_broadcast_join=0;
+
+statement ok
+set enable_legacy_single_key_hash_join_shuffle=0;
+
+query II
+select count(),coalesce(sum(p.id),0) from empty_probe p join empty_build b on p.k=b.k;
+----
+589 2943822
+
+query III
+select count(),sum(p.id),count(b.k) from empty_probe p left join empty_build b on p.k=b.k;
+----
+10000 49995000 589
+
+query II
+select count(),coalesce(sum(p.id),0) from empty_probe p left anti join empty_build b on p.k=b.k;
+----
+9411 47051178
+
+query II
+select count(),coalesce(sum(p.id),0) from empty_probe p join empty_build b on p.k=b.k and p.g=b.g;
+----
+197 984606
+
+query III
+select count(),sum(p.id),count(b.k) from empty_probe p left join empty_build b on p.k=b.k and p.g=b.g;
+----
+10000 49995000 197
+
+query II
+select count(),coalesce(sum(p.id),0) from empty_probe p left anti join empty_build b on p.k=b.k and p.g=b.g;
+----
+9803 49010394
+
+query II
+select count(),coalesce(sum(p.id),0) from empty_probe p join (select * from empty_build where k<0) b on p.k=b.k;
+----
+0 0
+
+query III
+select count(),sum(p.id),count(b.k) from empty_probe p left join (select * from empty_build where k<0) b on p.k=b.k;
+----
+10000 49995000 0
+
+query II
+select count(),coalesce(sum(p.id),0) from empty_probe p left anti join (select * from empty_build where k<0) b on p.k=b.k;
+----
+10000 49995000
+
+query II
+select count(),coalesce(sum(p.id),0) from empty_probe p join (select * from empty_build where k<0) b on p.k=b.k and p.g=b.g;
+----
+0 0
+
+query III
+select count(),sum(p.id),count(b.k) from empty_probe p left join (select * from empty_build where k<0) b on p.k=b.k and p.g=b.g;
+----
+10000 49995000 0
+
+query II
+select count(),coalesce(sum(p.id),0) from empty_probe p left anti join (select * from empty_build where k<0) b on p.k=b.k and p.g=b.g;
+----
+10000 49995000
+
+statement ok
+set enable_legacy_single_key_hash_join_shuffle=1;
+
+query II
+select count(),coalesce(sum(p.id),0) from empty_probe p join empty_build b on p.k=b.k;
+----
+589 2943822
+
+query III
+select count(),sum(p.id),count(b.k) from empty_probe p left join empty_build b on p.k=b.k;
+----
+10000 49995000 589
+
+query II
+select count(),coalesce(sum(p.id),0) from empty_probe p left anti join empty_build b on p.k=b.k;
+----
+9411 47051178
+
+query II
+select count(),coalesce(sum(p.id),0) from empty_probe p join empty_build b on p.k=b.k and p.g=b.g;
+----
+197 984606
+
+query III
+select count(),sum(p.id),count(b.k) from empty_probe p left join empty_build b on p.k=b.k and p.g=b.g;
+----
+10000 49995000 197
+
+query II
+select count(),coalesce(sum(p.id),0) from empty_probe p left anti join empty_build b on p.k=b.k and p.g=b.g;
+----
+9803 49010394
+
+query II
+select count(),coalesce(sum(p.id),0) from empty_probe p join (select * from empty_build where k<0) b on p.k=b.k;
+----
+0 0
+
+query III
+select count(),sum(p.id),count(b.k) from empty_probe p left join (select * from empty_build where k<0) b on p.k=b.k;
+----
+10000 49995000 0
+
+query II
+select count(),coalesce(sum(p.id),0) from empty_probe p left anti join (select * from empty_build where k<0) b on p.k=b.k;
+----
+10000 49995000
+
+query II
+select count(),coalesce(sum(p.id),0) from empty_probe p join (select * from empty_build where k<0) b on p.k=b.k and p.g=b.g;
+----
+0 0
+
+query III
+select count(),sum(p.id),count(b.k) from empty_probe p left join (select * from empty_build where k<0) b on p.k=b.k and p.g=b.g;
+----
+10000 49995000 0
+
+query II
+select count(),coalesce(sum(p.id),0) from empty_probe p left anti join (select * from empty_build where k<0) b on p.k=b.k and p.g=b.g;
+----
+10000 49995000
+
+statement ok
+unset (disable_join_reorder,enforce_shuffle_join,enforce_broadcast_join,enable_legacy_single_key_hash_join_shuffle);
+
+statement ok
+drop table empty_probe;
+
+statement ok
+drop table empty_build;

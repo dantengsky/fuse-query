@@ -1,0 +1,139 @@
+# UNION lineage, nullable identity casts, grouped and limited branches.
+# Both parallel-union settings and both join distributions must give the same
+# multiset. Probe branches contain [0,20000) twice; keep keys are 7*n, n<1000.
+# LIMIT keeps exactly [0,10) and must never be filtered before being applied.
+statement ok
+create or replace table rfu_a(k bigint);
+
+statement ok
+create or replace table rfu_b(k nullable(bigint));
+
+statement ok
+create or replace table rfu_keep(k bigint);
+
+statement ok
+insert into rfu_a select number from numbers(20000);
+
+statement ok
+insert into rfu_b select number from numbers(20000);
+
+statement ok
+insert into rfu_b values (NULL);
+
+statement ok
+insert into rfu_keep select number*7 from numbers(1000);
+
+statement ok
+set disable_join_reorder=1;
+
+statement ok
+set runtime_filter_wait_timeout_ms=10000;
+
+# Force bloom-only generation; probe-side bloom checks dispatch to AVX2 on x86.
+statement ok
+set inlist_runtime_filter_threshold=0;
+
+statement ok
+set min_max_runtime_filter_threshold=0;
+
+statement ok
+set enable_join_runtime_filter=1;
+
+statement ok
+set enable_probe_side_bloom_runtime_filter=1;
+
+statement ok
+set enforce_broadcast_join=1;
+
+statement ok
+set enforce_shuffle_join=0;
+
+statement ok
+set enable_parallel_union_all=0;
+
+query II
+select count(),sum(p.k) from (select k from rfu_a union all select k from rfu_b) p join rfu_keep b on p.k=b.k;
+----
+2000 6993000
+
+query II
+select count(),sum(p.k) from (select k from rfu_a group by k union all select k from rfu_b group by k) p join rfu_keep b on p.k=b.k;
+----
+2000 6993000
+
+query II
+select count(),sum(p.k) from ((select k from rfu_a order by k limit 10) union all select k from rfu_b) p join rfu_keep b on p.k=b.k;
+----
+1002 3496507
+
+statement ok
+set enable_parallel_union_all=1;
+
+query II
+select count(),sum(p.k) from (select k from rfu_a union all select k from rfu_b) p join rfu_keep b on p.k=b.k;
+----
+2000 6993000
+
+query II
+select count(),sum(p.k) from (select k from rfu_a group by k union all select k from rfu_b group by k) p join rfu_keep b on p.k=b.k;
+----
+2000 6993000
+
+query II
+select count(),sum(p.k) from ((select k from rfu_a order by k limit 10) union all select k from rfu_b) p join rfu_keep b on p.k=b.k;
+----
+1002 3496507
+
+statement ok
+set enforce_broadcast_join=0;
+
+statement ok
+set enforce_shuffle_join=1;
+
+statement ok
+set enable_parallel_union_all=0;
+
+query II
+select count(),sum(p.k) from (select k from rfu_a union all select k from rfu_b) p join rfu_keep b on p.k=b.k;
+----
+2000 6993000
+
+query II
+select count(),sum(p.k) from (select k from rfu_a group by k union all select k from rfu_b group by k) p join rfu_keep b on p.k=b.k;
+----
+2000 6993000
+
+query II
+select count(),sum(p.k) from ((select k from rfu_a order by k limit 10) union all select k from rfu_b) p join rfu_keep b on p.k=b.k;
+----
+1002 3496507
+
+statement ok
+set enable_parallel_union_all=1;
+
+query II
+select count(),sum(p.k) from (select k from rfu_a union all select k from rfu_b) p join rfu_keep b on p.k=b.k;
+----
+2000 6993000
+
+query II
+select count(),sum(p.k) from (select k from rfu_a group by k union all select k from rfu_b group by k) p join rfu_keep b on p.k=b.k;
+----
+2000 6993000
+
+query II
+select count(),sum(p.k) from ((select k from rfu_a order by k limit 10) union all select k from rfu_b) p join rfu_keep b on p.k=b.k;
+----
+1002 3496507
+
+statement ok
+unset (disable_join_reorder,runtime_filter_wait_timeout_ms,inlist_runtime_filter_threshold,min_max_runtime_filter_threshold,enable_join_runtime_filter,enable_probe_side_bloom_runtime_filter,enforce_broadcast_join,enforce_shuffle_join,enable_parallel_union_all);
+
+statement ok
+drop table rfu_a;
+
+statement ok
+drop table rfu_b;
+
+statement ok
+drop table rfu_keep;

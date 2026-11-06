@@ -1,0 +1,131 @@
+# LEFT JOIN ... IS NULL and NOT EXISTS must agree, also against an
+# independently enumerated expected count/sum. NULL never equals NULL.
+# l=(i, NULL if i%11=0 else i%997, i%7), i in [0,30000).
+# r=(NULL if j%13=0 else j%701, j%7), j in [0,2400).
+statement ok
+create or replace table oja_l(id bigint, k nullable(bigint), g int);
+
+statement ok
+create or replace table oja_r(k nullable(bigint), g int, marker int not null);
+
+statement ok
+insert into oja_l select number,if(number%11=0,NULL,number%997),number%7 from numbers(30000);
+
+statement ok
+insert into oja_r select if(number%13=0,NULL,number%701),number%7,1 from numbers(2400);
+
+statement ok
+set disable_join_reorder=1;
+
+statement ok
+set enforce_broadcast_join=1;
+
+statement ok
+set enforce_shuffle_join=0;
+
+statement ok
+set enable_legacy_single_key_hash_join_shuffle=0;
+
+query II
+select count(),sum(l.id) from oja_l l left join oja_r r on r.k=l.k and r.g>1 where r.marker is null;
+----
+11046 168123094
+
+query II
+select count(),sum(l.id) from oja_l l where not exists (select 1 from oja_r r where r.k=l.k and r.g>1);
+----
+11046 168123094
+
+query II
+select count(),sum(l.id) from oja_l l left join oja_r r on r.k=l.k and r.g>1 and r.g=l.g where r.marker is null;
+----
+23649 356722889
+
+query II
+select count(),sum(l.id) from oja_l l where not exists (select 1 from oja_r r where r.k=l.k and r.g>1 and r.g=l.g);
+----
+23649 356722889
+
+statement ok
+set enable_legacy_single_key_hash_join_shuffle=1;
+
+query II
+select count(),sum(l.id) from oja_l l left join oja_r r on r.k=l.k and r.g>1 where r.marker is null;
+----
+11046 168123094
+
+query II
+select count(),sum(l.id) from oja_l l where not exists (select 1 from oja_r r where r.k=l.k and r.g>1);
+----
+11046 168123094
+
+query II
+select count(),sum(l.id) from oja_l l left join oja_r r on r.k=l.k and r.g>1 and r.g=l.g where r.marker is null;
+----
+23649 356722889
+
+query II
+select count(),sum(l.id) from oja_l l where not exists (select 1 from oja_r r where r.k=l.k and r.g>1 and r.g=l.g);
+----
+23649 356722889
+
+statement ok
+set enforce_broadcast_join=0;
+
+statement ok
+set enforce_shuffle_join=1;
+
+statement ok
+set enable_legacy_single_key_hash_join_shuffle=0;
+
+query II
+select count(),sum(l.id) from oja_l l left join oja_r r on r.k=l.k and r.g>1 where r.marker is null;
+----
+11046 168123094
+
+query II
+select count(),sum(l.id) from oja_l l where not exists (select 1 from oja_r r where r.k=l.k and r.g>1);
+----
+11046 168123094
+
+query II
+select count(),sum(l.id) from oja_l l left join oja_r r on r.k=l.k and r.g>1 and r.g=l.g where r.marker is null;
+----
+23649 356722889
+
+query II
+select count(),sum(l.id) from oja_l l where not exists (select 1 from oja_r r where r.k=l.k and r.g>1 and r.g=l.g);
+----
+23649 356722889
+
+statement ok
+set enable_legacy_single_key_hash_join_shuffle=1;
+
+query II
+select count(),sum(l.id) from oja_l l left join oja_r r on r.k=l.k and r.g>1 where r.marker is null;
+----
+11046 168123094
+
+query II
+select count(),sum(l.id) from oja_l l where not exists (select 1 from oja_r r where r.k=l.k and r.g>1);
+----
+11046 168123094
+
+query II
+select count(),sum(l.id) from oja_l l left join oja_r r on r.k=l.k and r.g>1 and r.g=l.g where r.marker is null;
+----
+23649 356722889
+
+query II
+select count(),sum(l.id) from oja_l l where not exists (select 1 from oja_r r where r.k=l.k and r.g>1 and r.g=l.g);
+----
+23649 356722889
+
+statement ok
+unset (disable_join_reorder,enforce_broadcast_join,enforce_shuffle_join,enable_legacy_single_key_hash_join_shuffle);
+
+statement ok
+drop table oja_l;
+
+statement ok
+drop table oja_r;
