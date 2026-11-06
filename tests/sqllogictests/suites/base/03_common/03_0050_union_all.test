@@ -43,12 +43,12 @@ select * from (select number as a from numbers(1) union all select number as b f
 statement ok
 UNSET enable_parallel_union_all;
 
-# Branches run concurrently by default so independent branches overlap instead of
-# executing one after another.
+# Preserve serial execution by default for upgrade compatibility. The earlier
+# cases still exercise explicit parallel and serial execution.
 query T
 SELECT value FROM system.settings WHERE name = 'enable_parallel_union_all';
 ----
-1
+0
 
 query I
 select * from (select number as a from numbers(1) union all select number as b from numbers(3) union all select number as c from numbers(10)) order by a;
